@@ -10,6 +10,9 @@ json 字段（全部可选）：
 - threshold：匹配阈值，默认 0.85
 - grayscale：是否转灰度匹配（颜色不重要、只看形状时用），默认 false
 - scales：相对缩放列表（多尺度），默认 [1.0]
+- tap：点击区域 [x, y, w, h]（基准坐标，与 box 同一时刻记录），省略表示点模板本身。
+  用来识别的元素和真正能点的区域不一致时用：例如大厅「秘密商店」能识别的是文字，可点的是上方图标，
+  文字下半部分点了没反应。运行时按命中位置相对 box 的偏移平移（见 Template.tap_area）
 - max_diff：颜色校验，命中位置与模板的平均像素差（0-255）上限，默认不校验。
   相关系数对亮度不敏感，按钮被遮罩压暗也能高分命中；需要区分亮/暗、可用/不可用时设置它
 - note：备注
@@ -47,13 +50,14 @@ class TemplateMeta(BaseModel):
     ref_size: tuple[int, int] = (BASE_WIDTH, BASE_HEIGHT)
     region: Rect | None = None
     box: Rect | None = None
+    tap: Rect | None = None
     threshold: float = Field(DEFAULT_THRESHOLD, ge=0.0, le=1.0)
     grayscale: bool = False
     scales: list[float] = Field(default_factory=lambda: [1.0], min_length=1)
     max_diff: float | None = Field(None, ge=0, le=255)
     note: str = ""
 
-    @field_validator("region", "box", mode="before")
+    @field_validator("region", "box", "tap", mode="before")
     @classmethod
     def _parse_rect(cls, v):
         return None if v is None else Rect.parse(v)
@@ -92,6 +96,15 @@ class Template:
     @property
     def threshold(self) -> float:
         return self.meta.threshold
+
+    def tap_area(self, hit: Rect) -> Rect:
+        """命中位置 hit（基准坐标）对应的点击区域：没设 tap 时就是 hit 本身。"""
+        tap, box = self.meta.tap, self.meta.box
+        if tap is None:
+            return hit
+        if box is None:
+            return tap
+        return Rect(tap.x + hit.x - box.x, tap.y + hit.y - box.y, tap.w, tap.h)
 
     def scaled(self, factor: float, grayscale: bool) -> np.ndarray:
         key = (round(factor, 4), grayscale)

@@ -25,3 +25,10 @@ def module_data_dir(module_id: str) -> Path:
     path = data_dir() / "modules" / module_id
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def debug_dir() -> Path:
+    """任务失败时的调试信息目录：<数据目录>/debug/。"""
+    path = data_dir() / "debug"
+    path.mkdir(parents=True, exist_ok=True)
+    return path

@@ -25,5 +25,11 @@ class HelloModule(TaskModule):
             if self.stopped:
                 self.log.info("收到停止信号")
                 return
-            frame = self.device.screenshot()
-            self.log.info("第 %d 张截图：%dx%d", i + 1, frame.shape[1], frame.shape[0])
+            if self.ctx.controller is not None:
+                # 经 Runtime 启动：用 ctl 截图并识别场景（截图会发布帧事件、参与卡死检测）
+                state = self.ctl.detect()
+                frame = self.ctl.last_frame
+                self.log.info("第 %d 张截图：%dx%d，场景：%s", i + 1, frame.shape[1], frame.shape[0], state)
+            else:
+                frame = self.device.screenshot()
+                self.log.info("第 %d 张截图：%dx%d", i + 1, frame.shape[1], frame.shape[0])

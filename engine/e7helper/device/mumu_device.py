@@ -14,6 +14,8 @@ from .nemu_ipc import NemuIpc, NemuIpcError
 
 log = logging.getLogger(__name__)
 
+KEYCODE_BACK = 4
+
 
 class Backend(StrEnum):
     AUTO = "auto"  # IPC 优先，失败回退 adb
@@ -104,6 +106,12 @@ class MuMuDevice(Device):
             self.ipc.swipe(x1, y1, x2, y2, duration)
         else:
             self.adb.swipe(x1, y1, x2, y2, duration)
+
+    def back(self) -> None:
+        # IPC 只有触控接口，按键走 adb
+        if self.adb is None:
+            raise DeviceError("返回键需要 adb，但 adb 不可用")
+        self.adb.keyevent(KEYCODE_BACK)
 
     def close(self) -> None:
         if self.ipc:

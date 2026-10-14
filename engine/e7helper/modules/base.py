@@ -23,6 +23,8 @@ from pydantic import BaseModel
 if TYPE_CHECKING:
     from fastapi import APIRouter
 
+    from e7helper.core.events import EventBus
+    from e7helper.core.runtime import Controller
     from e7helper.core.vision import Vision
     from e7helper.device import Device
 
@@ -38,7 +40,7 @@ class EmptyConfig(BaseModel):
 
 @dataclass
 class ModuleContext:
-    """模块运行时能拿到的平台能力。后续块会追加字段（vision、events、storage、data），只增不改。"""
+    """模块运行时能拿到的平台能力。后续块会追加字段（storage、data），只增不改。"""
 
     device: Device | None
     logger: logging.Logger
@@ -48,6 +50,10 @@ class ModuleContext:
     extras: dict[str, Any] = field(default_factory=dict)
     # B02：模板匹配 + OCR，模板查找顺序为 assets/<module_id>/cn → assets/common/cn
     vision: Vision | None = None
+    # B03：事件总线（发布/订阅帧、日志、任务状态）
+    events: EventBus | None = None
+    # B03：任务的操作入口（基准坐标点击、场景/弹窗、急停检查）；只有 TaskModule 经 Runtime 启动时才有
+    controller: Controller | None = None
 
 
 class Module(ABC):
@@ -86,6 +92,18 @@ class Module(ABC):
         if self.ctx.vision is None:
             raise RuntimeError(f"模块 {self.id} 需要视觉层，但 ctx.vision 未设置")
         return self.ctx.vision
+
+    @property
+    def ctl(self) -> Controller:
+        if self.ctx.controller is None:
+            raise RuntimeError(f"模块 {self.id} 需要 Controller，但没有经 Runtime 启动")
+        return self.ctx.controller
+
+    @property
+    def events(self) -> EventBus:
+        if self.ctx.events is None:
+            raise RuntimeError(f"模块 {self.id} 需要事件总线，但 ctx.events 未设置")
+        return self.ctx.events
 
     @property
     def stopped(self) -> bool:

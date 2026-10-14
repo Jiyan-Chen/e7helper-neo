@@ -57,5 +57,8 @@ class Adb:
     def swipe(self, x1: int, y1: int, x2: int, y2: int, duration: float = 0.3) -> None:
         self.shell("input", "swipe", *map(str, (int(x1), int(y1), int(x2), int(y2))), str(int(duration * 1000)))
 
+    def keyevent(self, code: int) -> None:
+        self.shell("input", "keyevent", str(int(code)))
+
     def has_package(self, package: str) -> bool:
         return f"package:{package}" in self.shell("pm", "list", "packages", package).split()

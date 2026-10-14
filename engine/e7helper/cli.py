@@ -19,11 +19,12 @@ from e7helper import GAME_PACKAGE, __version__
 from e7helper.core.geometry import BASE_HEIGHT, BASE_WIDTH, FULL_SCREEN, Rect, is_16_9
 from e7helper.core.imageio import read_image, write_image
 from e7helper.core.log import make_console, setup_logging
-from e7helper.core.paths import module_assets_dir, module_data_dir
+from e7helper.core.runtime import PopupError, Runtime, TaskStatus
+from e7helper.core.scene import SceneState, default_detector
 from e7helper.core.stdio import isolate_native_stdout
 from e7helper.core.vision import TemplateMeta, TemplateStore, Vision, best_match, find_all
 from e7helper.device import Backend, DeviceError, MuMuManager, connect, find_install
-from e7helper.modules import ModuleContext, ModuleKind, TaskModule, discover
+from e7helper.modules import AssistantModule, ModuleKind, TaskModule, discover
 
 app = typer.Typer(help=f"e7helper {__version__} — 第七史诗国服 · MuMu 专用助手", no_args_is_help=True)
 console = make_console()
@@ -201,31 +202,84 @@ def run(
     index: IndexOpt = None,
     mumu_root: RootOpt = None,
     config: Annotated[Optional[str], typer.Option("--config", "-c", help="模块配置 JSON 字符串")] = None,
+    timeout: Annotated[Optional[float], typer.Option("--timeout", "-t", help="任务时限（秒），超时自动急停")] = None,
+    duration: Annotated[Optional[float], typer.Option("--duration", "-d", help="助手模块运行时长（秒），默认直到 Ctrl+C")] = None,
 ) -> None:
-    """直接运行一个任务模块（B03 之后会改由 runtime 调度）。"""
+    """经 runtime 运行一个模块：任务模块跑完即退出；助手模块持续收帧直到 Ctrl+C。"""
     modules = discover()
     cls = modules.get(module_id)
     if cls is None:
         _fail(f"未知模块：{module_id}（可用：{', '.join(modules)}）")
         raise typer.Exit(1)
-    if cls.kind is not ModuleKind.TASK or not issubclass(cls, TaskModule):
-        _fail(f"{module_id} 不是任务模块")
-        raise typer.Exit(1)
     cfg = cls.config_model.model_validate_json(config) if config else cls.config_model()
-    with connect(index, Backend.AUTO, mumu_root) as device:
-        ctx = ModuleContext(
-            device=device,
-            logger=logging.getLogger(f"module.{module_id}"),
-            assets_dir=module_assets_dir(module_id),
-            data_dir=module_data_dir(module_id),
-            vision=Vision.for_module(module_id),
-        )
-        module = cls(ctx, cfg)
-        try:
-            module.run()
-        except KeyboardInterrupt:
-            ctx.stop_event.set()
-            _warn("已中断")
+    with connect(index, Backend.AUTO, mumu_root) as device, Runtime(device) as rt:
+        if cls.kind is ModuleKind.TASK and issubclass(cls, TaskModule):
+            result = rt.run_task(cls, cfg, timeout=timeout)
+            line = f"{module_id}：{result.status.value}（{result.duration:.1f} 秒）"
+            if result.ok:
+                _ok(line)
+                return
+            (_warn if result.status is TaskStatus.STOPPED else _fail)(line)
+            if result.debug_dir:
+                console.print(f"  调试信息：{result.debug_dir}")
+            raise typer.Exit(1)
+        if cls.kind is ModuleKind.ASSISTANT and issubclass(cls, AssistantModule):
+            rt.attach_assistant(cls, cfg)
+            end = None if duration is None else time.monotonic() + duration
+            try:
+                while end is None or time.monotonic() < end:
+                    time.sleep(0.2)
+            except KeyboardInterrupt:
+                _warn("已中断")
+            return
+        _fail(f"{module_id} 既不是任务模块也不是助手模块")
+        raise typer.Exit(1)
+
+
+def _print_state(label: str, state: SceneState) -> None:
+    color = "green" if state.clear and state.scene else ("yellow" if state.popup else "red")
+    extra = "（画面被压暗）" if state.obscured else ""
+    hits = "  ".join(f"{k}={m.score:.2f}" for k, m in state.matches.items())
+    console.print(f"{label}[{color}]{state}[/]{extra}  [dim]{state.elapsed_ms:.0f}ms  {hits}[/]")
+
+
+@app.command("scene")
+def scene_cmd(
+    files: Annotated[Optional[list[Path]], typer.Option("--from", "-f", help="从图片文件识别（可多次指定）")] = None,
+    dismiss: Annotated[bool, typer.Option("--dismiss", help="自动关闭当前弹窗（会点击游戏）")] = False,
+    watch: Annotated[bool, typer.Option("--watch", "-w", help="持续识别，场景变化时打印，直到 Ctrl+C")] = False,
+    index: IndexOpt = None,
+    mumu_root: RootOpt = None,
+) -> None:
+    """识别当前场景和弹窗；--dismiss 关闭弹窗，--watch 持续观察。"""
+    detector = default_detector()
+    if files:
+        for f in files:
+            _print_state(f"{f.name}: ", detector.detect(read_image(f)))
+        return
+    with connect(index, Backend.AUTO, mumu_root) as device, Runtime(device, scenes=detector) as rt:
+        ctl = rt.make_controller()
+        state = ctl.detect()
+        _print_state("", state)
+        if dismiss and not state.clear:
+            try:
+                closed = ctl.dismiss_popups(state=state)
+            except PopupError as e:
+                _fail(str(e))
+                raise typer.Exit(1)
+            _ok(f"已关闭：{', '.join(closed)}")
+            _print_state("", ctl.detect())
+        if watch:
+            last = (state.scene, state.popup)
+            try:
+                while True:
+                    time.sleep(0.5)
+                    state = ctl.detect()
+                    if (state.scene, state.popup) != last:
+                        last = (state.scene, state.popup)
+                        _print_state(f"{datetime.now():%H:%M:%S} ", state)
+            except KeyboardInterrupt:
+                pass
 
 
 # ---------------------------------------------------------------- 视觉调试与模板采集（B02）
@@ -282,6 +336,7 @@ def capture(
     gray: Annotated[bool, typer.Option("--gray", help="灰度匹配")] = False,
     max_diff: Annotated[Optional[float], typer.Option("--max-diff", help="颜色校验：平均像素差上限（0-255），区分亮/暗按钮时用")] = None,
     note: Annotated[str, typer.Option("--note", "-n")] = "",
+    tap: Annotated[Optional[str], typer.Option("--tap", help="点击区域 x,y,w,h（可点区域与模板不一致时）")] = None,
     lang: LangOpt = "cn",
     force: Annotated[bool, typer.Option("--force", help="覆盖已有模板")] = False,
     save_frame: Annotated[Optional[Path], typer.Option("--save-frame", help="同时把整帧（基准尺寸）存到此路径")] = None,
@@ -307,7 +362,8 @@ def capture(
             raise typer.Exit(1)
 
     store = TemplateStore.for_module(module_id, lang)
-    meta = TemplateMeta(region=region, box=box, threshold=threshold, grayscale=gray, max_diff=max_diff, note=note)
+    meta = TemplateMeta(region=region, box=box, tap=_parse_rect(tap, "--tap"), threshold=threshold, grayscale=gray,
+                        max_diff=max_diff, note=note)
     try:
         tpl = store.save(name, box.crop(frame).copy(), meta, overwrite=force)
     except (FileExistsError, ValueError) as e:

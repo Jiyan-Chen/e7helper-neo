@@ -37,16 +37,18 @@ TemplateRef = str | Template
 class Vision:
     """按顺序在多个 TemplateStore 中查找模板（模块自己的优先，其次 common）。"""
 
-    def __init__(self, stores: Sequence[TemplateStore], ocr: Ocr | None = None):
+    def __init__(self, stores: Sequence[TemplateStore], ocr: Ocr | None = None, lang: str = DEFAULT_LANG):
         self.stores = list(stores)
         self._ocr = ocr
+        self.lang = lang
+        self._qualified: dict[str, TemplateStore] = {}  # "module_id:name" 形式引用用到的 store
 
     @classmethod
     def for_module(cls, module_id: str, lang: str = DEFAULT_LANG, ocr: Ocr | None = None) -> Vision:
         stores = [TemplateStore.for_module(module_id, lang)]
         if module_id != COMMON_ID:
             stores.append(TemplateStore.for_module(COMMON_ID, lang))
-        return cls(stores, ocr)
+        return cls(stores, ocr, lang)
 
     @property
     def ocr(self) -> Ocr:
@@ -57,6 +59,13 @@ class Vision:
     def template(self, ref: TemplateRef) -> Template:
         if isinstance(ref, Template):
             return ref
+        if ":" in ref:
+            # 限定引用 "module_id:name"：直接到该模块的模板目录里找（场景定义引用模块模板时用）
+            module_id, name = ref.split(":", 1)
+            store = self._qualified.get(module_id)
+            if store is None:
+                store = self._qualified[module_id] = TemplateStore.for_module(module_id, self.lang)
+            return store.get(name)
         for store in self.stores:
             if ref in store:
                 return store.get(ref)

@@ -14,15 +14,16 @@
 ```
 
 依赖方向只能自上而下：`modules → core → device`，device 不依赖任何上层。
+唯一的例外是 `core.runtime`：它是模块的调度器，需要引用模块契约 `modules.base`（只引用契约，不引用任何具体模块）。
 
 ## 设备层 `e7helper.device`
 | 文件 | 职责 |
 |---|---|
-| `base.py` | `Device` 抽象：`name` / `resolution` / `screenshot()` / `tap()` / `swipe()` / `close()` |
+| `base.py` | `Device` 抽象：`name` / `resolution` / `screenshot()` / `tap()` / `swipe()` / `back()`（B03，Android 返回键，默认不支持）/ `close()` |
 | `mumu_manager.py` | `find_install()` 按 参数 → `E7_MUMU_ROOT` → 注册表 → 常见路径 的顺序查找安装目录；兼容 `nx_main\` 与 `shell\` 两种结构。`MuMuManager` 封装 `info` / `launch` / `shutdown` / `app launch` |
 | `nemu_ipc.py` | `external_renderer_ipc.dll` 的 ctypes 封装：截图（RGBA 且上下颠倒，转成 BGR）、touch down/up/swipe |
 | `adb.py` | 后备通道，直接调用 MuMu 自带的 adb.exe：`exec-out screencap -p`、`input tap/swipe`、`pm list packages` |
-| `mumu_device.py` | `MuMuDevice` 组合 IPC 与 adb；`Backend.AUTO` 优先 IPC，失败时回退 adb；`connect(index)` 是统一入口 |
+| `mumu_device.py` | `MuMuDevice` 组合 IPC 与 adb；`Backend.AUTO` 优先 IPC，失败时回退 adb；`back()` 走 adb `input keyevent 4`；`connect(index)` 是统一入口 |
 
 坐标为设备原生像素。与 1600×900 基准的换算用 `core.geometry.Scaler`；B02 起由 vision 层统一处理。
 
@@ -44,12 +45,12 @@ class Module(ABC):
     @classmethod config_schema() -> dict  # JSON Schema，前端用来自动生成表单
     @classmethod routes() -> APIRouter | None  # 可选，B08 挂载到 /api/modules/<id>/
 
-class TaskModule(Module):      def run(self) -> None              # 会操作游戏；应轮询 self.stopped
+class TaskModule(Module):      def run(self) -> None              # 会操作游戏；用 self.ctl 操作
 class AssistantModule(Module): def on_frame(self, frame) -> None  # 只读帧，不得点击
 ```
-`ModuleContext` 提供：`device`、`logger`、`assets_dir`、`data_dir`、`stop_event`、`extras`、`vision`（B02）。后续块只会追加字段（events、storage、data），不会修改已有字段。模块里用 `self.vision` 取视觉层（未设置时报错）。
+`ModuleContext` 提供：`device`、`logger`、`assets_dir`、`data_dir`、`stop_event`、`extras`、`vision`（B02）、`events`、`controller`（B03）。后续块只会追加字段（storage、data），不会修改已有字段。模块里用 `self.vision` / `self.ctl` / `self.events` 取对应能力（未设置时报错）。
 
-**运行规则**（B03 runtime 落实）：同一设备上 TaskModule 互斥；AssistantModule 订阅帧事件，可以和任务并行。
+**运行规则**（B03 runtime 落实）：同一设备上 TaskModule 互斥；AssistantModule 订阅帧事件，可以和任务并行；助手拿到的 `device` 是只读代理，tap / swipe / back 会抛 `DeviceError`。
 
 ## 视觉层 `e7helper.core.vision`（B02）
 | 文件 | 职责 |
@@ -64,6 +65,7 @@ class AssistantModule(Module): def on_frame(self, frame) -> None  # 只读帧，
 - 跨模块共用的界面模板（返回键、顶栏图标、通用弹窗按钮、大厅入口）放在 `assets/common/cn/`，`common` 这个 id 保留，不要给模块用。
 - **相关系数对亮度/对比度不敏感**：被弹窗遮罩压暗的按钮也能得 1.0 分。需要点击的按钮应在 json 里设 `max_diff`（平均像素差上限，实测正常 ≤ 9、压暗 ≥ 60，一般取 30）。
 - 文字比对先过 `normalize_text`（OCR 对全角/半角标点不稳定）。
+- **识别区域 ≠ 可点区域**时，在 json 里设 `tap: [x, y, w, h]`（与 `box` 同时刻的基准坐标；`capture --tap`）。`ctl.tap_match` / `tap_template` 会点 tap 区域，并按命中位置平移。例：大厅「秘密商店」识别的是文字，可点的是上方图标，文字下半部分点了没反应。
 - `rapidocr` 导入要 3–5 秒，所以 OCR 引擎在第一次使用时才加载；需要即时响应的场合先调 `ocr.warmup()`。
 
 模板采集流程：
@@ -75,10 +77,69 @@ python -m uv run e7helper ocr [-f x.png] [-r x,y,w,h] [--line | --number]
 ```
 `capture` 保存后会立即回验：报告原位置分数，以及检索区域内其他位置的最高分（高于阈值时会给出警告）。
 
+## 事件总线 `e7helper.core.events`（B03）
+进程内发布/订阅。`EventBus.subscribe(topic, callback, threaded=False, maxsize=1)`，`*` 订阅全部主题。
+- 同步订阅在发布者线程里直接调用；`threaded=True` 时在独立线程里处理，队列满时丢最旧的（帧用 maxsize=1，只看最新帧）。
+- 订阅者抛异常只记日志，不影响发布者和其他订阅者。
+- 内置主题 `Topic`：`frame`（BGR 帧）、`log`（`LogBridge` 把 logging 记录转成事件）、`task`（任务开始/结束）、`scene`（场景变化）、`assistant`（助手挂载/卸下）。B08 的 WebSocket 会订阅这些主题。
+
+## 场景与弹窗 `e7helper.core.scene`（B03）
+| 文件 | 职责 |
+|---|---|
+| `model.py` | `Scene(name, all_of, none_of)`；`Popup(name, all_of, dismiss, none_of, text, text_region, auto)`；关闭方式 `Dismiss.tap(模板) / at(x, y) / back() / none()` |
+| `detector.py` | `SceneDetector.detect(frame) → SceneState(scene, popup, obscured, matches)`，一帧约 20–35ms |
+| `builtin.py` | 内置场景（lobby / secret_shop / shop / arena / sanctuary）和弹窗（network / notice / confirm） |
+
+判定顺序：弹窗 → 场景 → 遮罩。**只有 `state.clear`（没有弹窗）时 `scene` 才是可操作的界面**，用 `state.is_("lobby")` 判断。
+- 相关系数对亮度不敏感，弹窗遮罩下的场景模板照样命中，所以必须先认弹窗。
+- 遮罩检测（兜底未知弹窗）：场景锚点或探针模板（默认 `back`）命中位置的亮度（98 分位灰度）不到模板自身的 0.6 倍，就报告 `popup = "obscured"`，用返回键关闭。不用 diff 判断：白色图标在亮背景（圣域天空）上 diff 也有 30+。
+  界面切换的淡入淡出也会让画面短暂变暗，所以 `Controller.dismiss_popups` 关闭 `obscured` 前会复核：画面压暗**且静止** 0.5 秒才算，在动就继续等。
+- 内置弹窗的处理：`network`（网络连接异常）点「点击重试」；`notice`（通知面板）按返回键；`confirm`（取消/确认 二次确认框）**一律点取消**。任务自己打开的确认框，必须在调用 `dismiss_popups` / `wait_scene` 之前自行处理。
+- 按钮相同的弹窗可以用 `text` + `text_region` 加 OCR 文字条件区分（比较慢，只在模板都命中后才做）。
+- 模块注册自己的场景：在 `setup()` 里 `self.ctl.scenes.add_scene(Scene("xxx", ("<module_id>:title",)), replace=True)`。识别器由 Runtime 共享，每次启动任务都会调用 setup，所以要用 `replace=True`。模板用限定引用 `<module_id>:<name>`，它由 `Vision.template` 解析到该模块的模板目录。
+- 场景标题模板统一放在 `common/title/*`，弹窗模板放在 `common/popup/*`。
+
+## 运行时 `e7helper.core.runtime`（B03）
+| 文件 | 职责 |
+|---|---|
+| `runner.py` | `Runtime(device)`：`start_task` / `run_task`（互斥、急停、超时、卡死、失败时保存调试信息）、`attach_assistant` / `detach_assistant`（帧订阅 + 帧泵）、`make_controller`（CLI 调试用） |
+| `controller.py` | `Controller`（模块里的 `self.ctl`）：基准坐标点击、截图、等待、场景/弹窗、急停检查 |
+| `humanize.py` | `Humanize`：命中框内截断正态取点、坐标抖动、随机按压时长、点击后随机等待；`Humanize.off()` 用于测试 |
+| `stuck.py` | `StuckDetector`：画面静止 N 帧且 T 秒，或同一场景 N 次且 T 秒，判定卡死 |
+| `device.py` | `SharedDevice`（加锁，任务线程和帧泵共用设备）、`ReadOnlyDevice`（给助手） |
+| `errors.py` | `TaskStatus`；`TaskAborted`（`TaskStopped` / `TaskTimeout` / `TaskStuck`）；`RuntimeBusy`、`WaitTimeout`、`PopupError` |
+
+任务的写法：
+```python
+class MyTask(TaskModule):
+    def run(self):
+        ctl = self.ctl
+        ctl.wait_scene("lobby")                         # 等到大厅（途中自动关闭弹窗、等淡入结束）
+        ctl.tap_until("lobby/secret_shop", "secret_shop")  # 导航：点击直到进入目标场景
+        m = ctl.wait("refresh", timeout=5)               # 等模板出现（先找本模块的，再找 common）
+        ctl.tap_match(m)                                # 在命中框内随机取点点击
+        ...
+        ctl.progress()                                  # 取得进展时清零卡死计数
+```
+要点：
+- `Controller` 的坐标一律是 1600×900 基准，换算到设备坐标在这一层完成。每次截图、点击、sleep 前都会检查急停、超时和卡死。
+- `TaskAborted` 继承 `BaseException`，模块里的 `except Exception` 不会吞掉急停。模块不要捕获它。
+- 只轮询 `self.stopped`、不用 `ctl` 的模块也能被急停/超时（返回后状态按急停原因记）。
+- **界面稳定后再点**：切换界面有淡入、列表飞入等动画，标题出现后 1–2 秒内的点击会被游戏忽略（实测进秘密商店：0.6 秒认出标题，1.7 秒画面静止，2 秒后才响应返回）。`wait_scene` 默认 `settle=True`：认出场景后，还要连续截图的画面变化 < 5（160×90 灰度均差）并持续 0.5 秒才返回。待机动画的变化 ≤ 3.8，不受影响。
+- 导航用 `tap_until(target, scene)`：点击后等目标场景（途中自动关闭弹窗，如网络异常重试）；`retry_after` 秒后仍停在原场景、没有弹窗，就补点一次，最多 3 次；画面已经变了就不再补点。**刷新、购买等有消耗的操作不要用 `tap_until`。**
+- 失败 / 超时 / 卡死时，调试信息保存在 `<数据目录>/debug/<时间>_<模块>_<状态>/`：`last_frame.png`（任务最后一帧）、`screen.png`（当前画面）、`info.json`、`error.txt`、`log.txt`（最近 300 条日志）。用户急停不保存。
+- 一台设备在进程内只能有一个 `Runtime`。
+
+CLI：
+```
+python -m uv run e7helper run <id> [-c JSON] [-t 超时秒] [-d 助手运行秒]   # 经 runtime 运行
+python -m uv run e7helper scene [-f 图片 ...] [--dismiss] [--watch]        # 识别场景/弹窗、关闭弹窗、持续观察
+```
+
 ## 新增一个模块
 1. 新建 `engine/e7helper/modules/<id>/__init__.py`，继承 `TaskModule` 或 `AssistantModule`，设置 `id`、`name`、`config_model`。
 2. 模板和资源放在 `engine/assets/<id>/cn/`，通过 `self.ctx.assets_dir` 访问；模板用 `e7helper capture <id> <name>` 采集，代码里用 `self.vision.find(frame, name)`。
-3. 运行 `uv run e7helper modules` 确认已被发现；用 `uv run e7helper run <id> -c '{...}'` 试跑。
+3. 运行 `uv run e7helper modules` 确认已被发现；用 `uv run e7helper run <id> -c '{...}'` 试跑。任务里用 `self.ctl` 操作游戏（见上文“运行时”一节）。
 4. 外部包也可以注册：在它的 `pyproject.toml` 里声明
    ```toml
    [project.entry-points."e7helper.modules"]

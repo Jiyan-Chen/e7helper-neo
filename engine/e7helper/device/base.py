@@ -34,6 +34,10 @@ class Device(ABC):
     @abstractmethod
     def swipe(self, x1: int, y1: int, x2: int, y2: int, duration: float = 0.3) -> None: ...
 
+    def back(self) -> None:
+        """Android 返回键。游戏里一般用来关闭弹窗；在大厅按会弹出「结束游戏」确认框。"""
+        raise DeviceError(f"{self.name} 不支持返回键")
+
     def close(self) -> None:  # noqa: B027 - 可选覆盖
         pass
 
