@@ -136,6 +136,21 @@ python -m uv run e7helper run <id> [-c JSON] [-t 超时秒] [-d 助手运行秒]
 python -m uv run e7helper scene [-f 图片 ...] [--dismiss] [--watch]        # 识别场景/弹窗、关闭弹窗、持续观察
 ```
 
+## 已有模块
+### `secret_shop` 刷神秘商店（B04）
+| 文件 | 职责 |
+|---|---|
+| `__init__.py` | `SecretShopModule`：进店 → 每页扫描顶部/底部 → 买目标 → 刷新 → 循环；`setup()` 注册弹窗 `shop_refresh` / `shop_buy`（自动关闭时都点取消） |
+| `page.py` | 纯函数识别：`scan_items`（以「购买」按钮为锚点读名字/价格/金币图标/物品图标）、`read_resources`（先定位顶栏图标再读数）、`read_refresh_cost`、`read_buy_dialog`；决策 `decide` |
+| `config.py` | `SecretShopConfig`（预算、保底、金币下限、最多刷新、连续失败、`dry_run` 默认开启、`probe_dialogs`）、`Target(name, price, icon)` |
+| `stats.py` | `data_dir/history.jsonl`（每次运行一行）、`stats.json`（实跑累计） |
+
+写有消耗操作的任务可以参考它的做法：
+- **按资源读数差确认**，不按点击次数计。读数差为 0 不计数，算失败；为其他值立即停止（任务记为失败）。
+- 有消耗的确认框注册成本模块的弹窗，`Dismiss` 点取消；只有任务自己在核对内容后点确认。
+- 顶栏数字连续两帧一致才采用（数字有滚动动画）。
+- 离线测试用 `tests/shop_sim.py` 这类模拟器：点到确认默认进入 DANGER，按需模拟扣费、吞点击、网络重试、重复扣费。
+
 ## 新增一个模块
 1. 新建 `engine/e7helper/modules/<id>/__init__.py`，继承 `TaskModule` 或 `AssistantModule`，设置 `id`、`name`、`config_model`。
 2. 模板和资源放在 `engine/assets/<id>/cn/`，通过 `self.ctx.assets_dir` 访问；模板用 `e7helper capture <id> <name>` 采集，代码里用 `self.vision.find(frame, name)`。
