@@ -88,7 +88,7 @@ python -m uv run e7helper ocr [-f x.png] [-r x,y,w,h] [--line | --number]
 |---|---|
 | `model.py` | `Scene(name, all_of, none_of)`；`Popup(name, all_of, dismiss, none_of, text, text_region, auto)`；关闭方式 `Dismiss.tap(模板) / at(x, y) / back() / none()` |
 | `detector.py` | `SceneDetector.detect(frame) → SceneState(scene, popup, obscured, matches)`，一帧约 20–35ms |
-| `builtin.py` | 内置场景（lobby / secret_shop / shop / arena / sanctuary）和弹窗（network / notice / confirm） |
+| `builtin.py` | 内置场景（lobby / secret_shop / shop / arena（只认模式选择）/ sanctuary）和弹窗（network / notice / confirm） |
 
 判定顺序：弹窗 → 场景 → 遮罩。**只有 `state.clear`（没有弹窗）时 `scene` 才是可操作的界面**，用 `state.is_("lobby")` 判断。
 - 相关系数对亮度不敏感，弹窗遮罩下的场景模板照样命中，所以必须先认弹窗。
@@ -150,6 +150,19 @@ python -m uv run e7helper scene [-f 图片 ...] [--dismiss] [--watch]        # �
 - 有消耗的确认框注册成本模块的弹窗，`Dismiss` 点取消；只有任务自己在核对内容后点确认。
 - 顶栏数字连续两帧一致才采用（数字有滚动动画）。
 - 离线测试用 `tests/shop_sim.py` 这类模拟器：点到确认默认进入 DANGER，按需模拟扣费、吞点击、网络重试、重复扣费。
+
+### `arena_npc` 竞技场 NPC（B05）
+| 文件 | 职责 |
+|---|---|
+| `__init__.py` | `ArenaNpcModule`：大厅 → 模式选择 → NPC对战页 → 选第一行 → 挑战 → 准备界面（优先快速对战，当天次数用完切普通战斗）→ 结算点确认 → 循环；旗帜用完且开了补旗时，点顶栏「+」用友情点数补一次。`setup()` 注册场景 `arena_main` / `arena_npc` / `arena_prep` / `arena_battle` / `arena_result` 和弹窗 `arena_record`（点击关闭）/ `arena_buy_flags`（点取消） |
+| `page.py` | 纯函数识别：`read_flags`（顶栏旗帜）、`read_prep`（模式 + 快速对战剩余次数）、`is_victory`、`read_buy_dialog`（哪个选项被选中、消耗、持有）、`auto_icon`（自动战斗图标区域，用于判断是否在转） |
+| `config.py` | `ArenaNpcConfig`：表单只有 `buy_flags`（默认关）、`dry_run`（默认开）；其余字段用 `SkipJsonSchema` 隐藏，只供引擎/CLI 使用 |
+| `stats.py` | `data_dir/history.jsonl`、`stats.json`（场次、胜场、消耗旗帜、补旗次数、最近一次补旗时间） |
+
+- 一场 = 看到结算 + 旗帜读数减少 1；补旗 = 旗帜读数增加 5。读数差异常立即停止（任务记为失败）。
+- 自动战斗：图标静止约 0.6 秒才认为没开（开启后图标一直旋转），点完再观察，不会误关。
+- 普通战斗中不按返回键（会打开暂停菜单）：只有网络异常立即重试，其他弹窗持续 10 秒才交给内置规则。
+- 内置场景 `arena` 从 B05 起只认模式选择界面（加了 `common/arena/mode_arena`）；竞技场里其他界面的标题也是「竞技场」，由本模块注册的场景区分。CLI `scene` 只加载内置场景，在这些界面上显示「未知」。
 
 ## 新增一个模块
 1. 新建 `engine/e7helper/modules/<id>/__init__.py`，继承 `TaskModule` 或 `AssistantModule`，设置 `id`、`name`、`config_model`。

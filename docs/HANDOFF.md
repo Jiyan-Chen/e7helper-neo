@@ -1,13 +1,14 @@
 # HANDOFF
 
-> 新会话从这里读起。上次更新：2026-10-15（B04 已通过）
+> 新会话从这里读起。上次更新：2026-10-15（B05 已通过）
 
 ## 当前进度
 - **B01 骨架 + 模块契约 + MuMu 设备层**：✅ 已通过，记录见 [reviews/B01.md](reviews/B01.md)。
 - **B02 视觉层 + 模板工具**：✅ 已通过，记录见 [reviews/B02.md](reviews/B02.md)。
 - **B03 运行时 + 事件总线 + 场景/弹窗**：✅ 已通过，记录见 [reviews/B03.md](reviews/B03.md)。
 - **B04 刷神秘商店**：✅ 已通过，记录见 [reviews/B04.md](reviews/B04.md)。
-- 下一块：**B05 竞技场 NPC**（建议模块 id `arena_npc`）。
+- **B05 竞技场 NPC**：✅ 已通过，记录见 [reviews/B05.md](reviews/B05.md)。
+- 下一块：**B06 重复刷关 / 讨伐 / 迷宫**。
 
 ## 已有能力
 ### 设备（B01）
@@ -24,9 +25,10 @@
 - 模板：`engine/assets/<module_id>/cn/<name>.png` + `.json`。
   - 查找顺序：模块自己的 → `common`。
   - 已有模板：
-    - `common`：`back`、`top/skystone`、`top/gold`、`dialog/cancel`、`dialog/confirm`、`lobby/secret_shop`（带 `tap`）、`lobby/shop`；B03 新增 `title/secret_shop`、`title/shop`、`title/arena`、`title/sanctuary`、`popup/notice`、`popup/network_error`、`popup/network_retry`
+    - `common`：`back`、`top/skystone`、`top/gold`、`dialog/cancel`、`dialog/confirm`、`lobby/secret_shop`（带 `tap`）、`lobby/shop`；B05 新增 `lobby/arena`、`top/flag`、`arena/mode_arena`；B03 新增 `title/secret_shop`、`title/shop`、`title/arena`、`title/sanctuary`、`popup/notice`、`popup/network_error`、`popup/network_retry`
     - `secret_shop`：`title`、`refresh`、`buy`；B04 新增 `coin`、`dialog/buy_title`、`dialog/buy_ok`、`dialog/refresh_text`、`item/covenant`、`item/mystic`
-- fixtures：`engine/tests/fixtures/`，包括 `lobby`、`secret_shop`、`secret_shop_scrolled`、`secret_shop_refresh_confirm`；B04 新增 `secret_shop_relist(_scrolled)`、`secret_shop_buy_confirm`、`secret_shop_sold`、`secret_shop_bought_toast`；B03 新增 `shop`、`arena`、`arena_notice`、`sanctuary`、`sanctuary_help`、`lobby_exit_confirm`、`lobby_network_error`。模板的期望结果在 `tests/test_vision_fixtures.py`，场景的期望结果在 `tests/test_scene.py`。
+    - `arena_npc`（B05）：`tab/npc`、`npc/*`、`prep/*`、`battle/*`、`result/*`、`record/*`、`buy/*`，共 21 个
+- fixtures：`engine/tests/fixtures/`，包括 `lobby`、`secret_shop`、`secret_shop_scrolled`、`secret_shop_refresh_confirm`；B05 新增 17 张 `arena_*`（模式选择外的竞技场各界面、战斗中、两种结算、补旗框三种状态）；B04 新增 `secret_shop_relist(_scrolled)`、`secret_shop_buy_confirm`、`secret_shop_sold`、`secret_shop_bought_toast`；B03 新增 `shop`、`arena`、`arena_notice`、`sanctuary`、`sanctuary_help`、`lobby_exit_confirm`、`lobby_network_error`。模板的期望结果在 `tests/test_vision_fixtures.py`，场景的期望结果在 `tests/test_scene.py`。
 - CLI：
   - `capture <module> <name>`：弹窗框选，或用 `-f 文件 -r x,y,w,h` 指定
   - `match <module> [names] [-f] [-a]`
@@ -38,7 +40,7 @@
   - 点击：`tap(x, y)` / `tap_rect` / `tap_match(m)` / `tap_template(ref)` / `swipe` / `back()`。自带随机偏移、按压时长和点击后等待；模板 json 设了 `tap` 时点 tap 区域
   - 场景：`wait_scene("lobby")`（途中自动关弹窗，并等画面静止 0.5 秒）；导航用 `tap_until(target, scene)`（会补点，**不要用于刷新/购买**）
   - 弹窗：`dismiss_popups()`；`progress()` 清零卡死计数；`sleep()` 可被急停打断
-- 场景判定：`state.is_("secret_shop")` 表示在该场景且没有弹窗。内置场景 `lobby` / `secret_shop` / `shop` / `arena` / `sanctuary`；内置弹窗 `network`（点重试）、`notice`（返回键）、`confirm`（**一律点取消**）、`obscured`（压暗且静止时按返回键兜底）
+- 场景判定：`state.is_("secret_shop")` 表示在该场景且没有弹窗。内置场景 `lobby` / `secret_shop` / `shop` / `arena`（B05 起只认模式选择）/ `sanctuary`；内置弹窗 `network`（点重试）、`notice`（返回键）、`confirm`（**一律点取消**）、`obscured`（压暗且静止时按返回键兜底）
 - 模块注册自己的场景：`self.ctl.scenes.add_scene(Scene(..., ("secret_shop:xxx",)), replace=True)`（限定引用 `module_id:name`）
 - `Runtime(device)`：`run_task` / `start_task`（互斥、`timeout`、急停、卡死），失败时调试信息存到 `%LOCALAPPDATA%\e7helper\debug\`；`attach_assistant`（只读设备、帧订阅）
 - 事件总线：`self.events`，主题 `frame` / `log` / `task` / `scene` / `assistant`
@@ -55,6 +57,18 @@
   - 列表类界面用「列表区域停稳」代替整屏静止（`_settle_list`）；
   - 离线测试用 `tests/shop_sim.py` 式的模拟器（点到确认默认进入 DANGER）。
 
+### 竞技场 NPC `arena_npc`（B05，详见 architecture.md「已有模块」和 reviews/B05.md）
+- `python -m uv run e7helper run arena_npc`：默认 **dry-run**（导航到准备界面、决定模式后返回）
+- 实跑：`-c '{"dry_run": false}'` 打到旗帜用完；加 `"buy_flags": true` 用完后用友情点数补一次（100 换 5 面，每天一次）再打完
+- 表单只有 `buy_flags`、`dry_run`；内部字段（`max_battles`、`prefer_quick`、`probe_dialogs` 等）用 `SkipJsonSchema` 隐藏，CLI 仍可传
+- 统计：`%LOCALAPPDATA%\e7helper\modules\arena_npc\history.jsonl`、`stats.json`
+- 实测：快速对战一场约 7 秒（从点按钮到核对完成），普通战斗约 33 秒
+- 可以复用的做法：
+  - 普通战斗中的**自动战斗**：图标静止约 0.6 秒 = 没开（开启后一直旋转），点完再观察（`_ensure_auto`）；
+  - 战斗中不按返回键（会打开暂停菜单），只有网络异常立即重试；战斗画面在动就 `progress()`；
+  - 两个选项的购买框：点购买前核对**哪个选项被选中**（边框亮度），不能只看按钮；
+  - 离线测试用 `tests/arena_sim.py`（战斗、结算、自动图标旋转都能模拟）。
+
 ### 模块与 CLI（B01，B03 更新）
 - 模块：继承 `TaskModule` / `AssistantModule`，放到 `e7helper/modules/<id>/` 就会被自动发现。参考 `modules/hello/`。
 - CLI：`doctor`、`bench`、`screenshot`、`tap`、`modules`、`run <id> [-c JSON] [-t 超时]`（经 runtime）、`scene [-f 图片] [--dismiss] [--watch]`、`capture`（新增 `--tap`）、`match`、`ocr`。
@@ -70,23 +84,20 @@
 - 代码由 git 管理；每块审核通过后由用户确认再提交。
 - **登录公告 / 每日签到不做自动处理**（B03 用户确认）：由用户自己把游戏点到大厅，任务默认从大厅开始。
 - 场景标题模板放在 `common/title/*`，弹窗模板放在 `common/popup/*`。
+- 有消耗的任务 dry-run 默认开启；表单只放用户真正需要的开关，其余参数作为引擎内部接口（B05 用户意见）。
+- 本仓库没有配置远程；「推送到 main」= 把本地 main 快进到块分支的提交（B05 用户确认合入 main）。
 
-## 下一块（B05 竞技场 NPC）要做
-ROADMAP：自动挑战 NPC，可以选择用友情书签补旗；验收标准是实跑 1–2 场。
-1. 新建 TaskModule（建议 id `arena_npc`）。竞技场场景 `arena`（`title/arena`）已经有了，大厅里怎么进竞技场，B03 测试里走过一遍。
-2. 需要采集的界面：
-   - 竞技场模式选择 → NPC 对手列表；
-   - 挑战前的编队/准备界面；
-   - 战斗中（自动战斗开关）；
-   - 结算（胜/负）；
-   - 旗帜不足的提示；
-   - 用友情书签补旗的确认框。
-
-   需要哪张截图，告诉用户切到哪个界面。录屏由用户控制：用户说「开始」才录，说「好了」就停（脚本做法见 reviews/B04.md）。
-3. 计数照搬 B04 的做法：旗帜和友情书签都按读数差确认，不按点击次数计；补旗、开始战斗这类确认框由任务自己点确认，自动关闭时一律点取消。
-4. 配置建议：最多挑战次数、是否补旗（默认否）、补旗上限、dry-run（默认开启）。
-5. 安全：dry-run 和离线测试阶段绝不点「开始战斗」「补旗」。实跑之前必须得到用户明确同意（实跑会消耗旗帜，补旗会消耗友情书签）。
-6. 验收：dry-run 决策正确（离线用 fixtures + 模拟器）；用户同意后实跑 1–2 场。
+## 下一块（B06 重复刷关 / 讨伐 / 迷宫）要做
+ROADMAP：在游戏自带的重复战斗基础上处理结算、体力不足、背包满，支持次数和体力上限；验收标准是实跑一轮小次数。
+1. 先和用户确认范围：先做哪一种（普通关卡 / 讨伐 / 迷宫），从哪个界面开始（建议用户先停在关卡的准备界面，模块只负责开重复战斗和收尾），模块 id 怎么拆。
+2. 需要采集的界面（告诉用户切到哪个界面；录屏由用户控制，说「开始」才录、说「好了」就停，录屏做法见 reviews/B05.md「录屏做法」）：
+   - 关卡准备界面（重复战斗开关、次数设置、体力消耗）；
+   - 重复战斗进行中、重复战斗结束的结算/统计框；
+   - 体力不足提示（以及补体力的确认框——**绝不自动补体力用天空石/叶子，除非用户另行同意**）；
+   - 背包已满提示。
+3. 计数照搬 B04/B05：按资源读数差（体力）和结算确认，不按点击次数计；有消耗的确认框注册成本模块弹窗，自动关闭时点取消。
+4. 安全：dry-run 和离线测试阶段绝不点「开始战斗」或任何补体力；实跑之前必须得到用户明确同意。
+5. 验收：dry-run 决策正确（离线用 fixtures + 模拟器）；用户同意后实跑一轮小次数。
 
 ## 坑
 - `wm size` 返回的是竖屏 900x1600，不要用它判断分辨率；用 `device.resolution`（来自 IPC）。
@@ -110,3 +121,9 @@ ROADMAP：自动挑战 NPC，可以选择用友情书签补旗；验收标准是
 - **秘密商店每小时自动刷新一次**，过程是静默的：没有弹窗，不扣天空石，列表回到顶部。
 - **游戏里的「确认」框长得不一样**：通用确认框是「取消 / 确认」，购买框是「取消 / 金币价格 + 购买」。按钮相同的框（刷新 / 结束游戏）用文字**模板**区分；不要用 OCR 文字条件，每帧要 600ms。
 - `Controller.tap_template` 没有关闭点击后等待的参数。需要马上开始轮询时，用 `tap_match(ctl.wait(ref), ref=ref, delay=False)`。
+- **竞技场里多个界面标题相同**（都叫「竞技场」）：标题模板不足以区分场景，要加各界面独有的锚点。别的玩法大概率也一样。
+- **CLI `scene` 只加载内置场景**：模块注册的场景（如 `arena_npc`）在 CLI 里显示「未知」，要看模块场景用 `run` 的 `-v` 日志或自己写脚本注册。
+- **购买框可能自动选中天空石**：竞技场补旗框在今天补过之后会自动选中天空石，「购买」仍然亮着。凡是有多个付款选项的框，点购买前都要核对选中项。
+- **结算刚出现时点击会被吞**：竞技场普通战斗结算的「确认」在入场动画期间点了没反应；不消耗东西的按钮用 `tap_until(..., retry_after=2)`。
+- **自动战斗的图标在转 ≠ 蓝色光圈**：蓝色光圈只是点击特效。
+- 在购买框上用脚本点「取消」也可能被自动安全检查当成交易拦下；关闭这类框用模块的 dry-run（弹窗规则点取消）。

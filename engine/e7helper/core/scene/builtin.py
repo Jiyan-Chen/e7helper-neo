@@ -12,7 +12,8 @@ SCENES: tuple[Scene, ...] = (
     Scene("lobby", ("lobby/shop", "lobby/secret_shop"), note="大厅"),
     Scene("secret_shop", ("title/secret_shop",), note="秘密商店"),
     Scene("shop", ("title/shop",), note="商店"),
-    Scene("arena", ("title/arena",), note="竞技场（模式选择）"),
+    # 竞技场里的模式选择、交战对手列表、准备界面标题都是「竞技场」，所以另加普通竞技场卡片的文字（B05）
+    Scene("arena", ("title/arena", "arena/mode_arena"), note="竞技场（模式选择）"),
     Scene("sanctuary", ("title/sanctuary",), note="圣域"),
 )
 
