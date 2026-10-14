@@ -21,7 +21,7 @@
 
 ## 关键约定
 - 基准坐标系 **1600×900**（`e7helper/core/geometry.py`）。模板、坐标、区域一律按基准记录，运行时由 `Scaler` 换算。
-- 截图统一为 BGR uint8 `(H, W, 3)`。写图片用 `cv2.imencode` + `write_bytes`，因为 `cv2.imwrite` 不支持中文路径。
+- 截图统一为 BGR uint8 `(H, W, 3)`。读写图片用 `core.imageio.read_image` / `write_image`，因为 `cv2.imread` / `imwrite` 不支持中文路径。
 - 设备层：IPC（`external_renderer_ipc.dll`）为主，MuMu 自带的 `adb.exe` 为后备。上层只依赖 `e7helper.device.Device`。
 - 进程入口必须先调用 `core.stdio.isolate_native_stdout()`，因为 DLL 会往原生 stdout/stderr 写调试信息。Rich Console 一律用 `core.log.make_console()` 创建。
 - 依赖安装：本机直连 PyPI 只有约 3KB/s，所以要设置 `UV_DEFAULT_INDEX=https://repo.huaweicloud.com/repository/pypi/simple`。`uv.lock` 目前锁定的也是这个镜像。

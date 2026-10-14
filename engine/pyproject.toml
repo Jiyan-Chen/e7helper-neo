@@ -9,6 +9,8 @@ dependencies = [
     "pydantic>=2.7",
     "typer>=0.12",
     "rich>=13.7",
+    "rapidocr>=3.10.0",
+    "onnxruntime>=1.31.0",
 ]
 
 [project.scripts]
@@ -22,6 +24,15 @@ dev = ["pytest>=8.2"]
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.uv]
+# rapidocr 依赖 opencv-python-headless，它和 opencv-python 共用 cv2 目录，后装的会覆盖前者，
+# 导致 highgui（capture 的框选窗口）不可用。这里把 headless 排除掉，统一用带 GUI 的 opencv-python。
+override-dependencies = ["opencv-python-headless; sys_platform == 'never'"]
+
+[[tool.uv.index]]
+url = "https://repo.huaweicloud.com/repository/pypi/simple"
+default = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["e7helper"]

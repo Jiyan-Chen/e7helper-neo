@@ -23,6 +23,7 @@ from pydantic import BaseModel
 if TYPE_CHECKING:
     from fastapi import APIRouter
 
+    from e7helper.core.vision import Vision
     from e7helper.device import Device
 
 
@@ -45,6 +46,8 @@ class ModuleContext:
     data_dir: Path  # 用户数据目录/<module_id>/，模块自己的持久化文件放这里
     stop_event: threading.Event = field(default_factory=threading.Event)
     extras: dict[str, Any] = field(default_factory=dict)
+    # B02：模板匹配 + OCR，模板查找顺序为 assets/<module_id>/cn → assets/common/cn
+    vision: Vision | None = None
 
 
 class Module(ABC):
@@ -77,6 +80,12 @@ class Module(ABC):
         if self.ctx.device is None:
             raise RuntimeError(f"模块 {self.id} 需要设备，但未连接")
         return self.ctx.device
+
+    @property
+    def vision(self) -> Vision:
+        if self.ctx.vision is None:
+            raise RuntimeError(f"模块 {self.id} 需要视觉层，但 ctx.vision 未设置")
+        return self.ctx.vision
 
     @property
     def stopped(self) -> bool:
