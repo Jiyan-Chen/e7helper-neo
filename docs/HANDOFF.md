@@ -1,6 +1,6 @@
 # HANDOFF
 
-> 新会话从这里读起。上次更新：2026-10-15（B05 已通过）
+> 新会话从这里读起。上次更新：2026-10-16（B06 已通过）
 
 ## 当前进度
 - **B01 骨架 + 模块契约 + MuMu 设备层**：✅ 已通过，记录见 [reviews/B01.md](reviews/B01.md)。
@@ -8,7 +8,8 @@
 - **B03 运行时 + 事件总线 + 场景/弹窗**：✅ 已通过，记录见 [reviews/B03.md](reviews/B03.md)。
 - **B04 刷神秘商店**：✅ 已通过，记录见 [reviews/B04.md](reviews/B04.md)。
 - **B05 竞技场 NPC**：✅ 已通过，记录见 [reviews/B05.md](reviews/B05.md)。
-- 下一块：**B06 重复刷关 / 讨伐 / 迷宫**。
+- **B06 重复刷关（托管战斗 + 手动刷讨伐）**：✅ 已通过，记录见 [reviews/B06.md](reviews/B06.md)。
+- 下一块：**B07 日常收取**。
 
 ## 已有能力
 ### 设备（B01）
@@ -25,10 +26,11 @@
 - 模板：`engine/assets/<module_id>/cn/<name>.png` + `.json`。
   - 查找顺序：模块自己的 → `common`。
   - 已有模板：
-    - `common`：`back`、`top/skystone`、`top/gold`、`dialog/cancel`、`dialog/confirm`、`lobby/secret_shop`（带 `tap`）、`lobby/shop`；B05 新增 `lobby/arena`、`top/flag`、`arena/mode_arena`；B03 新增 `title/secret_shop`、`title/shop`、`title/arena`、`title/sanctuary`、`popup/notice`、`popup/network_error`、`popup/network_retry`
+    - `common`：`back`、`top/skystone`、`top/gold`、`dialog/cancel`、`dialog/confirm`、`lobby/secret_shop`（带 `tap`）、`lobby/shop`；B05 新增 `lobby/arena`、`top/flag`、`arena/mode_arena`；B06 新增 `lobby/battle`、`title/battle`、`title/prep`、`top/energy`（行动力）、`top/auto_clock`（托管图标表盘）；B03 新增 `title/secret_shop`、`title/shop`、`title/arena`、`title/sanctuary`、`popup/notice`、`popup/network_error`、`popup/network_retry`
     - `secret_shop`：`title`、`refresh`、`buy`；B04 新增 `coin`、`dialog/buy_title`、`dialog/buy_ok`、`dialog/refresh_text`、`item/covenant`、`item/mystic`
     - `arena_npc`（B05）：`tab/npc`、`npc/*`、`prep/*`、`battle/*`、`result/*`、`record/*`、`buy/*`，共 21 个
-- fixtures：`engine/tests/fixtures/`，包括 `lobby`、`secret_shop`、`secret_shop_scrolled`、`secret_shop_refresh_confirm`；B05 新增 17 张 `arena_*`（模式选择外的竞技场各界面、战斗中、两种结算、补旗框三种状态）；B04 新增 `secret_shop_relist(_scrolled)`、`secret_shop_buy_confirm`、`secret_shop_sold`、`secret_shop_bought_toast`；B03 新增 `shop`、`arena`、`arena_notice`、`sanctuary`、`sanctuary_help`、`lobby_exit_confirm`、`lobby_network_error`。模板的期望结果在 `tests/test_vision_fixtures.py`，场景的期望结果在 `tests/test_scene.py`。
+    - `repeat_battle`（B06）：`menu/hunt`、`hunt/header`、`prep/*`、`auto/*`、`battle/*`、`clear`、`result/*`、`after/*`、`energy/*`，共 27 个
+- fixtures：`engine/tests/fixtures/`（B06 后约 86MB）。B06 新增 36 张 `rb_*`（讨伐导航、准备界面各状态、托管各框、战斗、CLEAR、结算、战后、行动力不足；期望结果在 `tests/test_repeat_battle.py`）。此前的包括 `lobby`、`secret_shop`、`secret_shop_scrolled`、`secret_shop_refresh_confirm`；B05 新增 17 张 `arena_*`（模式选择外的竞技场各界面、战斗中、两种结算、补旗框三种状态）；B04 新增 `secret_shop_relist(_scrolled)`、`secret_shop_buy_confirm`、`secret_shop_sold`、`secret_shop_bought_toast`；B03 新增 `shop`、`arena`、`arena_notice`、`sanctuary`、`sanctuary_help`、`lobby_exit_confirm`、`lobby_network_error`。模板的期望结果在 `tests/test_vision_fixtures.py`，场景的期望结果在 `tests/test_scene.py`。
 - CLI：
   - `capture <module> <name>`：弹窗框选，或用 `-f 文件 -r x,y,w,h` 指定
   - `match <module> [names] [-f] [-a]`
@@ -38,7 +40,7 @@
 - 任务模块里用 `self.ctl`（`Controller`），坐标一律 1600×900 基准：
   - 截图与识别：`screenshot` / `find` / `wait(ref)` / `wait_until(probe)` / `detect() → SceneState`
   - 点击：`tap(x, y)` / `tap_rect` / `tap_match(m)` / `tap_template(ref)` / `swipe` / `back()`。自带随机偏移、按压时长和点击后等待；模板 json 设了 `tap` 时点 tap 区域
-  - 场景：`wait_scene("lobby")`（途中自动关弹窗，并等画面静止 0.5 秒）；导航用 `tap_until(target, scene)`（会补点，**不要用于刷新/购买**）
+  - 场景：`wait_scene("lobby")`（途中自动关弹窗，并等画面静止 0.5 秒）；导航用 `tap_until(target, scene)`（会补点，**不要用于刷新/购买**；目标界面一直有动画时传 `settle=False`，B06）
   - 弹窗：`dismiss_popups()`；`progress()` 清零卡死计数；`sleep()` 可被急停打断
 - 场景判定：`state.is_("secret_shop")` 表示在该场景且没有弹窗。内置场景 `lobby` / `secret_shop` / `shop` / `arena`（B05 起只认模式选择）/ `sanctuary`；内置弹窗 `network`（点重试）、`notice`（返回键）、`confirm`（**一律点取消**）、`obscured`（压暗且静止时按返回键兜底）
 - 模块注册自己的场景：`self.ctl.scenes.add_scene(Scene(..., ("secret_shop:xxx",)), replace=True)`（限定引用 `module_id:name`）
@@ -69,6 +71,19 @@
   - 两个选项的购买框：点购买前核对**哪个选项被选中**（边框亮度），不能只看按钮；
   - 离线测试用 `tests/arena_sim.py`（战斗、结算、自动图标旋转都能模拟）。
 
+### 重复刷关 `repeat_battle`（B06，详见 architecture.md「已有模块」和 reviews/B06.md）
+- 游戏的「重复战斗」已重做成**托管战斗**：准备界面设份数（1 份 = 4 次，行动力或叶子付费），后台按最快通关记录自动打，完成后在托管框「结算」。无记录的关卡开不了。
+- `python -m uv run e7helper run repeat_battle`：默认 **dry-run**（导航到 讨伐双足飞龙 地狱级，打开托管设置框核对后关闭，切普通战斗后停下）
+- 实跑：`-c '{"dry_run": false, "manual_runs": N}'`。表单字段：`hunt`（飞龙 / 魔像 / 报丧妖）、`tier`（中级 / 上级 / 地狱级）、`start_here`、`auto_battle`、`auto_leaves`、`manual`、`manual_runs`、`refill_leaf` / `max_leaf_refills`、`refill_skystone` / `max_skystone_refills`、`dry_run`；内部字段 `auto_max_units`（托管最多几份，控制实跑规模）、`auto_prefer_energy`、`skystone_keep` 等
+- 托管和手动是两个独立开关；只开托管时处理一次就退出（周期性结算重开由 B08 定时调度反复启动模块，用户确认）
+- 统计：`%LOCALAPPDATA%\e7helper\modules\repeat_battle\history.jsonl`、`stats.json`
+- 实测：手动一场约 2 分钟（地狱级，自动战斗）；托管 1 份约 7 分钟
+- 可以复用的做法：
+  - 点了弹窗的确认 / 购买 / 关闭后，**等框自己淡出**（`_wait_popup_gone`），不要马上 `wait_scene`；
+  - 位置会变的列表（讨伐列表、难度卡片）用 OCR `read` 找整行文字再点；
+  - 状态图标的红点要按图标亮度归一化，并用多帧排除转动的光效（`auto_state` + `dots_match`）；
+  - 离线测试用 `tests/rb_sim.py`（战后界面一直在动、弹窗淡出、点到「推荐配置」= DANGER）。
+
 ### 模块与 CLI（B01，B03 更新）
 - 模块：继承 `TaskModule` / `AssistantModule`，放到 `e7helper/modules/<id>/` 就会被自动发现。参考 `modules/hello/`。
 - CLI：`doctor`、`bench`、`screenshot`、`tap`、`modules`、`run <id> [-c JSON] [-t 超时]`（经 runtime）、`scene [-f 图片] [--dismiss] [--watch]`、`capture`（新增 `--tap`）、`match`、`ocr`。
@@ -86,18 +101,15 @@
 - 场景标题模板放在 `common/title/*`，弹窗模板放在 `common/popup/*`。
 - 有消耗的任务 dry-run 默认开启；表单只放用户真正需要的开关，其余参数作为引擎内部接口（B05 用户意见）。
 - 本仓库没有配置远程；「推送到 main」= 把本地 main 快进到块分支的提交（B05 用户确认合入 main）。
+- B06：托管 + 手动放在同一个模块（任务互斥，拆开就不能同时跑）；不用快速战斗；异界（专用代币）和迷宫不做；开托管时勾选「优先使用持有的行动力」。
 
-## 下一块（B06 重复刷关 / 讨伐 / 迷宫）要做
-ROADMAP：在游戏自带的重复战斗基础上处理结算、体力不足、背包满，支持次数和体力上限；验收标准是实跑一轮小次数。
-1. 先和用户确认范围：先做哪一种（普通关卡 / 讨伐 / 迷宫），从哪个界面开始（建议用户先停在关卡的准备界面，模块只负责开重复战斗和收尾），模块 id 怎么拆。
-2. 需要采集的界面（告诉用户切到哪个界面；录屏由用户控制，说「开始」才录、说「好了」就停，录屏做法见 reviews/B05.md「录屏做法」）：
-   - 关卡准备界面（重复战斗开关、次数设置、体力消耗）；
-   - 重复战斗进行中、重复战斗结束的结算/统计框；
-   - 体力不足提示（以及补体力的确认框——**绝不自动补体力用天空石/叶子，除非用户另行同意**）；
-   - 背包已满提示。
-3. 计数照搬 B04/B05：按资源读数差（体力）和结算确认，不按点击次数计；有消耗的确认框注册成本模块弹窗，自动关闭时点取消。
-4. 安全：dry-run 和离线测试阶段绝不点「开始战斗」或任何补体力；实跑之前必须得到用户明确同意。
-5. 验收：dry-run 决策正确（离线用 fixtures + 模拟器）；用户同意后实跑一轮小次数。
+## 下一块（B07 日常收取）要做
+ROADMAP：圣域、派遣、免费召唤、公会捐献、邮件，按天记录；验收标准是各项单独实跑。
+1. 先和用户确认范围：先做哪几项、各项的入口和「已领取 / 今日已完成」怎么判断、模块 id 怎么拆（参考 B06：任务互斥，同一次运行要做的事放进同一个模块，用开关分别启用）。
+2. 需要采集的界面：按项告诉用户切到哪个界面；只做导航的点击可以由我来点，录屏由用户控制（说「开始」才录、说「好了」就停，做法见 reviews/B05.md「录屏做法」）。
+3. 每项都要能判断「今天已经做过」（按天记录到模块数据目录，以游戏的每日重置时间为界，重置时间先实测）。
+4. 安全：领取类操作一般不消耗资源，但免费召唤、公会捐献要核对确实是免费或用的是哪种资源；有消耗的确认框注册成本模块弹窗（自动关闭时点取消）；dry-run 阶段不点领取 / 召唤 / 捐献，实跑前征得用户同意。
+5. 验收：各项 dry-run 识别正确（fixtures + 模拟器），用户同意后各项单独实跑一次。
 
 ## 坑
 - `wm size` 返回的是竖屏 900x1600，不要用它判断分辨率；用 `device.resolution`（来自 IPC）。
@@ -127,3 +139,10 @@ ROADMAP：在游戏自带的重复战斗基础上处理结算、体力不足、�
 - **结算刚出现时点击会被吞**：竞技场普通战斗结算的「确认」在入场动画期间点了没反应；不消耗东西的按钮用 `tap_until(..., retry_after=2)`。
 - **自动战斗的图标在转 ≠ 蓝色光圈**：蓝色光圈只是点击特效。
 - 在购买框上用脚本点「取消」也可能被自动安全检查当成交易拦下；关闭这类框用模块的 dry-run（弹窗规则点取消）。
+- **弹窗淡出期间还会被认成弹窗**：点了确认 / 购买 / 关闭后马上 `wait_scene` / `dismiss_popups`，会在淡出时再点一次取消或空白处（B06 实跑踩过）。先等它自己消失。
+- **战后界面永远不静止**（战斗场景背景、角色待机动画）：`wait_scene` / `tap_until` 默认等静止会超时，要传 `settle=False`。
+- **顶栏部分图标会变灰**：从「重新进行」回到准备界面时，托管 / 背包 / 邮件 / 菜单图标亮度降到约 0.38，红点也变暗。按颜色判断状态时要按图标亮度归一化。
+- **准备界面每次回来默认是快速战斗**，「无记录」只在普通战斗模式显示。
+- **讨伐的难度卡片随地下城变化**（后出的地下城只有「讨伐异界」），不能按固定位置点。
+- 结算界面的「确认」入场动画期间点击会被吞，补点即可（每场多约 2 秒）。
+- **不要按固定坐标点顶栏**：没有托管时时钟图标不存在，原位置变成天空石的「+」（B06 误点进过天空石充值页，没有购买）。先定位图标。

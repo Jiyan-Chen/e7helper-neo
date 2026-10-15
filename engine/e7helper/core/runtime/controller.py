@@ -267,13 +267,15 @@ class Controller:
             self.sleep(interval)
 
     def tap_until(self, target: str | Match | Rect | tuple[int, int], scenes: str | Iterable[str],
-                  timeout: float = 20.0, *, retry_after: float = 6.0, max_taps: int = 3) -> SceneState:
+                  timeout: float = 20.0, *, retry_after: float = 6.0, max_taps: int = 3,
+                  settle: bool = True) -> SceneState:
         """导航用：点击 target，直到进入 scenes 之一（等待期间自动关闭弹窗，如网络异常重试）。
 
         进商店这类操作要等服务器响应，网络慢时几秒内画面没有任何变化。retry_after 秒后若仍停在
         点击前的场景（且没有弹窗），就再点一次，最多 max_taps 次。
         只能用于重复点击无害的导航；刷新、购买等有消耗的操作不要用它。
         target：模板引用（每次点击前重新查找）、Match、Rect 或基准坐标 (x, y)。
+        settle=False：目标界面一直有动画（例如战后界面的战斗场景背景）时不等画面静止。
         """
         names = (scenes,) if isinstance(scenes, str) else tuple(scenes)
         origin = self.detect()
@@ -286,14 +288,15 @@ class Controller:
             taps += 1
             retry_at = time.monotonic() + retry_after
             try:
-                return self.wait_scene(names, timeout=max(0.0, min(retry_at, deadline) - time.monotonic()))
+                return self.wait_scene(names, timeout=max(0.0, min(retry_at, deadline) - time.monotonic()),
+                                       settle=settle)
             except WaitTimeout:
                 state = self.last_state
                 if time.monotonic() >= deadline or taps >= max_taps:
                     raise WaitTimeout(f"点击 {target} 后没有进入 {'/'.join(names)}（点了 {taps} 次），当前：{state}") from None
                 if not (state.clear and state.scene == origin.scene):
                     # 画面已经变了（在加载/过渡），不再重复点击，只继续等
-                    return self.wait_scene(names, timeout=max(0.0, deadline - time.monotonic()))
+                    return self.wait_scene(names, timeout=max(0.0, deadline - time.monotonic()), settle=settle)
                 self.log.info("点击 %s 后 %.0f 秒仍在 %s，重新点击", target, retry_after, state)
 
     def _tap_target(self, target: str | Match | Rect | tuple[int, int]) -> None:
