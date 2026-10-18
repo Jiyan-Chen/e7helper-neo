@@ -49,6 +49,13 @@ pnpm typecheck
 ```
 - 正式版面向玩家：演练开关、模板采集、示例模块等开发者功能只在开发版显示（`src/lib/env.ts`）。
 
+## 打包（B10，详见 architecture.md「打包发布」）
+```
+cd engine && python -m uv run --group build python packaging/build.py   # 冻结引擎 + 冒烟测试
+cd app && pnpm bundle                                                    # NSIS 安装包（带上冻结引擎）
+```
+- 用 `python -m uv pip install` 装包时一定要加 `--python .venv/Scripts/python.exe`：经 `python -m uv` 调用时默认装进全局 Python。
+
 ## 本机环境（开发者）
 - MuMu 6.8.7（B07 时 `doctor` 显示），安装在 `E:\MuMuPlayer-12.0`（新版 `nx_main` 结构），实例 0：Android 15，1600×900，adb `127.0.0.1:16384`。
 - Python 3.13 x64；Node 24.19，pnpm 12.14（`npm i -g pnpm`），Rust 1.97.1（MSVC，cargo 用 rsproxy），WebView2 155。

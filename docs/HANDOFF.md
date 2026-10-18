@@ -1,6 +1,6 @@
 # HANDOFF
 
-> 新会话从这里读起。上次更新：2026-10-18（B09 已通过）
+> 新会话从这里读起。上次更新：2026-10-19（B10 已通过）
 
 ## 当前进度
 - **B01 骨架 + 模块契约 + MuMu 设备层**：✅ 已通过，记录见 [reviews/B01.md](reviews/B01.md)。
@@ -12,7 +12,9 @@
 - **B07 日常收取（邮件 / 精灵之森 / 誓约免费召唤）**：✅ 已通过，记录见 [reviews/B07.md](reviews/B07.md)。
 - **B08 API 层（REST + WebSocket + 定时调度）**：✅ 已通过，记录见 [reviews/B08.md](reviews/B08.md)。
 - **B09 GUI（Tauri 2 + React，游戏风）**：✅ 已通过，记录见 [reviews/B09.md](reviews/B09.md)。
-- 下一块：**B10 打包发布**。
+- **B10 打包发布（PyInstaller onedir + NSIS）**：✅ 已通过，记录见 [reviews/B10.md](reviews/B10.md)。
+- 下一块：**B11 自定义流程 + 玩家模板采集**（B10 用户意见新增；原 B11+ 顺延为 B12+）。
+- 另有一个由用户启动的单独会话在处理「与服务器的连接中断」弹窗（B10 真机验证时发现，没有登记过），结果以它的审核记录为准。
 
 ## 已有能力
 ### 设备（B01）
@@ -141,6 +143,15 @@
 - 测试：前端 `src/lib/*.test.ts`（vitest）；引擎 `tests/test_capture_api.py`。全量 `705 passed, 7 skipped`。
 - 实测：拉起引擎 2.8–5.8 秒；经 GUI 跑 daily 演练 12.4 秒，中途停止立即生效；关闭应用时引擎正常退出并删除 api.json。
 
+### 打包（B10，详见 architecture.md「打包发布」和 reviews/B10.md）
+- `cd engine && python -m uv run --group build python packaging/build.py`：检查 5 处版本号 → PyInstaller onedir → 冒烟测试（不碰设备）。产物 `engine/dist/e7engine/` 约 272MB、352 个文件。
+- `cd app && pnpm bundle`（= `tauri build --config src-tauri/tauri.bundle.conf.json`）：安装包 `app/src-tauri/target/release/bundle/nsis/第七史诗助手_0.1.0_x64-setup.exe`，约 96MB。
+- 引擎冻结：`engine/packaging/`（`entry.py`、`e7engine.spec`、`build.py`）；冻结后 `paths.FROZEN`，`ENGINE_ROOT = sys._MEIPASS`；解释器开 `-X utf8`。
+- `engine.rs`：release 构建拉起 `<资源目录>/engine/e7engine.exe serve --port 0`；debug 构建照旧用 venv；`E7_ENGINE_DIR` / `E7_ENGINE_ARGS` / `E7_DATA_DIR` 两种构建都认。
+- 应用名「第七史诗助手」，exe `e7helper.exe`；NSIS `installMode: both`、简体中文；当前用户默认装到 `%LOCALAPPDATA%\Programs\第七史诗助手`。
+- 图标：「雪之国的索尔缇娅」头像（官方 `c2111_s.png`，112px）+ 金色头像框，`src-tauri/icons/source/make_icon.py` 合成，`pnpm tauri icon` 生成各尺寸。
+- 实测：安装版在精简环境（PATH 只有 System32 / Windows，全新数据目录）里 2.4–2.7 秒拉起引擎；连 MuMu（IPC）正常；关闭后 1–1.5 秒引擎退出、api.json 删除。
+
 ### 模块与 CLI（B01，B03 / B08 更新）
 - 模块：继承 `TaskModule` / `AssistantModule`，放到 `e7helper/modules/<id>/` 就会被自动发现。参考 `modules/hello/`。
 - CLI：`doctor`、`bench`、`screenshot`、`tap`、`modules`、`run <id> [-c JSON] [-t 超时]`（经 runtime）、`scene [-f 图片] [--dismiss] [--watch]`、`capture`（新增 `--tap`）、`match`、`ocr`、`serve`（B08）。
@@ -170,26 +181,28 @@
   - 引擎连接「先连，连不上再拉起」，token 用 `E7_API_TOKEN`（用户选）。
   - dry_run 开关只在开发版显示，正式版一律实跑；打包版面向玩家，不带开发者思维（用户意见）。
   - 时间格式后端不动，前端统一转换；模板采集接口在 B09 补，只在开发版使用。
+- B10：
+  - PyInstaller onedir，作为 Tauri `bundle.resources` 带上（不用 onefile / externalBin）；
+  - 安装时让用户选当前用户 / 所有用户（管理员账户会弹 UAC）、应用名「第七史诗助手」、图标用索尔缇娅头像（均为用户选择）；
+  - 保留 opencv 的 ffmpeg DLL，不做裁剪；干净环境用本机模拟验证（用户选）；
+  - 版本号 0.1.0；不做自动更新；安装包不签名；
+  - 打包版真机验证只看连接、实时画面、当前画面识别（用户同意的范围）。
+  - 用户意见：缺「玩家自己采集模板、自己设定流程运行」的功能 → 新开 B11，流程做到「步骤 + 条件分支」，模板采集开放玩家版（存用户数据目录，不改内置模块模板）。
 
-## 下一块（B10 打包发布）要做
-ROADMAP：PyInstaller sidecar + Tauri 安装包。验收：在干净环境装好后能跑。
+## 下一块（B11 自定义流程 + 玩家模板采集）要做
+ROADMAP：玩家在正式版里采集模板，用「步骤 + 条件分支」编排自己的流程，像模块一样运行、急停、进计划。验收：采一个模板、建一个不消耗资源的流程，在正式版里跑通；离线测试覆盖分支和循环。
 1. **先和用户确认**：
-   - PyInstaller 用 onedir 还是 onefile（onefile 每次启动要解压，慢；onedir 要作为 Tauri 的 `bundle.resources` 带上，而不是 `externalBin`）；
-   - 安装包形式（现在是 NSIS）、安装到当前用户还是全局、中文安装界面、应用名 / 图标（现在是 Tauri 默认图标，可以用游戏风重做）、版本号；
-   - 「干净环境」怎么测：本机是 Windows 11 Pro，可以用 Windows 沙盒（沙盒里没有 MuMu，只能验证安装、启动、拉起引擎、显示「模拟器未连接」），或者另一台机器 / 另一个用户；
-   - 要不要自动更新（建议先不做）。
-2. **引擎冻结要处理的点**：
-   - `core/paths.py` 的 `ENGINE_ROOT` / `ASSETS_DIR` 按源码位置算，冻结后要改成 `sys._MEIPASS`（或 exe 旁边）；`assets/` 要打进包；
-   - 模块用 `pkgutil` 自动发现，PyInstaller 需要 `collect_submodules("e7helper.modules")`；entry-point 外部模块在冻结版里不支持（说明即可）；
-   - rapidocr / onnxruntime 的模型文件、opencv（带 GUI 的那个，`override-dependencies` 排除了 headless）、uvicorn 的动态导入（`uvicorn.protocols` / `websockets` 等）要逐个确认；
-   - `isolate_native_stdout()` 在没有控制台的进程里也要正常（B09 拉起时 stdout 已经重定向到文件，实测正常）；
-   - IPC DLL 来自用户的 MuMu 安装目录，不打包。
-3. **Tauri 侧**：
-   - `engine.rs` 的 `spawn()` 现在找 `<引擎目录>/.venv/Scripts/python.exe`，打包版要改成找随包的引擎 exe（`app.path().resource_dir()`）；开发版保留现状；
-   - `CREATE_NO_WINDOW`、作业对象、`/api/shutdown` 的退出流程保持不变；
-   - 检查正式版确实隐藏了开发者功能（B09 用 `vite preview` 看过一次）。
-4. 依赖安装照旧走华为云镜像（PyInstaller 也是）；体积预计较大（onnxruntime、opencv），记录安装包大小。
-5. 不操作游戏的部分优先做。打包版的真机验证（连 MuMu、跑 daily）要先征得用户同意；正式版没有演练开关、会实跑，所以真机验证要么用开发者开关 `VITE_E7_DEV=1` 构建的包跑演练，要么和用户商量好只跑不消耗资源的项目。
+   - 步骤类型：等待模板出现（超时）、点击模板、点击坐标、滑动、等待 N 秒、返回键、如果出现模板 A 就…否则…、循环（到某模板出现 / N 次）；每步「找不到时：跳过 / 停止」；
+   - 流程存哪里、什么格式（建议 `<数据目录>/flows/<id>.json` + 模板在 `<数据目录>/flows/templates/`）；流程在 GUI 里是一个模块（例如 `custom_flow`，config 里选流程）还是每个流程各算一个模块；
+   - 编辑器的样子（游戏风，参考 B09 原型）；流程能否用内置模板（`common` 等）；
+   - 安全：用户流程会实跑点击，要不要加「最多运行时间 / 最多点击次数」、遇到内置的有消耗确认框（`confirm` 弹窗规则一律点取消）时怎么处理。
+2. **引擎**：
+   - 玩家模板存用户数据目录，`TemplateStore` 增加这一层查找；**不能写进安装目录**（Program Files 没有写权限，B10 已知问题 5）；
+   - `api/capture.py` 现在只在开发版用、写 `engine/assets`：玩家版要有自己的保存位置，内置模块的模板不让改；
+   - 流程执行器：一个 TaskModule，走 `self.ctl`（坐标 1600×900 基准、急停、卡死检测、调试截图都复用 B03）；流程定义用 pydantic 校验，离线测试用 `tests/game_sim.py` 式的模拟器。
+3. **GUI**：正式版显示「模板采集（玩家版）」和「我的流程」页；开发版的采集页保留。
+4. 做完要重新打包验证（`packaging/build.py` + `pnpm bundle`），按 B10 的方法在本机模拟干净环境里跑一次。
+5. 真机验证先征得用户同意，只用不消耗资源的流程（例如：大厅 → 点「圣域」→ 等标题 → 返回键），绝不点任何消耗资源的按钮。
 
 ## 坑
 - **「点击关闭」到处都有**（竞技场战斗记录、托管结算完毕、精灵之森奖励、邮件详情框）：模块弹窗要加背景场景的标题区分（B07）。
@@ -245,4 +258,10 @@ ROADMAP：PyInstaller sidecar + Tauri 安装包。验收：在干净环境装好
 - 测试里保存模板要 `monkeypatch.setattr(paths, "ASSETS_DIR", tmp)`，否则会写进真实的 `engine/assets`。
 - Rust 的 `canonicalize` 在 Windows 上返回带 `\\?\` 前缀的路径，日志里能看到，不影响使用。
 - pnpm 12 默认拦下依赖的 install 脚本（`npm warn allow-scripts`），目前没有影响。
+- **`python -m uv pip install` 默认装进全局 Python**（经 `python -m uv` 调用时用调用它的解释器），要加 `--python .venv/Scripts/python.exe`（B10 踩过，已恢复）。依赖优先写进 `pyproject.toml` 的依赖组再 `uv sync --group`。
+- **冻结版忽略 `PYTHON*` 环境变量**：`PYTHONIOENCODING` 等对 `e7engine.exe` 不起作用；需要的解释器选项写在 spec 里（UTF-8 模式是 `("X utf8", None, "OPTION")`，写成 `utf8_mode=1` 无效）。因为开了 UTF-8 模式，新代码读写文件、解码子进程输出都要显式写编码。
+- **`tauri dev` 不要带上冻结引擎**：资源配置在 `tauri.bundle.conf.json`，只有 `pnpm bundle` 合并；直接 `pnpm tauri build` 打出的安装包里没有引擎。
+- `tauri build` 会把资源也复制到 `target/release/engine/`，所以不安装也能用 `target/release/e7helper.exe` 验证 release 行为。
+- NSIS `installMode: both` 用 `Highest` 权限：管理员账户运行安装程序总会弹 UAC，安装 / 卸载测试要用户来点。
+- 截 Tauri 窗口、发 WM_CLOSE 的脚本做法见 reviews/B10.md「验证」（PrintWindow + PW_RENDERFULLCONTENT）。
 

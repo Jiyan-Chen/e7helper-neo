@@ -220,9 +220,9 @@ pnpm dev                # 只起网页，在浏览器里打开 http://localhost:
 pnpm test               # vitest
 pnpm typecheck
 ```
-**引擎连接**（`src-tauri/src/engine.rs`）：先读 `<数据目录>/api.json`，`/api/health` 正常就直接连（开发时手动 `serve`）；否则自己拉起 `engine/.venv/Scripts/python.exe -m e7helper.cli serve --port 0`，token 随机生成后经 `E7_API_TOKEN` 传入，按 token 认出自己的服务。
+**引擎连接**（`src-tauri/src/engine.rs`）：先读 `<数据目录>/api.json`，`/api/health` 正常就直接连（开发时手动 `serve`）；否则自己拉起引擎：开发版（debug 构建）是 `engine/.venv/Scripts/python.exe -m e7helper.cli serve --port 0`，打包版（release 构建，B10）是随包的 `<安装目录>/engine/e7engine.exe serve --port 0`。token 随机生成后经 `E7_API_TOKEN` 传入，按 token 认出自己的服务。
 - 拉起的进程放进 Windows 作业对象（关闭时结束整棵进程树）。应用退出时先 `POST /api/shutdown` 让引擎正常退出，8 秒没退再强制结束。连上的是外部服务时退出不动它。
-- 环境变量（开发用）：`E7_ENGINE_DIR` 引擎目录（默认编译期的 `app/../engine`）、`E7_ENGINE_ARGS` 附加给 `serve` 的参数（例如 `--no-connect --paused`）、`E7_DATA_DIR` 数据目录（引擎和 Rust 端都认）。引擎的 stdout 写到 `<数据目录>/logs/engine-stdout.log`。
+- 环境变量（开发用，打包版也认）：`E7_ENGINE_DIR` 源码引擎目录（开发版默认编译期的 `app/../engine`；打包版设了它就改走 venv）、`E7_ENGINE_ARGS` 附加给 `serve` 的参数（例如 `--no-connect --paused`）、`E7_DATA_DIR` 数据目录（引擎和 Rust 端都认）。引擎的 stdout 写到 `<数据目录>/logs/engine-stdout.log`。
 - 前端通过 Tauri 命令 `engine_connection` 拿 `{url, token, spawned}`；普通浏览器里用地址栏的 `?url=&token=` 或 `VITE_E7_URL` / `VITE_E7_TOKEN`。
 
 **开发版 / 正式版**（`src/lib/env.ts`，用户意见：正式版面向玩家）：`pnpm tauri dev` / `pnpm dev` 是开发版。
@@ -245,6 +245,33 @@ pnpm typecheck
 **自动表单**：按 `config_schema` 生成，每个字段一行（仿邮件列表），布尔是勾选框、枚举是下拉、数字带范围校验、对象数组是表格。字段名用 schema 的 `title`（B09 给各模块配置补了中文 title；没写时退回说明的第一句）。改动后 400ms 自动保存（`PUT /config`），保存失败按 pydantic 错误标到字段上。
 
 **样式**：游戏风（原型见 `docs/prototypes/b09/d-epic.html`），配色和组件类在 `src/index.css`。背景是圣域（进入圣域时 UI 淡入前的一帧，`src/assets/bg_sanctuary.jpg`），用 CSS 压暗。只用系统字体（数字用 Bahnschrift）。
+
+## 打包发布（B10）
+```
+cd engine
+python -m uv sync --group build                                   # 装 PyInstaller（只在打包时需要）
+python -m uv run --group build python packaging/build.py          # 版本号检查 → 冻结引擎 → 冒烟测试
+cd ../app
+pnpm bundle                                                       # = tauri build --config src-tauri/tauri.bundle.conf.json
+```
+产物：`engine/dist/e7engine/`（约 270MB，350 个文件），安装包 `app/src-tauri/target/release/bundle/nsis/第七史诗助手_<版本>_x64-setup.exe`（约 96MB）。
+
+**引擎冻结**（`engine/packaging/`）：PyInstaller **onedir**（onefile 每次启动要解压 270MB）。
+| 文件 | 职责 |
+|---|---|
+| `entry.py` | 入口，等同 `e7helper` 命令（`app(prog_name="e7engine")`） |
+| `e7engine.spec` | `collect_submodules("e7helper")`（模块按 pkgutil 自动发现）、`uvicorn`、`websockets`（按字符串导入）；`assets/` 和 `collect_data_files("rapidocr")`（配置和 onnx 模型）；解释器选项 `-X utf8`；控制台程序（GUI 拉起时加 `CREATE_NO_WINDOW`） |
+| `build.py` | 检查 5 处版本号一致（`e7helper/__init__.py`、`pyproject.toml`、`package.json`、`tauri.conf.json`、`Cargo.toml`），构建，冒烟测试（`modules`、`match`、`ocr`、`serve --no-connect --paused` 的 REST / WS / 帧频道 / shutdown，数据目录用临时目录，不碰设备） |
+- 冻结后 `paths.FROZEN = True`，`ENGINE_ROOT` = `sys._MEIPASS`（即 `e7engine/_internal/`），模板在 `_internal/assets/`。开发版的模板采集在打包版里会写进安装目录。
+- **冻结版忽略 `PYTHON*` 环境变量**（PyInstaller 的隔离配置）：`PYTHONIOENCODING` 不起作用，所以 spec 里直接开 UTF-8 模式；引擎里的文件读写和子进程输出都显式写了编码，不受影响。
+- entry-point 注册的外部模块在冻结版里不可用（没有带包元数据，也没有 site-packages），只有随包的内置模块。
+- IPC DLL、adb 来自用户的 MuMu 安装目录，不打包。VC 运行库（msvcp140 / vcruntime140）PyInstaller 会带上。
+
+**Tauri 打包**：
+- `tauri.conf.json`：`productName` 「第七史诗助手」（窗口标题、开始菜单、卸载列表），`mainBinaryName` `e7helper`（exe 名），NSIS `installMode: "both"`（安装时选「仅为我」或「所有用户」；安装程序以 `Highest` 权限运行，管理员账户启动时总会弹 UAC），简体中文界面。
+- `tauri.bundle.conf.json`：只在 `pnpm bundle` 时合并，`bundle.resources` 把 `engine/dist/e7engine/` 放到安装目录的 `engine/` 下。放在单独文件里是为了 `tauri dev` 不去复制（也不要求存在）冻结引擎。
+- 图标：`src-tauri/icons/source/make_icon.py` 用「雪之国的索尔缇娅」头像（官方指南站 `c2111_s.png`，112×112）加金色头像框合成 `icon-1024.png`，再 `pnpm tauri icon src-tauri/icons/source/icon-1024.png` 生成各尺寸（删掉生成的 `android/`、`ios/`）。引擎 exe 也用 `icon.ico`。
+- 安装包没有签名，安装时 SmartScreen 会提示「未知发布者」。不做自动更新。
 
 ## 已有模块
 ### `secret_shop` 刷神秘商店（B04）
@@ -308,7 +335,7 @@ pnpm typecheck
    [project.entry-points."e7helper.modules"]
    my_mod = "my_pkg.my_mod"
    ```
-   entry-point 可以指向模块类本身，也可以指向包含模块类的 Python 模块。
+   entry-point 可以指向模块类本身，也可以指向包含模块类的 Python 模块。冻结版（安装包）不支持 entry-point 模块。
 5. 同名 id 会报 `ModuleRegistryError`。
 
 参考实现：`modules/hello/`。

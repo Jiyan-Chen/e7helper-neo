@@ -26,6 +26,10 @@ dev = [
     "httpx>=0.28.1",
     "pytest>=8.2",
 ]
+# 打包（B10）：python -m uv run --group build python packaging/build.py
+build = [
+    "pyinstaller>=6.22",
+]
 
 [build-system]
 requires = ["hatchling"]
