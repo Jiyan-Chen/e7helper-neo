@@ -1,6 +1,6 @@
 # HANDOFF
 
-> 新会话从这里读起。上次更新：2026-10-18（B09 已通过）
+> 新会话从这里读起。上次更新：2026-10-19（B10a 已通过）
 
 ## 当前进度
 - **B01 骨架 + 模块契约 + MuMu 设备层**：✅ 已通过，记录见 [reviews/B01.md](reviews/B01.md)。
@@ -12,7 +12,8 @@
 - **B07 日常收取（邮件 / 精灵之森 / 誓约免费召唤）**：✅ 已通过，记录见 [reviews/B07.md](reviews/B07.md)。
 - **B08 API 层（REST + WebSocket + 定时调度）**：✅ 已通过，记录见 [reviews/B08.md](reviews/B08.md)。
 - **B09 GUI（Tauri 2 + React，游戏风）**：✅ 已通过，记录见 [reviews/B09.md](reviews/B09.md)。
-- 下一块：**B10 打包发布**。
+- **B10a 弹窗补漏：断线自动重进**：✅ 已通过，记录见 [reviews/B10a.md](reviews/B10a.md)。B10 真机验证时发现的「与服务器的连接中断」弹窗，单独立项；在独立 worktree（基于 B09 提交）里完成，**不含 B10 的改动**，和 B10 分支合并时 `ROADMAP.md` / `HANDOFF.md` 会有冲突。
+- 下一块：**B10 打包发布**（另一个会话里做，待审核）。
 
 ## 已有能力
 ### 设备（B01）
@@ -29,12 +30,12 @@
 - 模板：`engine/assets/<module_id>/cn/<name>.png` + `.json`。
   - 查找顺序：模块自己的 → `common`。
   - 已有模板：
-    - `common`：`back`、`top/skystone`、`top/gold`、`dialog/cancel`、`dialog/confirm`、`lobby/secret_shop`（带 `tap`）、`lobby/shop`；B05 新增 `lobby/arena`、`top/flag`、`arena/mode_arena`；B06 新增 `lobby/battle`、`title/battle`、`title/prep`、`top/energy`（行动力）、`top/auto_clock`（托管图标表盘）；B03 新增 `title/secret_shop`、`title/shop`、`title/arena`、`title/sanctuary`、`popup/notice`、`popup/network_error`、`popup/network_retry`；B07 新增 `lobby/sanctuary`（带 `tap`）、`lobby/summon`、`top/mail`、`title/mail`、`title/forest`、`title/summon`
+    - `common`：`back`、`top/skystone`、`top/gold`、`dialog/cancel`、`dialog/confirm`、`lobby/secret_shop`（带 `tap`）、`lobby/shop`；B05 新增 `lobby/arena`、`top/flag`、`arena/mode_arena`；B06 新增 `lobby/battle`、`title/battle`、`title/prep`、`top/energy`（行动力）、`top/auto_clock`（托管图标表盘）；B03 新增 `title/secret_shop`、`title/shop`、`title/arena`、`title/sanctuary`、`popup/notice`、`popup/network_error`、`popup/network_retry`；B07 新增 `lobby/sanctuary`（带 `tap`）、`lobby/summon`、`top/mail`、`title/mail`、`title/forest`、`title/summon`；B10a 新增 `popup/disconnected`、`popup/tap_close`、`popup/announce_close`、`popup/announce_faq`、`title/start`（游戏标题画面「轻触画面开始」）
     - `secret_shop`：`title`、`refresh`、`buy`；B04 新增 `coin`、`dialog/buy_title`、`dialog/buy_ok`、`dialog/refresh_text`、`item/covenant`、`item/mystic`
     - `arena_npc`（B05）：`tab/npc`、`npc/*`、`prep/*`、`battle/*`、`result/*`、`record/*`、`buy/*`，共 21 个
     - `repeat_battle`（B06）：`menu/hunt`、`hunt/header`、`prep/*`、`auto/*`、`battle/*`、`clear`、`result/*`、`after/*`、`energy/*`，共 27 个
     - `daily`（B07）：`sanctuary/forest`、`forest/*`、`mail/*`、`summon/*`，共 18 个
-- fixtures：`engine/tests/fixtures/`（B07 后约 137MB）。B07 新增 35 张 `daily_*`（大厅、圣域白天 / 夜晚、精灵之森各状态和奖励框、邮件列表 / 详情框 / 领取后、召唤页、誓约页 21/21 · 11/21 · 1/21 · 用完 · 带光效、召唤动画、十连结果、单抽结果；期望结果在 `tests/test_daily.py`）。B06 新增 36 张 `rb_*`（讨伐导航、准备界面各状态、托管各框、战斗、CLEAR、结算、战后、行动力不足；期望结果在 `tests/test_repeat_battle.py`）。此前的包括 `lobby`、`secret_shop`、`secret_shop_scrolled`、`secret_shop_refresh_confirm`；B05 新增 17 张 `arena_*`（模式选择外的竞技场各界面、战斗中、两种结算、补旗框三种状态）；B04 新增 `secret_shop_relist(_scrolled)`、`secret_shop_buy_confirm`、`secret_shop_sold`、`secret_shop_bought_toast`；B03 新增 `shop`、`arena`、`arena_notice`、`sanctuary`、`sanctuary_help`、`lobby_exit_confirm`、`lobby_network_error`。模板的期望结果在 `tests/test_vision_fixtures.py`，场景的期望结果在 `tests/test_scene.py`。
+- fixtures：`engine/tests/fixtures/`（B07 后约 137MB）。B07 新增 35 张 `daily_*`（大厅、圣域白天 / 夜晚、精灵之森各状态和奖励框、邮件列表 / 详情框 / 领取后、召唤页、誓约页 21/21 · 11/21 · 1/21 · 用完 · 带光效、召唤动画、十连结果、单抽结果；期望结果在 `tests/test_daily.py`）。B06 新增 36 张 `rb_*`（讨伐导航、准备界面各状态、托管各框、战斗、CLEAR、结算、战后、行动力不足；期望结果在 `tests/test_repeat_battle.py`）。此前的包括 `lobby`、`secret_shop`、`secret_shop_scrolled`、`secret_shop_refresh_confirm`；B05 新增 17 张 `arena_*`（模式选择外的竞技场各界面、战斗中、两种结算、补旗框三种状态）；B04 新增 `secret_shop_relist(_scrolled)`、`secret_shop_buy_confirm`、`secret_shop_sold`、`secret_shop_bought_toast`；B03 新增 `shop`、`arena`、`arena_notice`、`sanctuary`、`sanctuary_help`、`lobby_exit_confirm`、`lobby_network_error`；B10a 新增 `lobby_disconnected`、`summon_disconnected`、`title_announcement`、`title_connecting`、`title_start`、`title_start_forest`（约 5.9MB）。模板的期望结果在 `tests/test_vision_fixtures.py`，场景的期望结果在 `tests/test_scene.py`。
 - CLI：
   - `capture <module> <name>`：弹窗框选，或用 `-f 文件 -r x,y,w,h` 指定
   - `match <module> [names] [-f] [-a]`
@@ -46,7 +47,7 @@
   - 点击：`tap(x, y)` / `tap_rect` / `tap_match(m)` / `tap_template(ref)` / `swipe` / `back()`。自带随机偏移、按压时长和点击后等待；模板 json 设了 `tap` 时点 tap 区域
   - 场景：`wait_scene("lobby")`（途中自动关弹窗，并等画面静止 0.5 秒）；导航用 `tap_until(target, scene)`（会补点，**不要用于刷新/购买**；目标界面一直有动画时传 `settle=False`，B06）
   - 弹窗：`dismiss_popups()`；`progress()` 清零卡死计数；`sleep()` 可被急停打断
-- 场景判定：`state.is_("secret_shop")` 表示在该场景且没有弹窗。内置场景 `lobby` / `secret_shop` / `shop` / `arena`（B05 起只认模式选择）/ `sanctuary`；内置弹窗 `network`（点重试）、`notice`（返回键）、`confirm`（**一律点取消**）、`obscured`（压暗且静止时按返回键兜底）
+- 场景判定：`state.is_("secret_shop")` 表示在该场景且没有弹窗。内置场景 `lobby` / `secret_shop` / `shop` / `arena`（B05 起只认模式选择）/ `sanctuary`；内置弹窗 `disconnected`（点「点击关闭」）/ `announcement`（登录公告，点 X）/ `title_start`（标题画面，点「轻触画面开始」）——这三个是 `reload=True`，组成**断线自动重进**（B10a：关闭后 `_wait_reload` 等游戏加载完，每段最多 120 秒；`wait_scene` / `tap_until` 遇到重进会重新计时，`ctl.reloads` 记次数），`network`（点重试）、`notice`（返回键）、`confirm`（**一律点取消**）、`obscured`（压暗且静止时按返回键兜底）
 - 模块注册自己的场景：`self.ctl.scenes.add_scene(Scene(..., ("secret_shop:xxx",)), replace=True)`（限定引用 `module_id:name`）
 - `Runtime(device)`：`run_task` / `start_task`（互斥、`timeout`、急停、卡死），失败时调试信息存到 `%LOCALAPPDATA%\e7helper\debug\`；`attach_assistant`（只读设备、帧订阅）
 - 事件总线：`self.events`，主题 `frame` / `log` / `task` / `scene` / `assistant`
@@ -192,6 +193,7 @@ ROADMAP：PyInstaller sidecar + Tauri 安装包。验收：在干净环境装好
 5. 不操作游戏的部分优先做。打包版的真机验证（连 MuMu、跑 daily）要先征得用户同意；正式版没有演练开关、会实跑，所以真机验证要么用开发者开关 `VITE_E7_DEV=1` 构建的包跑演练，要么和用户商量好只跑不消耗资源的项目。
 
 ## 坑
+- **断线后游戏回到标题画面**（B10a）：用户在手机上登录同一账号就能把模拟器挤下线，用来复现很方便。自动重进约 55 秒，只点屏幕、不输入账号；重进后游戏停在大厅，任务之前所在的界面没了，在别的界面里等待的任务会超时失败（只有 `tap_until` 导航能接上）。不要做「重进后整个任务重跑」，会重置天空石等预算计数。每天首次登录的签到 / 奖励画面还没登记。
 - **「点击关闭」到处都有**（竞技场战斗记录、托管结算完毕、精灵之森奖励、邮件详情框）：模块弹窗要加背景场景的标题区分（B07）。
 - **有些邮件点「领取」后会弹出详情框**，要再点「收信」；邮件列表按剩余时间排序，快过期的在最上面（B07）。
 - **誓约召唤的免费气泡会换位置**：有免费十连时在「召唤10次」上方，只剩单抽时移到「1次召唤」上方（B07）。

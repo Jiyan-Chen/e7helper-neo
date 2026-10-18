@@ -18,6 +18,16 @@ SCENES: tuple[Scene, ...] = (
 )
 
 POPUPS: tuple[Popup, ...] = (
+    # 断线时压在当前界面上，只有「点击关闭」一个选项，关闭后游戏回到标题画面。
+    # 重新进游戏只需要点屏幕、不用输入账号（B10a），所以自动关闭；reload=True 让 Controller 等游戏重新加载完。
+    Popup("disconnected", ("popup/disconnected", "popup/tap_close"), Dismiss.tap("popup/tap_close"),
+          reload=True, note="与服务器的连接中断，将返回游戏初始界面。/ 点击关闭"),
+    # 回到标题画面（或冷启动）时自动弹出的公告窗。关掉后标题画面还要「连接中」十几秒，所以也是 reload
+    Popup("announcement", ("popup/announce_close", "popup/announce_faq"), Dismiss.tap("popup/announce_close"),
+          reload=True, note="登录公告窗（最新消息 / 活动专区 / 常见问答）"),
+    # 游戏标题画面。协议勾选框保持游戏记住的状态，只点「轻触画面开始」这行字（下面一行是协议链接，不能点）
+    Popup("title_start", ("title/start",), Dismiss.tap("title/start"),
+          reload=True, note="游戏标题画面：轻触画面开始"),
     # 请求超时/断网时出现，只有「点击重试」一个选项。重试会重发刚才那个请求（进商店、刷新、购买……），
     # 也就是任务已经决定要做的操作，所以自动重试是安全的；需要精确计数的任务应在重试后重新核对状态。
     Popup("network", ("popup/network_error", "popup/network_retry"), Dismiss.tap("popup/network_retry"),

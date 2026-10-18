@@ -14,4 +14,5 @@
 | B08 API 层 | ✅ | FastAPI 核心路由 + 模块子路由自注册 + WebSocket（日志、状态、帧、统计）；任务定时调度（按间隔反复启动模块，例如 `repeat_battle` 只开托管时周期结算重开，B06 用户确认） | 接口测试；能用 WS 控制任务启停 | [B08](reviews/B08.md) |
 | B09 GUI | ✅ | Tauri 2 + React + TS + Vite + Tailwind + shadcn/ui；外壳 + 模块注册表 + JSON Schema 自动表单 + 日志、统计、模板采集页 | `pnpm tauri dev` 全流程可用 | [B09](reviews/B09.md) |
 | B10 打包发布 | ⬜ | PyInstaller sidecar + Tauri 安装包 | 在干净环境装好后能跑 | |
+| B10a 弹窗补漏：断线自动重进 | ✅ | 「与服务器的连接中断」弹窗 + 登录公告窗 + 标题画面，自动点屏幕重进大厅 | 断线画面能识别并自动回到大厅；有 fixture 和单元测试 | [B10a](reviews/B10a.md) |
 | B11+ 扩展模块 | ⬜ | 英雄数据库（core/data）→ RTA BP 助手（assistant）→ 装备扫描 → GVG 作业查询 → 兑换码 → 资源统计 | 每个模块单独立项和审核 | |

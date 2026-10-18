@@ -5,7 +5,8 @@ import time
 
 import numpy as np
 import pytest
-from game_sim import DANGER, GameSim
+import game_sim
+from game_sim import DANGER, LOADING, GameSim
 
 from e7helper.core.events import EventBus, Topic
 from e7helper.core.geometry import Rect
@@ -189,6 +190,60 @@ def test_non_auto_popup_raises(tmp_path):
             rt.make_controller().dismiss_popups()
     assert e.value.popup == "ask_user"
     assert sim.taps == [] and sim.backs == 0
+
+
+# ---------------------------------------------------------------- 断线重进（B10a）
+
+RELOGIN_HISTORY = ["lobby_disconnected", "title_announcement", "title_connecting", "title_start", LOADING, "lobby"]
+
+
+def test_disconnected_relogins_to_lobby(tmp_path, detector):
+    """断线框 → 公告窗 → 标题「连接中」→ 轻触画面开始 → 黑屏 → 大厅，全程只点屏幕。"""
+    sim = GameSim("lobby_disconnected")
+    with _runtime(sim, tmp_path, detector) as rt:
+        ctl = rt.make_controller()
+        assert ctl.dismiss_popups() == ["disconnected", "announcement", "title_start"]
+        assert ctl.detect().is_("lobby")
+        assert ctl.reloads == 3
+    assert sim.history == RELOGIN_HISTORY
+    # 标题画面只点了「轻触画面开始」那行字，没碰下面的协议链接
+    start_taps = [(x, y) for x, y, _ in sim.taps if 700 < y < 800]
+    assert len(start_taps) == 1 and 728 <= start_taps[0][0] < 872 and 730 <= start_taps[0][1] < 760
+
+
+def test_wait_scene_survives_slow_relogin(tmp_path, detector):
+    """重进游戏比 wait_scene 的超时还久：重进后重新计时，不算超时。"""
+    sim = GameSim("lobby_disconnected")
+    with _runtime(sim, tmp_path, detector) as rt:
+        t0 = time.monotonic()
+        state = rt.make_controller().wait_scene("lobby", timeout=1.5)
+        assert time.monotonic() - t0 > 1.5
+    assert state.is_("lobby")
+    assert sim.history == RELOGIN_HISTORY
+
+
+def test_tap_until_retaps_after_relogin(tmp_path, detector):
+    """导航途中断线：重进回到大厅（点击前的场景）后补点，继续进目标界面。"""
+    sim = GameSim("lobby", drop_taps=1)
+    sim.then = (2, "lobby_disconnected")
+    with _runtime(sim, tmp_path, detector) as rt:
+        state = rt.make_controller().tap_until("lobby/secret_shop", "secret_shop", timeout=1.0, retry_after=0.3)
+    assert state.is_("secret_shop")
+    assert sim.history == ["lobby", *RELOGIN_HISTORY, "secret_shop"]
+
+
+def test_relogin_timeout_raises(tmp_path, detector, monkeypatch):
+    """一直黑屏进不去：超时抛 PopupError，交给任务失败处理。"""
+    import e7helper.core.runtime.controller as controller
+
+    monkeypatch.setattr(controller, "RELOAD_TIMEOUT", 1.0)
+    monkeypatch.delitem(game_sim.AUTO, LOADING)
+    sim = GameSim("title_start")
+    with _runtime(sim, tmp_path, detector) as rt:
+        with pytest.raises(PopupError, match="仍未加载完") as e:
+            rt.make_controller().dismiss_popups()
+    assert e.value.popup == "title_start"
+    assert sim.screen == LOADING and len(sim.taps) == 1
 
 
 def test_navigation_flow(tmp_path, detector):

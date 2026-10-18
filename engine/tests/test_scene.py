@@ -6,6 +6,13 @@
 - sanctuary_help：圣域「?」说明弹窗（没有关闭按钮，返回键关闭）——用遮罩检测兜底
 - arena_notice：铃铛打开的通知中心面板（不压暗背景）
 - lobby_network_error：大厅点秘密商店时网络超时弹出的「网络连接异常，请重新连接。/ 点击重试」
+
+断线重进（B10a，2026-10-19 采集）：
+- lobby_disconnected：大厅上的「与服务器的连接中断，将返回游戏初始界面。/ 点击关闭」
+- summon_disconnected：同一个断线框压在召唤界面上（手机登录同一账号把模拟器挤下线）
+- title_announcement：关掉断线框后回到标题画面时弹出的公告窗
+- title_connecting：标题画面「连接中……」（加载中，既不是场景也不是弹窗）
+- title_start / title_start_forest：标题画面「轻触画面开始」（两种视频背景）
 """
 
 import pytest
@@ -28,6 +35,12 @@ EXPECTED = {
     "lobby": ("lobby", None),
     "lobby_exit_confirm": (None, "confirm"),
     "lobby_network_error": (None, "network"),
+    "lobby_disconnected": (None, "disconnected"),
+    "summon_disconnected": (None, "disconnected"),
+    "title_announcement": (None, "announcement"),
+    "title_connecting": (None, None),
+    "title_start": (None, "title_start"),
+    "title_start_forest": (None, "title_start"),
     "secret_shop": ("secret_shop", None),
     "secret_shop_scrolled": ("secret_shop", None),
     "secret_shop_refresh_confirm": ("secret_shop", "confirm"),
@@ -38,7 +51,8 @@ EXPECTED = {
     "sanctuary_help": (None, OBSCURED),
 }
 
-OBSCURED_FIXTURES = {"secret_shop_refresh_confirm", "sanctuary_help"}
+# summon_disconnected：召唤界面左上角的返回按钮被断线框的遮罩压暗
+OBSCURED_FIXTURES = {"secret_shop_refresh_confirm", "sanctuary_help", "summon_disconnected"}
 
 
 @pytest.fixture(scope="module")
@@ -66,6 +80,38 @@ def test_confirm_popup_dismisses_with_cancel(detector):
     popup = detector.popup("confirm")
     assert popup.dismiss.kind is DismissKind.TAP and popup.dismiss.target == "dialog/cancel"
     assert detector.popup(OBSCURED).dismiss.kind is DismissKind.BACK
+
+
+def test_reload_popups(detector):
+    """断线框、公告窗、标题画面关闭后游戏都要加载一段时间。三个都自动处理，不需要用户输入。"""
+    assert {p.name for p in detector.popups if p.reload} == {"disconnected", "announcement", "title_start"}
+    for name, target in [("disconnected", "popup/tap_close"), ("announcement", "popup/announce_close"),
+                         ("title_start", "title/start")]:
+        popup = detector.popup(name)
+        assert popup.auto and popup.dismiss.kind is DismissKind.TAP and popup.dismiss.target == target
+
+
+RELOGIN_FIXTURES = {f: EXPECTED[f][1] for f in ("lobby_disconnected", "summon_disconnected", "title_announcement",
+                                                 "title_connecting", "title_start", "title_start_forest")}
+
+
+def test_relogin_popups_with_all_module_popups():
+    """所有模块都注册了自己的弹窗（有的排在最前）后，断线重进的画面仍然认对。"""
+    from e7helper.modules import discover
+
+    det = default_detector()
+
+    class _Ctl:
+        scenes = det
+
+    class _Ctx:
+        controller = _Ctl()
+
+    for module_id, cls in discover().items():
+        cls.setup(type("M", (), {"ctx": _Ctx(), "ctl": _Ctl(), "id": module_id})())
+    assert len(det.popups) > len(default_detector().popups)
+    for fixture, popup in RELOGIN_FIXTURES.items():
+        assert det.detect(load_fixture(fixture)).popup == popup, fixture
 
 
 def test_detect_is_fast_enough(detector):

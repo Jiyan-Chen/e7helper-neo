@@ -88,15 +88,18 @@ python -m uv run e7helper ocr [-f x.png] [-r x,y,w,h] [--line | --number]
 ## 场景与弹窗 `e7helper.core.scene`（B03）
 | 文件 | 职责 |
 |---|---|
-| `model.py` | `Scene(name, all_of, none_of)`；`Popup(name, all_of, dismiss, none_of, text, text_region, auto)`；关闭方式 `Dismiss.tap(模板) / at(x, y) / back() / none()` |
+| `model.py` | `Scene(name, all_of, none_of)`；`Popup(name, all_of, dismiss, none_of, text, text_region, auto, reload)`；关闭方式 `Dismiss.tap(模板) / at(x, y) / back() / none()` |
 | `detector.py` | `SceneDetector.detect(frame) → SceneState(scene, popup, obscured, matches)`，一帧约 20–35ms |
-| `builtin.py` | 内置场景（lobby / secret_shop / shop / arena（只认模式选择）/ sanctuary）和弹窗（network / notice / confirm） |
+| `builtin.py` | 内置场景（lobby / secret_shop / shop / arena（只认模式选择）/ sanctuary）和弹窗（disconnected / announcement / title_start / network / notice / confirm） |
 
 判定顺序：弹窗 → 场景 → 遮罩。**只有 `state.clear`（没有弹窗）时 `scene` 才是可操作的界面**，用 `state.is_("lobby")` 判断。
 - 相关系数对亮度不敏感，弹窗遮罩下的场景模板照样命中，所以必须先认弹窗。
 - 遮罩检测（兜底未知弹窗）：场景锚点或探针模板（默认 `back`）命中位置的亮度（98 分位灰度）不到模板自身的 0.6 倍，就报告 `popup = "obscured"`，用返回键关闭。不用 diff 判断：白色图标在亮背景（圣域天空）上 diff 也有 30+。
   界面切换的淡入淡出也会让画面短暂变暗，所以 `Controller.dismiss_popups` 关闭 `obscured` 前会复核：画面压暗**且静止** 0.5 秒才算，在动就继续等。
-- 内置弹窗的处理：`network`（网络连接异常）点「点击重试」；`notice`（通知面板）按返回键；`confirm`（取消/确认 二次确认框）**一律点取消**。任务自己打开的确认框，必须在调用 `dismiss_popups` / `wait_scene` 之前自行处理。
+- 内置弹窗的处理：`disconnected`（与服务器的连接中断）点「点击关闭」，`announcement`（登录公告窗）点右上角 X，`title_start`（标题画面）点「轻触画面开始」这行字——三者组成**断线自动重进**（B10a，见下条）；`network`（网络连接异常）点「点击重试」；`notice`（通知面板）按返回键；`confirm`（取消/确认 二次确认框）**一律点取消**。任务自己打开的确认框，必须在调用 `dismiss_popups` / `wait_scene` 之前自行处理。
+- **断线自动重进（B10a）**：`reload=True` 的弹窗关闭后游戏要加载一段时间，`dismiss_popups` 会一直等（期间清零卡死计数，上限 `RELOAD_TIMEOUT` = 120 秒，超时抛 `PopupError`），直到认出场景或出现下一个弹窗。实测流程：断线框 → 公告窗 → 标题「连接中」约 15 秒 → 轻触画面开始 → 黑屏约 16 秒 → 大厅。重进游戏只需要点屏幕，不输入账号；协议勾选框保持游戏记住的状态，不去点协议链接。
+  - `ctl.reloads` 记录重进次数。`wait_scene` / `tap_until` 等待途中发生重进时重新计时；`tap_until` 重进后回到点击前的场景（通常是大厅）会照常补点。
+  - 重进后游戏停在大厅，**任务之前的界面状态已丢失**：任务在别的界面里等待时会超时失败（游戏本身已恢复，下次运行正常）。只有点导航（`tap_until`）的那一步能自动接上。
 - 按钮相同的弹窗可以用 `text` + `text_region` 加 OCR 文字条件区分（比较慢，只在模板都命中后才做）。
 - 模块注册自己的场景：在 `setup()` 里 `self.ctl.scenes.add_scene(Scene("xxx", ("<module_id>:title",)), replace=True)`。识别器由 Runtime 共享，每次启动任务都会调用 setup，所以要用 `replace=True`。模板用限定引用 `<module_id>:<name>`，它由 `Vision.template` 解析到该模块的模板目录。
 - 场景标题模板统一放在 `common/title/*`，弹窗模板放在 `common/popup/*`。

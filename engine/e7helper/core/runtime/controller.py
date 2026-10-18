@@ -4,7 +4,7 @@
 - 点击带随机偏移、随机按压时长和点击后的随机等待（见 humanize.Humanize）；
 - 每次截图/点击/等待前都检查急停、超时和卡死，触发时抛出 TaskAborted 的子类；
 - 截图会发布 Topic.FRAME 事件（助手模块因此能和任务并行拿到帧），并喂给卡死检测；
-- 场景识别和弹窗处理：detect / dismiss_popups / wait_scene。
+- 场景识别和弹窗处理：detect / dismiss_popups / wait_scene。断线弹窗会自动关闭并等游戏重新进来（B10a）。
 """
 
 from __future__ import annotations
@@ -37,6 +37,11 @@ POPUP_SETTLE = 0.8  # 关闭弹窗后等动画结束
 # 大厅/商店待机动画的帧间差 ≤ 3.8。
 SETTLE_FRAME_DIFF = 5.0
 SETTLE_TIME = 0.5
+# 关闭 reload 弹窗后等游戏重新加载的上限。实测（B10a）：关断线框 → 公告窗 → 标题画面「连接中」约 15 秒 →
+# 点「轻触画面开始」→ 黑屏约 16 秒 → 大厅
+RELOAD_TIMEOUT = 120.0
+# 关闭后这么久内还认出同一个弹窗，当成它在淡出，继续等；超过了才认为没点到、交回去重新关闭
+RELOAD_FADE = 3.0
 
 
 class AbortSignal:
@@ -81,6 +86,7 @@ class Controller:
         self.log = logger or logging.getLogger(__name__)
         self.last_frame: np.ndarray | None = None
         self.last_state: SceneState | None = None
+        self.reloads = 0  # 游戏重新加载（断线重进）的次数，wait_scene / tap_until 据此放宽超时
 
     @property
     def scaler(self) -> Scaler:
@@ -179,6 +185,9 @@ class Controller:
                 raise PopupError(popup.name, f"弹窗 {popup.name} 不能自动关闭，需要任务处理")
             self._dismiss(popup, state)
             closed.append(popup.name)
+            if popup.reload:
+                state = self._wait_reload(popup)
+                continue
             self.sleep(POPUP_SETTLE)
             state = None
         state = self.detect()
@@ -214,6 +223,28 @@ class Controller:
             prev = thumb
             if now >= deadline:
                 return state
+
+    def _wait_reload(self, popup: Popup, timeout: float | None = None) -> SceneState:
+        """关闭 reload 弹窗后等游戏重新加载：直到认出场景，或出现下一个弹窗（公告窗、标题画面……）。
+
+        加载中（标题画面「连接中」、黑屏）既没有场景也没有弹窗；期间不断清零卡死计数，超时抛 PopupError。
+        """
+        self.log.warning("%s：等待游戏重新加载", popup.note or popup.name)
+        timeout = RELOAD_TIMEOUT if timeout is None else timeout
+        self.reloads += 1
+        start = time.monotonic()
+        while True:
+            self.progress()
+            self.sleep(DEFAULT_INTERVAL)
+            state = self.detect()
+            elapsed = time.monotonic() - start
+            fading = state.popup == popup.name and elapsed < RELOAD_FADE
+            if not fading and (state.scene is not None or state.popup is not None):
+                if state.clear:
+                    self.log.info("游戏重新加载完成（%.0f 秒）：%s", elapsed, state)
+                return state
+            if elapsed >= timeout:
+                raise PopupError(popup.name, f"关闭 {popup.name} 后 {timeout:.0f} 秒游戏仍未加载完，当前：{state}")
 
     def _dismiss(self, popup: Popup, state: SceneState) -> None:
         d = popup.dismiss
@@ -260,7 +291,11 @@ class Controller:
             else:
                 prev_thumb, stable_since = None, None
                 if dismiss and not state.clear and self.scenes.popup(state.popup).auto:
+                    reloads = self.reloads
                     self.dismiss_popups(state=state)
+                    if self.reloads != reloads:
+                        # 断线重进游戏花了几十秒，重新计时
+                        deadline = max(deadline, time.monotonic() + timeout)
                     continue
             if now >= deadline:
                 raise WaitTimeout(f"等待场景 {'/'.join(names)} 超时（{timeout:.0f} 秒），当前：{state}")
@@ -287,11 +322,15 @@ class Controller:
             self._tap_target(target)
             taps += 1
             retry_at = time.monotonic() + retry_after
+            reloads = self.reloads
             try:
                 return self.wait_scene(names, timeout=max(0.0, min(retry_at, deadline) - time.monotonic()),
                                        settle=settle)
             except WaitTimeout:
                 state = self.last_state
+                if self.reloads != reloads:
+                    # 等待途中断线重进了游戏：重新计时；回到了点击前的场景就按下面的规则补点
+                    deadline = max(deadline, time.monotonic() + timeout)
                 if time.monotonic() >= deadline or taps >= max_taps:
                     raise WaitTimeout(f"点击 {target} 后没有进入 {'/'.join(names)}（点了 {taps} 次），当前：{state}") from None
                 if not (state.clear and state.scene == origin.scene):

@@ -84,6 +84,8 @@ class Popup:
     text_region: Rect | None = None
     # dismiss_popups 是否自动关闭它。False 表示需要任务自己决定（例如要不要重试）
     auto: bool = True
+    # 关闭后游戏要重新加载（断线回标题、标题画面进游戏）：dismiss_popups 会等加载结束再继续（B10a）
+    reload: bool = False
     note: str = ""
 
     def __post_init__(self) -> None:

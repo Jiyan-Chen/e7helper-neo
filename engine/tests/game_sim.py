@@ -18,6 +18,7 @@ from e7helper.device import Device
 FIXTURES = Path(__file__).parent / "fixtures"
 DANGER = "DANGER"
 BACK = "back"
+LOADING = "LOADING"  # 进游戏时的黑屏加载
 
 CANCEL = Rect(565, 545, 200, 60)
 CONFIRM = Rect(833, 545, 200, 60)
@@ -37,6 +38,17 @@ TRANSITIONS: dict[str, list[tuple[Rect | str, str]]] = {
     "arena": [(Rect(28, 18, 38, 44), "lobby"), (BACK, "lobby")],
     "arena_notice": [(BACK, "arena")],
     "shop": [(Rect(28, 18, 38, 44), "lobby"), (BACK, "lobby")],
+    # 断线重进（B10a）：断线框 → 公告窗 → 标题「连接中」→ 轻触画面开始 → 黑屏 → 大厅
+    "lobby_disconnected": [(Rect(748, 540, 106, 30), "title_announcement")],
+    "title_announcement": [(Rect(1394, 66, 62, 62), "title_connecting")],
+    "title_start": [(Rect(728, 730, 144, 30), LOADING)],
+    "title_start_forest": [(Rect(728, 730, 144, 30), LOADING)],
+}
+
+# 不用点击、截这么多次图后自己切换的画面（加载）
+AUTO: dict[str, tuple[int, str]] = {
+    "title_connecting": (4, "title_start"),
+    LOADING: (4, "lobby"),
 }
 
 _counter = itertools.count()
@@ -77,6 +89,8 @@ class GameSim(Device):
 
     def screenshot(self) -> np.ndarray:
         self.screenshots += 1
+        if self.then is None and self.screen in AUTO:
+            self.then = AUTO[self.screen]
         if self.then is not None:
             n, target = self.then
             if n <= 0:
@@ -84,7 +98,7 @@ class GameSim(Device):
                 self.then = None
             else:
                 self.then = (n - 1, target)
-        if self.screen == DANGER:
+        if self.screen in (DANGER, LOADING):
             return np.zeros((self.size[1], self.size[0], 3), np.uint8)
         img = load_fixture(self.screen, self.size).copy()
         if self.animating > 0:

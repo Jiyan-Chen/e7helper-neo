@@ -29,6 +29,9 @@ const SCENES: Record<string, string> = {
 };
 
 const POPUPS: Record<string, string> = {
+  disconnected: "连接中断",
+  announcement: "游戏公告",
+  title_start: "标题画面",
   network: "网络异常",
   notice: "通知",
   confirm: "确认框",
