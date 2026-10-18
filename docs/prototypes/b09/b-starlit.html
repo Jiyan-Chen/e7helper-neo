@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>原型 B：星辰书卷</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700&family=Noto+Serif+SC:wght@500;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --night: #0d1330;
+    --panel: #151c3f;
+    --panel-2: #1c2552;
+    --gold: #d6b46a;
+    --gold-dim: #7d6a42;
+    --text: #ebe3cd;
+    --muted: #9198b8;
+    --jade: #56b892;
+    --crimson: #d0463d;
+    --serif: "Noto Serif SC", "Source Han Serif SC", "SimSun", serif;
+    --num: "Cinzel", "Noto Serif SC", serif;
+    --ui: "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    color: var(--text); font: 13px/1.6 var(--ui);
+    background:
+      radial-gradient(1200px 500px at 70% -10%, #26306a 0%, transparent 60%),
+      radial-gradient(1px 1px at 12% 18%, #fff8 50%, transparent 51%),
+      radial-gradient(1px 1px at 46% 8%, #fff6 50%, transparent 51%),
+      radial-gradient(1px 1px at 83% 30%, #fff5 50%, transparent 51%),
+      radial-gradient(1.5px 1.5px at 30% 60%, #fff4 50%, transparent 51%),
+      radial-gradient(1px 1px at 64% 82%, #fff5 50%, transparent 51%),
+      var(--night);
+  }
+  button { font: inherit; cursor: pointer; color: inherit; }
+  .app { display: grid; grid-template-rows: 56px 1fr; height: 100vh; min-width: 1100px; }
+
+  header.top { display: flex; align-items: center; gap: 28px; padding: 0 20px; border-bottom: 1px solid #2a3366; background: linear-gradient(#141b3fcc, #0d1330cc); }
+  .crest { font-family: var(--num); font-size: 17px; letter-spacing: .12em; color: var(--gold); }
+  .tabs { display: flex; gap: 4px; height: 100%; }
+  .tabs a { display: flex; align-items: center; padding: 0 14px; color: var(--muted); text-decoration: none; font-family: var(--serif); font-size: 14px; border-bottom: 2px solid transparent; }
+  .tabs a.on { color: var(--text); border-bottom-color: var(--gold); }
+  .tabs a:hover { color: var(--text); }
+  .grow { flex: 1; }
+  .chip { display: flex; align-items: center; gap: 8px; padding: 4px 12px; border: 1px solid #2f3a72; border-radius: 999px; color: var(--muted); font-size: 12px; }
+  .chip b { color: var(--text); font-weight: 500; }
+  .gem { width: 8px; height: 8px; transform: rotate(45deg); background: var(--jade); box-shadow: 0 0 8px var(--jade); }
+  .estop { border: 1px solid var(--crimson); background: transparent; color: #ff8d84; padding: 5px 14px; border-radius: 2px; font-family: var(--serif); }
+  .estop:not(:disabled) { background: var(--crimson); color: #fff; box-shadow: 0 0 14px #d0463d88; }
+  .estop:disabled { opacity: .45; cursor: default; }
+
+  .stage { display: grid; grid-template-columns: 220px 1fr 420px; gap: 20px; padding: 20px; min-height: 0; }
+
+  /* 模块列表：像游戏里的关卡卷轴 */
+  .roster { display: flex; flex-direction: column; gap: 6px; overflow: auto; }
+  .roster h4 { font-family: var(--serif); color: var(--gold-dim); font-weight: 500; margin: 4px 4px 4px; font-size: 12px; }
+  .roster button { text-align: left; background: transparent; border: 1px solid transparent; padding: 9px 12px; border-radius: 2px; color: var(--muted); display: flex; justify-content: space-between; }
+  .roster button:hover { color: var(--text); background: #ffffff08; }
+  .roster button.on { color: var(--text); border-color: var(--gold-dim); background: linear-gradient(90deg, #d6b46a22, transparent); font-family: var(--serif); }
+  .roster small { color: var(--jade); font-size: 11px; }
+
+  .col { display: flex; flex-direction: column; gap: 16px; overflow: auto; min-height: 0; padding-right: 4px; }
+
+  /* 金边面板：四角描金 */
+  .frame { position: relative; background: linear-gradient(180deg, var(--panel-2), var(--panel)); border: 1px solid #2c376e; padding: 16px 18px; }
+  .frame::before, .frame::after { content: ""; position: absolute; width: 14px; height: 14px; border: 1.5px solid var(--gold); pointer-events: none; }
+  .frame::before { top: -1px; left: -1px; border-right: 0; border-bottom: 0; }
+  .frame::after { bottom: -1px; right: -1px; border-left: 0; border-top: 0; }
+  .frame h3 { margin: 0 0 12px; font-family: var(--serif); font-weight: 500; color: var(--gold); font-size: 14px; }
+
+  .title h1 { font-family: var(--serif); font-size: 30px; font-weight: 700; margin: 0; letter-spacing: .06em; }
+  .title p { margin: 4px 0 0; color: var(--muted); }
+
+  .timers { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .timer { text-align: center; padding: 6px 4px; }
+  .timer .val { font-family: var(--num); font-size: 30px; font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; letter-spacing: .04em; }
+  .timer .val.done { font-family: var(--serif); font-size: 17px; color: var(--muted); padding: 10px 0 6px; font-weight: 500; }
+  .timer .label { font-family: var(--serif); color: var(--gold); }
+  .timer .note { color: var(--muted); font-size: 12px; }
+  .timer + .timer { border-left: 1px solid #2c376e; }
+
+  /* 运行面板：实跑时整块描红 */
+  .run { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  .run p { margin: 2px 0 12px; color: var(--muted); font-size: 12px; }
+  .run h4 { margin: 0; font-family: var(--serif); font-weight: 500; font-size: 15px; }
+  .cta { position: relative; min-width: 150px; height: 40px; border: 1px solid var(--gold); background: linear-gradient(#e2c27d, #b8954d); color: #2a1f08; font-family: var(--serif); font-weight: 700; font-size: 15px; letter-spacing: .1em; clip-path: polygon(10px 0, calc(100% - 10px) 0, 100% 50%, calc(100% - 10px) 100%, 10px 100%, 0 50%); }
+  .cta:disabled { filter: grayscale(.7) brightness(.7); cursor: default; }
+  body.real .cta { background: linear-gradient(#e7605a, #a92e27); border-color: #ff8d84; color: #fff; }
+  .seal { display: inline-flex; align-items: center; gap: 10px; margin-bottom: 14px; padding: 8px 14px 8px 8px; border: 1px solid #2f6b58; background: #56b89214; border-radius: 2px; width: 100%; }
+  .seal .ring { width: 34px; height: 34px; border-radius: 50%; border: 2px solid var(--jade); display: grid; place-items: center; font-family: var(--serif); color: var(--jade); font-weight: 700; font-size: 13px; flex: none; }
+  .seal .txt { flex: 1; color: #bfe6d5; }
+  body.real .seal { border-color: var(--crimson); background: #d0463d1f; box-shadow: inset 0 0 24px #d0463d33; }
+  body.real .seal .ring { border-color: var(--crimson); color: #fff; background: var(--crimson); }
+  body.real .seal .txt { color: #ffc2bd; font-weight: 600; }
+
+  .toggle { width: 42px; height: 22px; border-radius: 11px; border: 1px solid var(--gold-dim); background: #0d1330; position: relative; padding: 0; flex: none; }
+  .toggle::after { content: ""; position: absolute; top: 3px; left: 3px; width: 14px; height: 14px; background: var(--muted); transform: rotate(45deg); transition: left .15s, background .15s; }
+  .toggle[aria-checked="true"] { border-color: var(--gold); }
+  .toggle[aria-checked="true"]::after { left: 23px; background: var(--gold); }
+  .seal .toggle[aria-checked="true"]::after { background: var(--jade); }
+  .row { display: flex; align-items: center; gap: 12px; }
+  .between { justify-content: space-between; }
+  .num { font-family: var(--num); font-size: 18px; font-weight: 700; }
+
+  .fields .f { display: flex; align-items: center; gap: 14px; padding: 10px 0; border-top: 1px solid #ffffff10; }
+  .fields .f:first-of-type { border-top: 0; }
+  .fields .f div { flex: 1; }
+  .fields b { font-family: var(--serif); font-weight: 500; font-size: 14px; display: block; }
+  .fields span { color: var(--muted); font-size: 12px; }
+
+  /* 右栏：观测窗 + 卷轴日志 */
+  .scope { padding: 10px; }
+  .scope img { display: block; width: 100%; aspect-ratio: 16/9; object-fit: cover; border: 1px solid var(--gold-dim); }
+  .scope .cap { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; margin-top: 8px; }
+  .scope .cap b { color: var(--gold); font-family: var(--serif); font-weight: 500; }
+  .scroll { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+  .log { flex: 1; overflow: auto; font-size: 12px; line-height: 1.6; margin: 0 -6px; }
+  .log div { display: grid; grid-template-columns: 58px 1fr; gap: 4px; padding: 3px 6px; border-left: 2px solid transparent; }
+  .log .t { color: var(--gold-dim); font-family: var(--num); font-size: 11px; padding-top: 1px; }
+  .log .WARNING { border-left-color: #e0a640; }
+  .log .WARNING .m { color: #f1c98a; }
+  .log .s { color: var(--muted); margin-right: 6px; }
+  .log div.new { animation: glow 1.4s ease-out; }
+  @keyframes glow { from { background: #d6b46a26; } to { background: transparent; } }
+  @media (prefers-reduced-motion: reduce) { .log div.new { animation: none; } }
+
+  .hist div { display: grid; grid-template-columns: 80px 46px 1fr 60px; gap: 8px; padding: 6px 0; border-top: 1px solid #ffffff10; font-size: 12px; color: var(--muted); }
+  .hist div:first-child { border-top: 0; }
+  .hist .succeeded { color: var(--jade); } .hist .failed { color: #ff8d84; } .hist .stopped { color: #f1c98a; } .hist .running { color: var(--gold); }
+  .hist em { font-style: normal; font-size: 11px; }
+  .hist em.real { color: #ff8d84; }
+  :focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <span class="crest">E7 HELPER</span>
+    <nav class="tabs"><a href="#" class="on">任务</a><a href="#">计划</a><a href="#">记录</a><a href="#">统计</a><a href="#">模板采集</a><a href="#">设置</a></nav>
+    <span class="grow"></span>
+    <span class="chip"><span class="gem"></span><b>MuMu#0</b> IPC 1600×900</span>
+    <span class="chip">场景 <b id="scene">lobby</b></span>
+    <span class="chip">计划下次 <b id="nextAll"></b></span>
+    <button class="estop" id="estop" disabled>急停</button>
+  </header>
+
+  <div class="stage">
+    <aside class="roster">
+      <h4>日常</h4>
+      <button class="on">日常收取 <small>持续中</small></button>
+      <h4>消耗资源</h4>
+      <button>刷神秘商店</button>
+      <button>竞技场 NPC</button>
+      <button>重复刷关 <small>托管</small></button>
+      <h4>开发</h4>
+      <button>示例模块</button>
+    </aside>
+
+    <section class="col">
+      <div class="title"><h1>日常收取</h1><p>领取快过期的邮件、精灵之森的产出和照料、誓约召唤的免费次数</p></div>
+      <div class="frame"><div class="timers" id="timers"></div></div>
+
+      <div class="frame">
+        <div class="seal"><span class="ring" id="sealTxt">演练</span><span class="txt" id="modeTxt"></span><button class="toggle" role="switch" aria-checked="true" id="dry" aria-label="演练模式"></button></div>
+        <div class="run">
+          <div><h4>单次收菜</h4><p>用下方设置立即跑一次，约 20–35 秒</p><button class="cta" id="runBtn">开始</button></div>
+          <div>
+            <div class="row between"><h4>持续收菜</h4><button class="toggle" role="switch" aria-checked="true" id="keep" aria-label="持续收菜"></button></div>
+            <p>每日重置后跑一次，精灵之森到时间再跑</p>
+            <div class="row">下次 <span class="num" id="nextRun"></span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="frame fields"><h3>设置</h3><div id="fields"></div></div>
+    </section>
+
+    <section class="col">
+      <div class="frame scope"><img src="frame_lobby.jpg" alt="当前游戏画面"><div class="cap"><span>实时画面 2 fps</span><b>大厅</b></div></div>
+      <div class="frame scroll"><h3>日志</h3><div class="log" id="log"></div></div>
+      <div class="frame"><h3>最近运行</h3><div class="hist" id="hist"></div></div>
+    </section>
+  </div>
+</div>
+<script src="mock.js"></script>
+<script>
+  const M = E7Mock;
+  const $ = (id) => document.getElementById(id);
+  let dry = true, running = null;
+  function renderTimers() {
+    $("timers").innerHTML = M.timers.map(t => {
+      const cd = M.countdown(t.at);
+      return `<div class="timer"><div class="label">${t.label}</div><div class="val ${cd ? "" : "done"}">${cd ?? t.note}</div>
+        <div class="note">${cd ? t.note : "明天 3:00 恢复"}</div></div>`;
+    }).join("");
+    $("nextRun").textContent = M.countdown(M.nextRun);
+    $("nextAll").textContent = M.localTime(M.nextRun);
+  }
+  function renderFields() {
+    $("fields").innerHTML = M.fields.map(f => `<div class="f"><div><b>${f.label}</b><span>${f.desc}</span></div>
+      <button class="toggle" role="switch" aria-checked="${f.value}" aria-label="${f.label}"></button></div>`).join("");
+  }
+  function renderMode() {
+    document.body.classList.toggle("real", !dry);
+    $("dry").setAttribute("aria-checked", dry);
+    $("sealTxt").textContent = dry ? "演练" : "实跑";
+    $("modeTxt").textContent = dry ? M.dryDesc.on + "。关掉右侧开关才会真的领取。" : "实跑：" + M.dryDesc.off + "。";
+    $("runBtn").textContent = running ? "进行中" : dry ? "开始演练" : "开始实跑";
+  }
+  function renderHist(extra) {
+    $("hist").innerHTML = (extra ? [extra] : []).concat(M.history).map(h => `<div><span>${M.when(h.started)}</span><span>${M.sourceText[h.source]}</span>
+      <span class="${h.status}">${M.statusText[h.status]}${h.duration ? "，" + h.duration.toFixed(1) + " 秒" : ""}</span><em class="${h.dry_run ? "" : "real"}">${h.dry_run ? "演练" : "实跑"}</em></div>`).join("");
+  }
+  function addLog([t, lvl, src, msg], fresh) {
+    const d = document.createElement("div");
+    d.className = lvl + (fresh ? " new" : "");
+    d.innerHTML = `<span class="t">${M.clock(t)}</span><span class="m"><span class="s">${src}</span>${msg}</span>`;
+    $("log").appendChild(d); $("log").scrollTop = $("log").scrollHeight;
+  }
+  document.addEventListener("click", e => {
+    const b = e.target.closest(".toggle");
+    if (!b || b.id === "dry") return;
+    b.setAttribute("aria-checked", b.getAttribute("aria-checked") !== "true");
+  });
+  $("dry").onclick = () => { if (!running) { dry = !dry; renderMode(); } };
+  $("runBtn").onclick = () => {
+    if (running) return;
+    const rec = { source: "gui", status: "running", started: Date.now() / 1000, duration: 0, dry_run: dry };
+    $("runBtn").disabled = true; $("estop").disabled = false;
+    running = M.simulateRun(e => addLog(e, true), status => {
+      rec.status = status; rec.duration = Date.now() / 1000 - rec.started; M.history.unshift(rec);
+      running = null; $("runBtn").disabled = false; $("estop").disabled = true; renderHist(); renderMode();
+    });
+    renderHist(rec); renderMode();
+  };
+  $("estop").onclick = () => running && running();
+  M.logs.forEach(l => addLog(l));
+  renderTimers(); renderFields(); renderMode(); renderHist();
+  setInterval(renderTimers, 1000);
+</script>
+</body>
+</html>

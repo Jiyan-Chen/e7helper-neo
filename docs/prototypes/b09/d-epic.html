@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>原型 D：游戏风</title>
+<style>
+  /* 配色取自游戏截图：顶栏/面板的深藏青、选中项的蓝色辉光、米金色装饰线、绿色主按钮、古铜次按钮、橙红角标 */
+  :root {
+    --abyss: #0b1120;
+    --panel: rgba(20, 26, 42, .8);
+    --panel-hi: rgba(44, 50, 64, .78);
+    --edge: rgba(255, 255, 255, .08);
+    --text: #f2f2f0;
+    --muted: #a3a9b6;
+    --gold: #d8b679;
+    --gold-line: #8f7a55;
+    --blue: #2f86e8;
+    --blue-glow: #43a6ff;
+    --green-top: #4f9e35; --green-bot: #1e5c19;
+    --bronze-top: #5b4528; --bronze-bot: #2c2214;
+    --red-top: #d9563a; --red-bot: #8e2016;
+    --badge: #f0621e;
+    --num: "Bahnschrift", "DIN Alternate", "Microsoft YaHei UI", sans-serif;
+    --ui: "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body { color: var(--text); font: 14px/1.5 var(--ui); background: var(--abyss); overflow: hidden; }
+  /* 背景：圣域（进入圣域时 UI 淡入前的一帧），压暗后作底 */
+  .bg { position: fixed; inset: 0; background: url(bg_sanctuary.jpg) center / cover; filter: brightness(.62) saturate(.95); }
+  .bg::after { content: ""; position: absolute; inset: 0; background: linear-gradient(180deg, rgba(8,14,32,.62) 0%, rgba(8,14,32,.48) 45%, rgba(8,14,32,.7) 100%); }
+  button { font: inherit; color: inherit; cursor: pointer; }
+  svg { width: 1em; height: 1em; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .app { position: relative; display: grid; grid-template-rows: 60px 1fr; height: 100vh; min-width: 1120px; }
+
+  /* 顶栏：返回箭头 + 标题，右侧像资源栏一样列状态 */
+  .top { display: flex; align-items: center; gap: 22px; padding: 0 16px 0 14px; background: rgba(8, 12, 24, .55); border-bottom: 1px solid rgba(255,255,255,.08); backdrop-filter: blur(4px); }
+  .top .back { font-size: 26px; display: flex; color: #fff; }
+  .top h1 { margin: 0; font-size: 22px; font-weight: 700; letter-spacing: .02em; }
+  .top .help { width: 26px; height: 26px; border-radius: 50%; border: 2px solid #d9dce2; display: grid; place-items: center; font-weight: 700; font-size: 14px; color: #d9dce2; margin-left: 6px; }
+  .top .grow { flex: 1; }
+  .res { display: flex; align-items: center; gap: 7px; font-family: var(--num); font-weight: 600; font-size: 17px; }
+  .res small { font-family: var(--ui); font-weight: 400; font-size: 12px; color: var(--muted); }
+  .res .ic { font-size: 20px; color: var(--gold); }
+  .res .led { width: 10px; height: 10px; border-radius: 50%; background: #5fd35a; box-shadow: 0 0 8px #5fd35a; }
+  .roundbtn { position: relative; width: 40px; height: 40px; display: grid; place-items: center; border: 0; background: none; font-size: 26px; color: #fff; }
+  .roundbtn .badge { position: absolute; top: -2px; left: -2px; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 10px; background: var(--badge); border: 1.5px solid #ffd3bd; font: 600 12px/17px var(--num); color: #fff; }
+  .estop { height: 36px; padding: 0 16px; border-radius: 8px; border: 1px solid #ff9b86; background: linear-gradient(var(--red-top), var(--red-bot)); font-weight: 700; display: flex; align-items: center; gap: 8px; box-shadow: inset 0 1px 0 rgba(255,255,255,.25); }
+  .estop:disabled { filter: grayscale(1) brightness(.55); cursor: default; }
+
+  .body { display: grid; grid-template-columns: 200px minmax(0, 1fr) 380px; min-height: 0; }
+
+  /* 左侧菜单：仿竞技场右侧菜单，选中项亮底 + 蓝边 */
+  .menu { background: rgba(10, 16, 32, .66); backdrop-filter: blur(6px); display: flex; flex-direction: column; overflow: auto; }
+  .menu button { display: flex; align-items: center; gap: 14px; height: 58px; padding: 0 18px; border: 0; border-bottom: 1px solid rgba(255,255,255,.05); background: none; text-align: left; font-size: 16px; font-weight: 700; color: #e6e8ec; position: relative; }
+  .menu button .ic { font-size: 24px; color: #e6e8ec; flex: none; }
+  .menu button:hover { background: rgba(255,255,255,.04); }
+  .menu button.on { background: linear-gradient(90deg, rgba(47,134,232,.55), rgba(47,134,232,.08) 85%); }
+  .menu button.on::after { content: ""; position: absolute; right: 0; top: 0; bottom: 0; width: 3px; background: var(--blue-glow); box-shadow: 0 0 10px var(--blue-glow); }
+  .menu .dot { position: absolute; left: 10px; top: 12px; width: 9px; height: 9px; border-radius: 50%; background: var(--badge); }
+  .menu .sub { font-size: 12px; font-weight: 400; color: var(--gold); margin-left: auto; }
+  .menu .orn { margin: 10px 18px; }
+  .menu button.small { height: 46px; font-size: 14px; font-weight: 400; color: var(--muted); }
+  .menu button.small .ic { font-size: 19px; color: var(--muted); }
+
+  /* 米金色装饰线：两端小菱形 + 中间菱形组 */
+  .orn { position: relative; height: 9px; }
+  .orn::before { content: ""; position: absolute; left: 4px; right: 4px; top: 4px; border-top: 1px solid var(--gold-line); }
+  .orn i { position: absolute; top: 1px; width: 7px; height: 7px; border: 1px solid var(--gold-line); background: #141a28; transform: rotate(45deg); }
+  .orn i:nth-child(1) { left: 0; } .orn i:nth-child(2) { right: 0; }
+  .orn i:nth-child(3) { left: calc(50% - 4px); background: var(--gold-line); }
+  .orn i:nth-child(4) { left: calc(50% - 15px); } .orn i:nth-child(5) { left: calc(50% + 7px); }
+
+  main { display: flex; flex-direction: column; min-height: 0; }
+  .scroll { flex: 1; overflow: auto; padding: 16px 22px 18px; display: flex; flex-direction: column; gap: 14px; }
+  .title p { margin: 0 0 10px; color: var(--muted); }
+
+  .panel { background: var(--panel); border: 1px solid var(--edge); border-radius: 14px; padding: 14px 16px; box-shadow: 0 2px 0 rgba(0,0,0,.25); }
+  .panel h3 { margin: 0 0 8px; font-size: 15px; color: var(--gold); font-weight: 700; display: flex; align-items: center; gap: 8px; }
+
+  /* 计时：仿精灵之森的胶囊按钮，到时间的发蓝光 + 红点 */
+  .timers { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .pill { position: relative; border-radius: 40px; padding: 10px 18px; background: linear-gradient(180deg, rgba(36,44,62,.95), rgba(18,24,38,.95)); border: 1.5px solid rgba(255,255,255,.12); text-align: center; }
+  .pill .label { font-size: 13px; color: #dfe3ea; }
+  .pill .val { font-family: var(--num); font-weight: 600; font-size: 26px; line-height: 1.15; letter-spacing: .02em; font-variant-numeric: tabular-nums; display: flex; align-items: center; justify-content: center; gap: 8px; }
+  .pill .val svg { font-size: 20px; }
+  .pill .val.done { font-family: var(--ui); font-size: 16px; color: var(--muted); padding: 4px 0 3px; font-weight: 400; }
+  .pill.ready { background: linear-gradient(180deg, #2d8ff0, #1660c4); border-color: #9fd6ff; box-shadow: 0 0 14px rgba(67,166,255,.55), inset 0 0 10px rgba(255,255,255,.25); }
+  .pill.ready::before { content: ""; position: absolute; left: 14px; top: 6px; width: 10px; height: 10px; border-radius: 50%; background: var(--badge); }
+
+  /* 设置：仿邮件列表的行 */
+  .rows { display: flex; flex-direction: column; gap: 8px; }
+  .row { display: flex; align-items: center; gap: 16px; padding: 10px 14px; border-radius: 12px; background: var(--panel-hi); border: 1px solid rgba(255,255,255,.06); }
+  .row .medal { width: 46px; height: 46px; border-radius: 50%; display: grid; place-items: center; font-size: 22px; background: radial-gradient(circle at 50% 35%, #3a4560, #1b2234); border: 2px solid #b39461; color: #f1e2c0; flex: none; }
+  .row .txt { flex: 1; }
+  .row .txt b { display: block; font-size: 15px; }
+  .row .txt span { color: var(--muted); font-size: 12px; }
+  .row .sep { width: 1px; align-self: stretch; background: rgba(255,255,255,.1); }
+
+  /* 开关：做成游戏里的勾选框（米金描边，选中打勾） */
+  .check { width: 30px; height: 30px; border-radius: 6px; border: 1.5px solid var(--gold-line); background: rgba(0,0,0,.35); display: grid; place-items: center; padding: 0; color: #ffe2a1; font-size: 20px; flex: none; }
+  .check svg { stroke-width: 3; opacity: 0; }
+  .check[aria-checked="true"] { border-color: var(--gold); }
+  .check[aria-checked="true"] svg { opacity: 1; }
+
+  /* 底部行动条：仿准备战斗界面 */
+  .actionbar { position: relative; padding: 16px 22px 16px; background: rgba(8,12,24,.62); backdrop-filter: blur(4px); display: flex; align-items: center; gap: 14px; }
+  .actionbar .orn { position: absolute; left: 22px; right: 22px; top: 2px; }
+  .keep { flex: none; white-space: nowrap; display: flex; align-items: center; gap: 12px; padding: 8px 14px; border-radius: 10px; background: rgba(0,0,0,.35); border: 1px solid rgba(255,255,255,.08); }
+  .keep b { font-size: 15px; }
+  .keep span { color: var(--muted); font-size: 12px; }
+  .keep .num { font-family: var(--num); font-size: 18px; font-weight: 600; color: var(--text); }
+  .actionbar .grow { flex: 1; }
+  .btn { height: 54px; min-width: 120px; padding: 0 20px; border-radius: 12px; border: 1px solid; font-size: 18px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; gap: 12px; box-shadow: inset 0 1px 0 rgba(255,255,255,.28), 0 2px 0 rgba(0,0,0,.4); }
+  .btn.bronze { background: linear-gradient(var(--bronze-top), var(--bronze-bot)); border-color: #a1855a; color: #f6ead0; }
+  .btn.go { min-width: 230px; background: linear-gradient(var(--green-top), var(--green-bot)); border-color: #8fd36d; }
+  .btn.go .chip { font-family: var(--ui); font-size: 14px; font-weight: 700; padding: 3px 12px; border-radius: 16px; background: rgba(0,0,0,.35); color: #c9f2b4; border: 1px solid rgba(255,255,255,.12); }
+  body.real .btn.go { background: linear-gradient(var(--red-top), var(--red-bot)); border-color: #ffa58f; }
+  body.real .btn.go .chip { color: #ffd2c8; }
+  .btn:disabled { filter: grayscale(.6) brightness(.6); cursor: default; }
+
+  /* 演练提示：像游戏里的提示条，实跑时变成红色警告 */
+  .notice { display: flex; align-items: center; gap: 12px; padding: 9px 14px; border-radius: 10px; background: rgba(79,158,53,.16); border: 1px solid rgba(143,211,109,.4); }
+  .notice .ic { font-size: 20px; color: #9fe27c; flex: none; }
+  .notice .t { flex: 1; color: #d8f1cb; }
+  .notice .t b { margin-right: 8px; }
+  body.real .notice { background: rgba(217,86,58,.2); border-color: #ff8a70; animation: pulse 1.6s ease-in-out 2; }
+  body.real .notice .ic { color: #ff9b86; }
+  body.real .notice .t { color: #ffd2c8; }
+  @keyframes pulse { 50% { box-shadow: 0 0 0 4px rgba(255,138,112,.25); } }
+
+  /* 右栏 */
+  .side { display: flex; flex-direction: column; gap: 12px; padding: 18px 18px 18px 0; min-height: 0; }
+  .scope { position: relative; border-radius: 12px; overflow: hidden; border: 1.5px solid #8f7a55; box-shadow: 0 0 0 3px rgba(0,0,0,.35); }
+  .scope img { display: block; width: 100%; aspect-ratio: 16/9; object-fit: cover; }
+  .scope .tag { position: absolute; left: 10px; bottom: 8px; padding: 2px 10px; border-radius: 10px; background: rgba(0,0,0,.6); font-size: 12px; }
+  .scope .tag.r { left: auto; right: 10px; color: var(--gold); }
+  .logp { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+  .tabs { display: flex; gap: 6px; margin-bottom: 8px; }
+  .tabs button { border: 1px solid rgba(255,255,255,.1); background: rgba(0,0,0,.25); border-radius: 14px; padding: 2px 12px; font-size: 12px; color: var(--muted); }
+  .tabs button.on { background: linear-gradient(90deg, rgba(47,134,232,.7), rgba(47,134,232,.35)); color: #fff; border-color: var(--blue-glow); }
+  .log { flex: 1; overflow: auto; font-size: 12.5px; line-height: 1.55; margin: 0 -6px; }
+  .log div { display: grid; grid-template-columns: 60px 1fr; gap: 4px; padding: 3px 6px; border-radius: 6px; }
+  .log .t { color: var(--gold-line); font-family: var(--num); }
+  .log .s { color: var(--muted); margin-right: 6px; }
+  .log .WARNING .m { color: #ffc27a; }
+  .log div.new { animation: hl 1.4s ease-out; }
+  @keyframes hl { from { background: rgba(67,166,255,.22); } to { background: transparent; } }
+  .hist div { display: grid; grid-template-columns: 78px 40px 1fr 44px; gap: 6px; padding: 5px 0; font-size: 12.5px; border-top: 1px solid rgba(255,255,255,.06); color: var(--muted); }
+  .hist div:first-child { border-top: 0; }
+  .hist .succeeded { color: #8fdc6c; } .hist .failed { color: #ff8a70; } .hist .stopped { color: #ffc27a; } .hist .running { color: var(--blue-glow); }
+  .hist em { font-style: normal; font-size: 12px; text-align: right; }
+  .hist em.real { color: #ff8a70; }
+  @media (prefers-reduced-motion: reduce) { .log div.new, body.real .notice { animation: none; } }
+  :focus-visible { outline: 2px solid var(--blue-glow); outline-offset: 2px; }
+</style>
+</head>
+<body>
+<svg style="display:none">
+  <symbol id="i-back" viewBox="0 0 24 24"><path d="M15 4 7 12l8 8" stroke-width="3"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="13.5" r="7.5"/><path d="M12 9.5v4l2.5 1.5M10 3h4M12 3v3"/></symbol>
+  <symbol id="i-daily" viewBox="0 0 24 24"><path d="M4 9h16v11H4zM3 6h18v3H3zM12 6v14M12 6c-2-3-5-3-5-1s3 1 5 1c2 0 5 1 5-1s-3-2-5 1"/></symbol>
+  <symbol id="i-shop" viewBox="0 0 24 24"><path d="M4 8h16l-1.5 12h-13zM8 8a4 4 0 0 1 8 0"/></symbol>
+  <symbol id="i-sword" viewBox="0 0 24 24"><path d="M4 20 15 9M14 4h6v6l-5 5M6 14l4 4M3 21l2-2"/></symbol>
+  <symbol id="i-repeat" viewBox="0 0 24 24"><path d="M4 12a8 8 0 0 1 14-5l2 2M20 12a8 8 0 0 1-14 5l-2-2M20 4v5h-5M4 20v-5h5"/></symbol>
+  <symbol id="i-dev" viewBox="0 0 24 24"><path d="m8 8-4 4 4 4M16 8l4 4-4 4M13.5 5l-3 14"/></symbol>
+  <symbol id="i-cal" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M9 3v4M15 3v4"/></symbol>
+  <symbol id="i-scroll" viewBox="0 0 24 24"><path d="M7 4h11v13a3 3 0 0 1-3 3H6a2 2 0 0 1-2-2v-1h10M7 4a2 2 0 0 0-2 2v9M10 8h5M10 11h5"/></symbol>
+  <symbol id="i-chart" viewBox="0 0 24 24"><path d="M4 20h16M7 16v-5M12 16V7M17 16v-8"/></symbol>
+  <symbol id="i-crop" viewBox="0 0 24 24"><path d="M6 2v16h16M2 6h16v16"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.9 4.9 7 7M17 17l2.1 2.1M2 12h3M19 12h3M4.9 19.1 7 17M17 7l2.1-2.1"/></symbol>
+  <symbol id="i-mail" viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="13" rx="1.5"/><path d="m3 7 9 6 9-6"/></symbol>
+  <symbol id="i-leaf" viewBox="0 0 24 24"><path d="M5 19C5 10 10 5 20 4c-1 10-6 15-15 15ZM5 19l8-8"/></symbol>
+  <symbol id="i-star" viewBox="0 0 24 24"><path d="m12 3 2.6 5.6 6.1.7-4.5 4.2 1.2 6L12 16.6 6.6 19.5l1.2-6-4.5-4.2 6.1-.7z"/></symbol>
+  <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 5 5 9-10"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1.5" fill="currentColor"/></symbol>
+  <symbol id="i-device" viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M8 21h8"/></symbol>
+</svg>
+<div class="bg"></div>
+<div class="app">
+  <header class="top">
+    <span class="back"><svg><use href="#i-back"/></svg></span>
+    <h1>日常收取</h1>
+    <span class="help">?</span>
+    <span class="grow"></span>
+    <span class="res"><span class="led"></span>MuMu#0 <small>IPC 1600×900</small></span>
+    <span class="res"><svg class="ic"><use href="#i-device"/></svg><small>场景</small>大厅</span>
+    <span class="res"><svg class="ic"><use href="#i-clock"/></svg><span id="nextAll"></span><small>下次计划</small></span>
+    <button class="roundbtn" title="计划"><svg><use href="#i-cal"/></svg><span class="badge">2</span></button>
+    <button class="roundbtn" title="日志"><svg><use href="#i-scroll"/></svg><span class="badge">1</span></button>
+    <button class="estop" id="estop" disabled><svg><use href="#i-stop"/></svg>急停</button>
+  </header>
+
+  <div class="body">
+    <nav class="menu">
+      <button class="on"><span class="dot"></span><svg class="ic"><use href="#i-daily"/></svg>日常收取<span class="sub">持续中</span></button>
+      <button><svg class="ic"><use href="#i-shop"/></svg>神秘商店</button>
+      <button><svg class="ic"><use href="#i-sword"/></svg>竞技场</button>
+      <button><svg class="ic"><use href="#i-repeat"/></svg>重复刷关<span class="sub">托管</span></button>
+      <button><svg class="ic"><use href="#i-dev"/></svg>示例模块</button>
+      <div class="orn"><i></i><i></i><i></i><i></i><i></i></div>
+      <button class="small"><svg class="ic"><use href="#i-cal"/></svg>计划</button>
+      <button class="small"><svg class="ic"><use href="#i-scroll"/></svg>任务记录</button>
+      <button class="small"><svg class="ic"><use href="#i-chart"/></svg>统计</button>
+      <button class="small"><svg class="ic"><use href="#i-crop"/></svg>模板采集</button>
+      <button class="small"><svg class="ic"><use href="#i-gear"/></svg>设置</button>
+    </nav>
+
+    <main>
+      <div class="scroll">
+      <div class="title"><p>领取快过期的邮件、精灵之森的产出和照料、誓约召唤的免费次数</p><div class="orn"><i></i><i></i><i></i><i></i><i></i></div></div>
+
+      <div class="timers" id="timers"></div>
+
+      <div class="notice"><svg class="ic"><use href="#i-info"/></svg><span class="t" id="notice"></span>
+        <button class="check" role="switch" aria-checked="true" id="dry" aria-label="演练模式" title="演练模式"><svg><use href="#i-check"/></svg></button></div>
+
+      <section class="panel">
+        <h3>收取项目</h3>
+        <div class="rows" id="fields"></div>
+      </section>
+      </div>
+
+      <div class="actionbar">
+        <div class="orn"><i></i><i></i><i></i><i></i><i></i></div>
+        <div class="keep">
+          <button class="check" role="switch" aria-checked="true" id="keep" aria-label="持续收菜"><svg><use href="#i-check"/></svg></button>
+          <div><b>持续收菜</b><br><span>重置后跑一次，森林到点再跑</span></div>
+          <div style="text-align:right"><span>下次</span><br><span class="num" id="nextRun"></span></div>
+        </div>
+        <span class="grow"></span>
+        <button class="btn bronze">保存设置</button>
+        <button class="btn go" id="runBtn"><span class="chip" id="chip">演练</span><span id="runTxt">单次收菜</span></button>
+      </div>
+    </main>
+
+    <aside class="side">
+      <div class="scope"><img src="frame_lobby.jpg" alt="当前游戏画面"><span class="tag">实时画面 2 fps</span><span class="tag r">大厅</span></div>
+      <section class="panel logp">
+        <h3><svg><use href="#i-scroll"/></svg>日志</h3>
+        <div class="tabs"><button class="on">全部</button><button>本任务</button><button>警告</button></div>
+        <div class="log" id="log"></div>
+      </section>
+      <section class="panel"><h3>最近运行</h3><div class="hist" id="hist"></div></section>
+    </aside>
+  </div>
+</div>
+<script src="mock.js"></script>
+<script>
+  const M = E7Mock;
+  const $ = (id) => document.getElementById(id);
+  const icons = { mail: "i-mail", forest: "i-leaf", covenant: "i-star" };
+  let dry = true, running = null;
+  function renderTimers() {
+    // 原型里让「精灵之森」显示成可领状态，演示到时间时的样子
+    $("timers").innerHTML = M.timers.map(t => {
+      const cd = M.countdown(t.at);
+      const ready = t.key === "forest";
+      return `<div class="pill ${ready ? "ready" : ""}"><div class="label">${t.label}</div>
+        <div class="val ${cd ? "" : "done"}">${ready ? "可领取" : cd ? `<svg><use href="#i-clock"/></svg>${cd}` : t.note}</div></div>`;
+    }).join("");
+    $("nextRun").textContent = M.countdown(M.nextRun);
+    $("nextAll").textContent = M.localTime(M.nextRun);
+  }
+  function renderFields() {
+    $("fields").innerHTML = M.fields.map(f => `<div class="row"><span class="medal"><svg><use href="#${icons[f.key]}"/></svg></span>
+      <div class="txt"><b>${f.label}</b><span>${f.desc}</span></div><span class="sep"></span>
+      <button class="check" role="switch" aria-checked="${f.value}" aria-label="${f.label}"><svg><use href="#i-check"/></svg></button></div>`).join("");
+  }
+  function renderMode() {
+    document.body.classList.toggle("real", !dry);
+    $("dry").setAttribute("aria-checked", dry);
+    $("notice").innerHTML = dry ? `<b>演练模式</b>${M.dryDesc.on}。取消右边的勾才会真的领取。` : `<b>实跑</b>${M.dryDesc.off}。`;
+    $("chip").textContent = dry ? "演练" : "实跑";
+    $("runTxt").textContent = running ? "进行中" : "单次收菜";
+  }
+  function renderHist(extra) {
+    $("hist").innerHTML = (extra ? [extra] : []).concat(M.history).map(h => `<div><span>${M.when(h.started)}</span><span>${M.sourceText[h.source]}</span>
+      <span class="${h.status}">${M.statusText[h.status]}${h.duration ? "，" + h.duration.toFixed(1) + " 秒" : ""}</span><em class="${h.dry_run ? "" : "real"}">${h.dry_run ? "演练" : "实跑"}</em></div>`).join("");
+  }
+  function addLog([t, lvl, src, msg], fresh) {
+    const d = document.createElement("div");
+    d.className = lvl + (fresh ? " new" : "");
+    d.innerHTML = `<span class="t">${M.clock(t)}</span><span class="m"><span class="s">${src}</span>${msg}</span>`;
+    $("log").appendChild(d); $("log").scrollTop = $("log").scrollHeight;
+  }
+  document.addEventListener("click", e => {
+    const b = e.target.closest(".check");
+    if (!b || b.id === "dry") return;
+    b.setAttribute("aria-checked", b.getAttribute("aria-checked") !== "true");
+  });
+  $("dry").onclick = () => { if (!running) { dry = !dry; renderMode(); } };
+  $("runBtn").onclick = () => {
+    if (running) return;
+    const rec = { source: "gui", status: "running", started: Date.now() / 1000, duration: 0, dry_run: dry };
+    $("runBtn").disabled = true; $("estop").disabled = false;
+    running = M.simulateRun(e => addLog(e, true), status => {
+      rec.status = status; rec.duration = Date.now() / 1000 - rec.started; M.history.unshift(rec);
+      running = null; $("runBtn").disabled = false; $("estop").disabled = true; renderHist(); renderMode();
+    });
+    renderHist(rec); renderMode();
+  };
+  $("estop").onclick = () => running && running();
+  M.logs.forEach(l => addLog(l));
+  renderTimers(); renderFields(); renderMode(); renderHist();
+  setInterval(renderTimers, 1000);
+</script>
+</body>
+</html>

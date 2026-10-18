@@ -40,6 +40,15 @@ python -m uv run e7helper doctor | bench | screenshot | tap X Y | modules | run 
 python -m uv run e7helper serve [--no-connect]       # API 服务（B08），端口和 token 见 %LOCALAPPDATA%\e7helper\api.json
 ```
 
+## GUI（在 `app/` 下，B09）
+```
+pnpm install
+pnpm tauri dev      # 桌面应用；没有在运行的引擎时会自己拉起（不想碰真机：E7_ENGINE_ARGS="--no-connect --paused"）
+pnpm test           # vitest
+pnpm typecheck
+```
+- 正式版面向玩家：演练开关、模板采集、示例模块等开发者功能只在开发版显示（`src/lib/env.ts`）。
+
 ## 本机环境（开发者）
 - MuMu 6.8.7（B07 时 `doctor` 显示），安装在 `E:\MuMuPlayer-12.0`（新版 `nx_main` 结构），实例 0：Android 15，1600×900，adb `127.0.0.1:16384`。
-- Python 3.13 x64。
+- Python 3.13 x64；Node 24.19，pnpm 12.14（`npm i -g pnpm`），Rust 1.97.1（MSVC，cargo 用 rsproxy），WebView2 155。

@@ -8,8 +8,8 @@ from e7helper.modules.base import TaskModule
 
 
 class HelloConfig(BaseModel):
-    greeting: str = Field("你好，第七史诗", description="打印的问候语")
-    screenshots: int = Field(1, ge=1, le=10, description="截图次数")
+    greeting: str = Field("你好，第七史诗", description="打印的问候语", title="问候语")
+    screenshots: int = Field(1, ge=1, le=10, description="截图次数", title="截图次数")
 
 
 class HelloModule(TaskModule):

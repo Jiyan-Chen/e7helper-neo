@@ -2,7 +2,7 @@
 
 ```
   ┌──────────── app/ (Tauri + React，B09) ─────────────┐
-  │ 外壳：设备栏/日志/设置   模块页面注册表(按 module id 挂载) │
+  │ 外壳：顶栏/菜单/画面+动态   模块界面扩展(按 module id 挂载) │
   └───────────────▲ REST + WebSocket（B08）────────────┘
   ┌───────────────┴──── engine/ (Python) ─────────────────┐
   │ api/      核心路由 + 各模块自注册的子路由与 WS 频道           │
@@ -170,6 +170,8 @@ python -m uv run e7helper serve [--port 47800] [--index N] [--no-connect] [--pau
 | `GET /tasks/current`、`POST /tasks/stop`、`GET /tasks/history?limit&module` | 当前任务 / 急停 / 记录（新的在前） |
 | `GET /assistants`、`POST /assistants/{id}`、`DELETE /assistants/{id}` | 助手模块挂载 / 卸下 |
 | `GET/POST /schedules`、`GET/PATCH/DELETE /schedules/{id}`、`POST /schedules/{id}/run`、`PUT /scheduler {paused}` | 定时调度 |
+| `POST /shutdown` → 202（B09） | 关闭服务（GUI 退出时关掉自己拉起的引擎）；只有 `serve` 起的服务支持，其他 501 |
+| `/capture/...`（B09，开发工具） | 模板采集，见下文 |
 
 **模块子路由**：`Module.routes()` 返回的路由挂到 `/api/modules/<id>/`，同样要 token。第一段路径不能是 `config` / `stats` / `timers` 或路径参数，否则启动时报 `ModuleRegistryError`。fastapi 在 `routes()` 里再导入。已有：`GET /api/modules/daily/ledger`。
 
@@ -198,6 +200,51 @@ python -m uv run e7helper serve [--port 47800] [--index N] [--no-connect] [--pau
 - 已知需求：
   - `repeat_battle` 托管：`interval`，config `{"manual": false, "auto_battle": true, "dry_run": false}`；
   - `daily` 持续收菜：`module`（`next_due` = 本游戏日没成功跑过就马上跑，否则取下一次重置和 `forest_next` 中较早的）；单次收菜直接 `POST /tasks`。
+
+### 模板采集接口（B09，`api/capture.py`）
+GUI「模板采集」页（只在开发版出现）用，和 CLI `capture` / `match` / `ocr` 等价。前缀 `/api/capture`，要 token。
+| 路由 | 说明 |
+|---|---|
+| `POST /frames`、`POST /frames/upload`（请求体是图片字节）、`GET /frames/{id}` | 冻结当前画面（只读截图）或上传图片，统一缩放到 1600×900；内存里只留最近 8 张 |
+| `GET /stores`、`GET /templates?module=`、`GET /templates/{module}/image/{name}` | 有模板目录的模块、模板列表和元数据、模板图片 |
+| `POST /templates/{module}`、`DELETE /templates/{module}/{name}` | 按矩形保存（png + json，写进 `engine/assets`）并回验：原位置分数 + 其他位置最高分；已存在时要 `overwrite`。保存 / 删除后清掉运行时识别器的模板缓存 |
+| `POST /match`、`POST /ocr` | 在冻结的画面上测试模板（不设阈值的最佳位置，`hit` 表示过阈值和 max_diff）/ OCR（read / line / number） |
+
+## GUI `app/`（B09）
+Tauri 2 + React 19 + TypeScript + Vite + Tailwind 4，组件用 radix-ui（shadcn 的做法：源码放在 `src/components/ui/`，按游戏风改了样式）。
+```
+cd app
+pnpm install
+pnpm tauri dev          # 桌面应用（会起 Vite 1420 端口，Rust 端连接或拉起引擎）
+pnpm dev                # 只起网页，在浏览器里打开 http://localhost:1420/?url=http://127.0.0.1:47800&token=...
+pnpm test               # vitest
+pnpm typecheck
+```
+**引擎连接**（`src-tauri/src/engine.rs`）：先读 `<数据目录>/api.json`，`/api/health` 正常就直接连（开发时手动 `serve`）；否则自己拉起 `engine/.venv/Scripts/python.exe -m e7helper.cli serve --port 0`，token 随机生成后经 `E7_API_TOKEN` 传入，按 token 认出自己的服务。
+- 拉起的进程放进 Windows 作业对象（关闭时结束整棵进程树）。应用退出时先 `POST /api/shutdown` 让引擎正常退出，8 秒没退再强制结束。连上的是外部服务时退出不动它。
+- 环境变量（开发用）：`E7_ENGINE_DIR` 引擎目录（默认编译期的 `app/../engine`）、`E7_ENGINE_ARGS` 附加给 `serve` 的参数（例如 `--no-connect --paused`）、`E7_DATA_DIR` 数据目录（引擎和 Rust 端都认）。引擎的 stdout 写到 `<数据目录>/logs/engine-stdout.log`。
+- 前端通过 Tauri 命令 `engine_connection` 拿 `{url, token, spawned}`；普通浏览器里用地址栏的 `?url=&token=` 或 `VITE_E7_URL` / `VITE_E7_TOKEN`。
+
+**开发版 / 正式版**（`src/lib/env.ts`，用户意见：正式版面向玩家）：`pnpm tauri dev` / `pnpm dev` 是开发版。
+- 演练（dry_run）开关只在开发版显示（默认演练，切到实跑要确认）；正式版没有这个开关，启动任务、建计划一律发 `dry_run: false`（`lib/run.ts` 的 `runConfig`）。引擎这边模块默认仍是演练，CLI 不受影响。
+- 只在开发版出现：模板采集页、示例模块、日志的「全部」（带来源）、设备后端名、引擎地址。
+- `VITE_E7_DEV=1` 可以在打包版里打开开发者功能。
+
+| 目录 | 职责 |
+|---|---|
+| `src/lib/` | `api.ts`（REST）、`ws.ts`（/ws，断线重连）、`frames.ts`（/ws/frames → object URL）、`store.ts`（zustand：状态、场景、日志；事件到来时让 react-query 失效）、`time.ts`（三种时间格式统一转 Date）、`schema.ts`（JSON Schema → 字段）、`labels.ts`（场景名、状态、日志的中文化） |
+| `src/components/shell/` | 启动画面、顶栏（模拟器、当前画面、下个计划、停止）、左侧菜单、右侧「实时画面 + 动态」（可收起）、背景 |
+| `src/components/module/` | 通用模块页：说明、计时胶囊、（开发版）演练条、自动表单、最近运行、底部行动条 |
+| `src/pages/` | 计划、运行记录、统计、日志、设置、模板采集（开发版） |
+| `src/modules/<id>/index.tsx` | 模块的界面扩展，见下 |
+
+**模块界面扩展**：在 `src/modules/<id>/index.tsx` 默认导出 `ModuleUI`（`src/modules/types.ts`），`import.meta.glob` 自动收集、按 module id 挂载；没有的模块用通用页。可以提供：图标和菜单顺序、菜单短名、运行按钮文字、字段图标、字段依赖（控制项关掉时变灰）、只在开发版显示的字段、统计项中文名（统计页按它显示）、推荐计划（计划页一键添加）、`RunExtra`（运行条左侧控件）、`Header`、`onConfigSaved`。
+- 例：`daily` 的「持续收菜」= `RunExtra`，开关一条 `module` 触发的计划；`onConfigSaved` 把新设置同步进这条计划的配置快照。
+- 例：`repeat_battle` 的推荐计划「托管自动结算」= 每 30 分钟、`manual: false`。
+
+**自动表单**：按 `config_schema` 生成，每个字段一行（仿邮件列表），布尔是勾选框、枚举是下拉、数字带范围校验、对象数组是表格。字段名用 schema 的 `title`（B09 给各模块配置补了中文 title；没写时退回说明的第一句）。改动后 400ms 自动保存（`PUT /config`），保存失败按 pydantic 错误标到字段上。
+
+**样式**：游戏风（原型见 `docs/prototypes/b09/d-epic.html`），配色和组件类在 `src/index.css`。背景是圣域（进入圣域时 UI 淡入前的一帧，`src/assets/bg_sanctuary.jpg`），用 CSS 压暗。只用系统字体（数字用 Bahnschrift）。
 
 ## 已有模块
 ### `secret_shop` 刷神秘商店（B04）

@@ -1,0 +1,316 @@
+@import "tailwindcss";
+
+/* 游戏风（B09 用户选定的原型 D）：配色和部件对照游戏截图——
+   深藏青半透明圆角面板、米金色菱形装饰线、竞技场式菜单（选中蓝色辉光）、
+   精灵之森式胶囊、邮件列表式行、准备战斗式按钮（绿色主按钮 / 古铜次按钮）、橙红角标。 */
+@theme {
+  --font-sans: "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  --font-num: "Bahnschrift", "DIN Alternate", "Microsoft YaHei UI", sans-serif;
+  --font-mono: "Cascadia Mono", Consolas, "Microsoft YaHei UI", monospace;
+
+  --color-abyss: #0b1120;
+  --color-ink: #f2f2f0;
+  --color-muted: #a3a9b6;
+  --color-faint: #6f7685;
+  --color-gold: #d8b679;
+  --color-gold-line: #8f7a55;
+  --color-blue: #2f86e8;
+  --color-glow: #43a6ff;
+  --color-ok: #8fdc6c;
+  --color-warn: #ffc27a;
+  --color-bad: #ff8a70;
+  --color-badge: #f0621e;
+}
+
+:root {
+  color-scheme: dark;
+  --panel: rgba(20, 26, 42, 0.8);
+  --panel-hi: rgba(44, 50, 64, 0.72);
+  --edge: rgba(255, 255, 255, 0.08);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--color-abyss);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  overflow: hidden;
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: rgba(67, 166, 255, 0.4);
+}
+
+/* 细滚动条 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(216, 182, 121, 0.35) transparent;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-glow);
+  outline-offset: 2px;
+}
+
+.num {
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+}
+
+@layer components {
+  /* 半透明面板 */
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--edge);
+    border-radius: 14px;
+    box-shadow: 0 2px 0 rgba(0, 0, 0, 0.25);
+  }
+  .panel-title {
+    color: var(--color-gold);
+    font-weight: 700;
+    font-size: 15px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  /* 邮件列表式的行 */
+  .row-card {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 10px 14px;
+    border-radius: 12px;
+    background: var(--panel-hi);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+  }
+
+  /* 古铜描边的圆形图标 */
+  .medal {
+    width: 44px;
+    height: 44px;
+    flex: none;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    font-size: 20px;
+    color: #f1e2c0;
+    background: radial-gradient(circle at 50% 35%, #3a4560, #1b2234);
+    border: 2px solid #b39461;
+  }
+
+  /* 按钮：仿「准备战斗」界面 */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    height: 40px;
+    padding: 0 18px;
+    border-radius: 10px;
+    border: 1px solid;
+    font-weight: 700;
+    white-space: nowrap;
+    cursor: pointer;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.26), 0 2px 0 rgba(0, 0, 0, 0.4);
+    transition: filter 0.12s;
+  }
+  .btn:hover:not(:disabled) {
+    filter: brightness(1.1);
+  }
+  .btn:active:not(:disabled) {
+    filter: brightness(0.92);
+  }
+  .btn:disabled {
+    filter: grayscale(0.6) brightness(0.6);
+    cursor: default;
+  }
+  .btn-lg {
+    height: 54px;
+    padding: 0 22px;
+    border-radius: 12px;
+    font-size: 18px;
+  }
+  .btn-sm {
+    height: 30px;
+    padding: 0 12px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 600;
+  }
+  .btn-go {
+    background: linear-gradient(#4f9e35, #1e5c19);
+    border-color: #8fd36d;
+    color: #fff;
+  }
+  .btn-real {
+    background: linear-gradient(#d9563a, #8e2016);
+    border-color: #ffa58f;
+    color: #fff;
+  }
+  .btn-bronze {
+    background: linear-gradient(#5b4528, #2c2214);
+    border-color: #a1855a;
+    color: #f6ead0;
+  }
+  .btn-blue {
+    background: linear-gradient(#3a7fd0, #1d4f99);
+    border-color: #7fbaf5;
+    color: #fff;
+  }
+  .btn-ghost {
+    background: rgba(0, 0, 0, 0.3);
+    border-color: rgba(255, 255, 255, 0.14);
+    color: var(--color-ink);
+    box-shadow: none;
+  }
+
+  /* 按钮里嵌的小标签（仿「20/102 战斗开始」） */
+  .chip {
+    font-size: 13px;
+    font-weight: 700;
+    padding: 2px 10px;
+    border-radius: 14px;
+    background: rgba(0, 0, 0, 0.35);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+  }
+
+  /* 胶囊（仿精灵之森） */
+  .pill {
+    position: relative;
+    border-radius: 40px;
+    padding: 9px 18px;
+    text-align: center;
+    background: linear-gradient(180deg, rgba(36, 44, 62, 0.95), rgba(18, 24, 38, 0.95));
+    border: 1.5px solid rgba(255, 255, 255, 0.12);
+  }
+  .pill-ready {
+    background: linear-gradient(180deg, #2d8ff0, #1660c4);
+    border-color: #9fd6ff;
+    box-shadow: 0 0 14px rgba(67, 166, 255, 0.55), inset 0 0 10px rgba(255, 255, 255, 0.25);
+  }
+  .pill-ready::before {
+    content: "";
+    position: absolute;
+    left: 16px;
+    top: 7px;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--color-badge);
+  }
+
+  /* 橙红角标 */
+  .badge {
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: 9px;
+    background: var(--color-badge);
+    border: 1.5px solid #ffd3bd;
+    color: #fff;
+    font: 600 11px/15px var(--font-num);
+    text-align: center;
+  }
+  .dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--color-badge);
+  }
+
+  /* 左侧菜单项（仿竞技场菜单） */
+  .menu-item {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    height: 56px;
+    padding: 0 18px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    font-size: 16px;
+    font-weight: 700;
+    color: #e6e8ec;
+    text-decoration: none;
+  }
+  .menu-item:hover {
+    background: rgba(255, 255, 255, 0.04);
+  }
+  .menu-item.active {
+    background: linear-gradient(90deg, rgba(47, 134, 232, 0.55), rgba(47, 134, 232, 0.08) 85%);
+  }
+  .menu-item.active::after {
+    content: "";
+    position: absolute;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    width: 3px;
+    background: var(--color-glow);
+    box-shadow: 0 0 10px var(--color-glow);
+  }
+  .menu-item.minor {
+    height: 44px;
+    font-size: 14px;
+    font-weight: 400;
+    color: var(--color-muted);
+  }
+  .menu-item.minor.active {
+    color: #fff;
+  }
+
+  /* 小页签（日志筛选等） */
+  .tab {
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(0, 0, 0, 0.25);
+    border-radius: 14px;
+    padding: 2px 12px;
+    font-size: 12px;
+    color: var(--color-muted);
+    cursor: pointer;
+  }
+  .tab.active {
+    background: linear-gradient(90deg, rgba(47, 134, 232, 0.7), rgba(47, 134, 232, 0.35));
+    color: #fff;
+    border-color: var(--color-glow);
+  }
+
+  /* 输入框 */
+  .field {
+    height: 34px;
+    padding: 0 10px;
+    border-radius: 8px;
+    background: rgba(0, 0, 0, 0.35);
+    border: 1px solid rgba(216, 182, 121, 0.35);
+    color: var(--color-ink);
+    font: inherit;
+    outline: none;
+    user-select: text;
+  }
+  .field:focus {
+    border-color: var(--color-gold);
+    box-shadow: 0 0 0 2px rgba(216, 182, 121, 0.18);
+  }
+  .field[aria-invalid="true"] {
+    border-color: var(--color-bad);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}

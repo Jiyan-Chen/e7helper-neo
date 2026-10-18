@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>原型 C：Windows 原生</title>
+<style>
+  :root {
+    --mica: #eef1f6;
+    --layer: #f9f9f9cc;
+    --card: #ffffff;
+    --stroke: #e3e5e8;
+    --text: #1b1b1b;
+    --text-2: #5f6368;
+    --text-3: #8a8f95;
+    --accent: #005fb8;
+    --accent-text: #ffffff;
+    --sel: #0000000a;
+    --caution-bg: #fff4ce;
+    --caution-ic: #9d5d00;
+    --critical-bg: #fde7e9;
+    --critical-ic: #c42b1c;
+    --ok: #0f7b0f;
+    --font: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", sans-serif;
+    --display: "Segoe UI Variable Display", "Segoe UI", "Microsoft YaHei UI", sans-serif;
+    --icons: "Segoe Fluent Icons", "Segoe MDL2 Assets";
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --mica: #1c2026; --layer: #2a2d32cc; --card: #2d3036; --stroke: #3a3d43; --text: #ffffff; --text-2: #c5c8cd; --text-3: #9aa0a6;
+      --accent: #4cc2ff; --accent-text: #000000; --sel: #ffffff10; --caution-bg: #433519; --caution-ic: #fce100; --critical-bg: #442726; --critical-ic: #ff99a4; --ok: #6ccb5f;
+    }
+  }
+  :root[data-theme="dark"] {
+    --mica: #1c2026; --layer: #2a2d32cc; --card: #2d3036; --stroke: #3a3d43; --text: #ffffff; --text-2: #c5c8cd; --text-3: #9aa0a6;
+    --accent: #4cc2ff; --accent-text: #000000; --sel: #ffffff10; --caution-bg: #433519; --caution-ic: #fce100; --critical-bg: #442726; --critical-ic: #ff99a4; --ok: #6ccb5f;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body { font: 14px/20px var(--font); color: var(--text); background: var(--mica); }
+  button { font: inherit; color: inherit; cursor: pointer; }
+  .ic { font-family: var(--icons); font-style: normal; font-size: 16px; line-height: 1; }
+  .app { display: grid; grid-template-rows: 48px 1fr; height: 100vh; min-width: 1100px; }
+
+  /* 标题栏：应用名 + 设备状态 + 急停 */
+  .titlebar { display: flex; align-items: center; gap: 16px; padding: 0 12px 0 16px; }
+  .titlebar .name { font-size: 12px; }
+  .titlebar .spacer { flex: 1; }
+  .status { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-2); padding: 4px 10px; border-radius: 4px; }
+  .status:hover { background: var(--sel); }
+  .status .led { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); }
+  .btn { height: 32px; padding: 0 12px; border-radius: 4px; border: 1px solid var(--stroke); background: var(--card); display: inline-flex; align-items: center; gap: 8px; }
+  .btn:hover { filter: brightness(.97); }
+  .btn.accent { background: var(--accent); color: var(--accent-text); border-color: transparent; }
+  .btn.danger { background: #c42b1c; color: #fff; border-color: transparent; }
+  .btn:disabled { opacity: .45; cursor: default; filter: none; }
+
+  .shell { display: grid; grid-template-columns: 220px 1fr 360px; min-height: 0; }
+  nav { padding: 4px 6px; display: flex; flex-direction: column; gap: 2px; }
+  nav a { position: relative; display: flex; align-items: center; gap: 14px; height: 36px; padding: 0 12px; border-radius: 4px; text-decoration: none; color: var(--text); }
+  nav a:hover { background: var(--sel); }
+  nav a.on { background: var(--sel); }
+  nav a.on::before { content: ""; position: absolute; left: 0; top: 10px; bottom: 10px; width: 3px; border-radius: 2px; background: var(--accent); }
+  nav .sub { padding-left: 42px; height: 32px; color: var(--text-2); }
+  nav .sub.on { color: var(--text); }
+  nav hr { border: 0; border-top: 1px solid var(--stroke); margin: 6px 4px; }
+  nav .badge { margin-left: auto; font-size: 11px; color: var(--text-3); }
+
+  /* 内容层：圆角 Layer，像 Win11 设置 */
+  .page { background: var(--layer); border: 1px solid var(--stroke); border-bottom: 0; border-radius: 8px 0 0 0; overflow: auto; padding: 28px 32px 32px; backdrop-filter: blur(30px); }
+  .crumb { font-family: var(--display); font-size: 28px; line-height: 36px; font-weight: 600; margin: 0 0 4px; }
+  .crumb span { color: var(--text-3); font-weight: 400; }
+  .lede { color: var(--text-2); margin: 0 0 18px; }
+
+  .infobar { display: flex; gap: 12px; align-items: flex-start; padding: 12px 14px; border-radius: 6px; border: 1px solid var(--stroke); background: var(--caution-bg); margin-bottom: 16px; }
+  .infobar .ic { color: var(--caution-ic); font-size: 16px; margin-top: 2px; }
+  .infobar b { margin-right: 8px; }
+  .infobar div { flex: 1; }
+  body.real .infobar { background: var(--critical-bg); }
+  body.real .infobar .ic { color: var(--critical-ic); }
+
+  .group { font-weight: 600; margin: 22px 0 8px; }
+  .cards { display: flex; flex-direction: column; gap: 4px; }
+  .card { display: flex; align-items: center; gap: 16px; min-height: 68px; padding: 12px 16px; background: var(--card); border: 1px solid var(--stroke); border-radius: 6px; }
+  .card > .ic { font-size: 20px; width: 24px; text-align: center; color: var(--text-2); }
+  .card .body { flex: 1; }
+  .card .body small { display: block; color: var(--text-2); font-size: 12px; line-height: 16px; }
+  .card .val { color: var(--text-2); font-size: 13px; }
+
+  .timers { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+  .timer { background: var(--card); border: 1px solid var(--stroke); border-radius: 6px; padding: 14px 16px; }
+  .timer .label { color: var(--text-2); font-size: 12px; }
+  .timer .val { font-family: var(--display); font-size: 28px; line-height: 36px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .timer .val.done { font-size: 18px; color: var(--text-3); font-weight: 400; }
+  .timer .note { color: var(--text-3); font-size: 12px; }
+
+  .toggle { display: inline-flex; align-items: center; gap: 12px; background: none; border: 0; padding: 0; color: var(--text-2); font-size: 14px; }
+  .toggle i { position: relative; width: 40px; height: 20px; border-radius: 10px; border: 1px solid var(--text-2); }
+  .toggle i::after { content: ""; position: absolute; top: 3px; left: 3px; width: 12px; height: 12px; border-radius: 50%; background: var(--text-2); transition: left .12s; }
+  .toggle[aria-checked="true"] i { background: var(--accent); border-color: var(--accent); }
+  .toggle[aria-checked="true"] i::after { left: 23px; background: var(--accent-text); }
+  .toggle::before { content: "关"; min-width: 14px; }
+  .toggle[aria-checked="true"]::before { content: "开"; }
+
+  /* 右窗格 */
+  .pane { border-left: 1px solid var(--stroke); background: var(--layer); display: flex; flex-direction: column; min-height: 0; }
+  .pane h3 { font-size: 14px; margin: 16px 16px 8px; font-weight: 600; display: flex; justify-content: space-between; }
+  .pane h3 small { font-weight: 400; color: var(--text-3); font-size: 12px; }
+  .shot { margin: 0 16px; border-radius: 6px; overflow: hidden; border: 1px solid var(--stroke); }
+  .shot img { display: block; width: 100%; aspect-ratio: 16/9; object-fit: cover; }
+  .seg { display: inline-flex; border: 1px solid var(--stroke); border-radius: 4px; overflow: hidden; margin: 0 16px 6px; }
+  .seg button { border: 0; background: var(--card); padding: 3px 10px; font-size: 12px; }
+  .seg button.on { background: var(--accent); color: var(--accent-text); }
+  .log { flex: 1; overflow: auto; padding: 0 8px 12px; font-size: 12px; line-height: 18px; }
+  .log div { padding: 4px 8px; border-radius: 4px; display: grid; grid-template-columns: 56px 1fr; }
+  .log div:hover { background: var(--sel); }
+  .log .t { color: var(--text-3); font-variant-numeric: tabular-nums; }
+  .log .s { color: var(--text-3); margin-right: 6px; }
+  .log .WARNING .m { color: var(--caution-ic); }
+  .log div.new { animation: fade 1s ease-out; }
+  @keyframes fade { from { background: var(--sel); } }
+  @media (prefers-reduced-motion: reduce) { .log div.new { animation: none; } }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; background: var(--card); border: 1px solid var(--stroke); border-radius: 6px; overflow: hidden; }
+  th { text-align: left; font-weight: 400; color: var(--text-3); font-size: 12px; padding: 8px 16px; border-bottom: 1px solid var(--stroke); }
+  td { padding: 8px 16px; border-bottom: 1px solid var(--stroke); }
+  tr:last-child td { border-bottom: 0; }
+  .succeeded { color: var(--ok); } .failed { color: var(--critical-ic); } .stopped { color: var(--caution-ic); } .running { color: var(--accent); }
+  .tag { font-size: 12px; padding: 0 6px; border-radius: 4px; background: var(--caution-bg); color: var(--caution-ic); }
+  .tag.real { background: var(--critical-bg); color: var(--critical-ic); }
+  :focus-visible { outline: 2px solid var(--text); outline-offset: 1px; }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="titlebar">
+    <span class="name">e7helper</span>
+    <span class="spacer"></span>
+    <span class="status"><span class="led"></span>MuMu#0 已连接，IPC，1600×900</span>
+    <span class="status"><i class="ic">&#xE7F4;</i>当前场景：大厅</span>
+    <span class="status"><i class="ic">&#xE787;</i>下一次计划 <span id="nextAll"></span></span>
+    <button class="btn" id="theme"><i class="ic">&#xE793;</i>深浅色</button>
+    <button class="btn danger" id="estop" disabled><i class="ic">&#xE71A;</i>急停</button>
+  </div>
+  <div class="shell">
+    <nav>
+      <a href="#"><i class="ic">&#xE80F;</i>总览</a>
+      <a href="#"><i class="ic">&#xE768;</i>任务模块</a>
+      <a href="#" class="sub on">日常收取</a>
+      <a href="#" class="sub">刷神秘商店</a>
+      <a href="#" class="sub">竞技场 NPC</a>
+      <a href="#" class="sub">重复刷关</a>
+      <a href="#" class="sub">示例模块</a>
+      <hr>
+      <a href="#"><i class="ic">&#xE787;</i>计划<span class="badge">2</span></a>
+      <a href="#"><i class="ic">&#xE81C;</i>任务记录</a>
+      <a href="#"><i class="ic">&#xE9D2;</i>统计</a>
+      <a href="#"><i class="ic">&#xE722;</i>模板采集</a>
+      <hr>
+      <a href="#"><i class="ic">&#xE713;</i>设置</a>
+    </nav>
+
+    <main class="page">
+      <h1 class="crumb"><span>任务模块 ›</span> 日常收取</h1>
+      <p class="lede">领取快过期的邮件、精灵之森的产出和照料、誓约召唤的免费次数</p>
+
+      <div class="infobar"><i class="ic" id="infoIc">&#xE7BA;</i><div><b id="infoTitle">演练模式</b><span id="infoTxt"></span></div>
+        <button class="toggle" role="switch" aria-checked="true" id="dry" aria-label="演练模式"><i></i></button></div>
+
+      <div class="timers" id="timers"></div>
+
+      <div class="group">运行</div>
+      <div class="cards">
+        <div class="card"><i class="ic">&#xE768;</i><div class="body">单次收菜<small>用下面的设置立即跑一次，约 20–35 秒</small></div><button class="btn accent" id="runBtn">开始</button></div>
+        <div class="card"><i class="ic">&#xE895;</i><div class="body">持续收菜<small>每日重置后跑一次，精灵之森到时间再跑。下次在 <span id="nextRun"></span> 后</small></div>
+          <button class="toggle" role="switch" aria-checked="true" aria-label="持续收菜"><i></i></button></div>
+      </div>
+
+      <div class="group">设置</div>
+      <div class="cards" id="fields"></div>
+
+      <div class="group">最近运行</div>
+      <table><thead><tr><th>时间</th><th>来源</th><th>结果</th><th>用时</th><th>模式</th></tr></thead><tbody id="hist"></tbody></table>
+    </main>
+
+    <aside class="pane">
+      <h3>实时画面 <small>2 fps，半尺寸</small></h3>
+      <div class="shot"><img src="frame_lobby.jpg" alt="当前游戏画面"></div>
+      <h3>活动</h3>
+      <div class="seg"><button class="on">全部</button><button>本任务</button><button>警告</button></div>
+      <div class="log" id="log"></div>
+    </aside>
+  </div>
+</div>
+<script src="mock.js"></script>
+<script>
+  const M = E7Mock;
+  const $ = (id) => document.getElementById(id);
+  const icons = { mail: "&#xE715;", forest: "&#xE913;", covenant: "&#xE734;" };
+  let dry = true, running = null;
+  function renderTimers() {
+    $("timers").innerHTML = M.timers.map(t => {
+      const cd = M.countdown(t.at);
+      return `<div class="timer"><div class="label">${t.label}</div><div class="val ${cd ? "" : "done"}">${cd ?? t.note}</div>
+        <div class="note">${cd ? t.note + "，" + M.localTime(t.at) : "明天 3:00 恢复"}</div></div>`;
+    }).join("");
+    $("nextRun").textContent = M.countdown(M.nextRun);
+    $("nextAll").textContent = M.localTime(M.nextRun);
+  }
+  function renderFields() {
+    $("fields").innerHTML = M.fields.map(f => `<div class="card"><i class="ic">${icons[f.key]}</i><div class="body">${f.label}<small>${f.desc}</small></div>
+      <button class="toggle" role="switch" aria-checked="${f.value}" aria-label="${f.label}"><i></i></button></div>`).join("");
+  }
+  function renderMode() {
+    document.body.classList.toggle("real", !dry);
+    $("dry").setAttribute("aria-checked", dry);
+    $("infoIc").innerHTML = dry ? "&#xE7BA;" : "&#xEA39;";
+    $("infoTitle").textContent = dry ? "演练模式" : "实跑";
+    $("infoTxt").textContent = dry ? M.dryDesc.on + "。关闭后才会真的领取。" : M.dryDesc.off + "。";
+    $("runBtn").textContent = running ? "运行中…" : dry ? "开始演练" : "开始实跑";
+    $("runBtn").className = "btn " + (dry ? "accent" : "danger");
+  }
+  function renderHist(extra) {
+    $("hist").innerHTML = (extra ? [extra] : []).concat(M.history).map(h => `<tr><td>${M.when(h.started)}</td><td>${M.sourceText[h.source]}</td>
+      <td class="${h.status}">${M.statusText[h.status]}</td><td>${h.duration ? h.duration.toFixed(1) + " 秒" : "—"}</td>
+      <td><span class="tag ${h.dry_run ? "" : "real"}">${h.dry_run ? "演练" : "实跑"}</span></td></tr>`).join("");
+  }
+  function addLog([t, lvl, src, msg], fresh) {
+    const d = document.createElement("div");
+    d.className = lvl + (fresh ? " new" : "");
+    d.innerHTML = `<span class="t">${M.clock(t)}</span><span class="m"><span class="s">${src}</span>${msg}</span>`;
+    $("log").appendChild(d); $("log").scrollTop = $("log").scrollHeight;
+  }
+  document.addEventListener("click", e => {
+    const b = e.target.closest(".toggle");
+    if (!b || b.id === "dry") return;
+    b.setAttribute("aria-checked", b.getAttribute("aria-checked") !== "true");
+  });
+  $("dry").onclick = () => { if (!running) { dry = !dry; renderMode(); } };
+  $("theme").onclick = () => {
+    const r = document.documentElement, dark = matchMedia("(prefers-color-scheme: dark)").matches;
+    const cur = r.dataset.theme || (dark ? "dark" : "light");
+    r.dataset.theme = cur === "dark" ? "light" : "dark";
+  };
+  $("runBtn").onclick = () => {
+    if (running) return;
+    const rec = { source: "gui", status: "running", started: Date.now() / 1000, duration: 0, dry_run: dry };
+    $("runBtn").disabled = true; $("estop").disabled = false;
+    running = M.simulateRun(e => addLog(e, true), status => {
+      rec.status = status; rec.duration = Date.now() / 1000 - rec.started; M.history.unshift(rec);
+      running = null; $("runBtn").disabled = false; $("estop").disabled = true; renderHist(); renderMode();
+    });
+    renderHist(rec); renderMode();
+  };
+  $("estop").onclick = () => running && running();
+  M.logs.forEach(l => addLog(l));
+  renderTimers(); renderFields(); renderMode(); renderHist();
+  setInterval(renderTimers, 1000);
+</script>
+</body>
+</html>

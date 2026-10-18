@@ -6,13 +6,13 @@ from pydantic import BaseModel, Field
 
 
 class Target(BaseModel):
-    name: str = Field(description="商品名（以游戏内 OCR 为准）")
+    name: str = Field(description="商品名（以游戏内 OCR 为准）", title="商品")
     price: int | None = Field(
         None, ge=1,
-        description="预期金币价格。设置后价格读数必须一致才买（防止 OCR 认错商品）；不设置则只要求是金币价格",
+        description="预期金币价格。设置后价格读数必须一致才买（防止 OCR 认错商品）；不设置则只要求是金币价格", title="金币价格",
     )
     icon: str | None = Field(
-        None, description="物品图标模板（assets/secret_shop/cn/ 下，如 item/covenant）。名字没对上时按图标认",
+        None, description="物品图标模板（assets/secret_shop/cn/ 下，如 item/covenant）。名字没对上时按图标认", title="图标模板",
     )
 
 
@@ -24,14 +24,14 @@ def default_targets() -> list[Target]:
 
 
 class SecretShopConfig(BaseModel):
-    targets: list[Target] = Field(default_factory=default_targets, description="要买的商品")
-    max_refreshes: int = Field(10, ge=0, le=1000, description="最多刷新次数")
-    skystone_budget: int = Field(30, ge=0, description="本次最多花多少天空石刷新")
-    skystone_keep: int = Field(0, ge=0, description="天空石保底：刷新后不能低于这个数")
-    gold_floor: int = Field(0, ge=0, description="金币下限：买完后金币不能低于这个数")
-    refresh_cost: int = Field(3, ge=1, description="每次刷新消耗的天空石；界面读数与此不符时停止")
-    max_failures: int = Field(3, ge=1, le=20, description="连续失败这么多次就停止（刷新/购买没有扣费、确认框没出现等）")
-    dry_run: bool = Field(True, description="只识别和决策，不点购买和刷新")
+    targets: list[Target] = Field(default_factory=default_targets, description="要买的商品", title="要买的商品")
+    max_refreshes: int = Field(10, ge=0, le=1000, description="最多刷新次数", title="最多刷新次数")
+    skystone_budget: int = Field(30, ge=0, description="本次最多花多少天空石刷新", title="天空石预算")
+    skystone_keep: int = Field(0, ge=0, description="天空石保底：刷新后不能低于这个数", title="天空石保底")
+    gold_floor: int = Field(0, ge=0, description="金币下限：买完后金币不能低于这个数", title="金币下限")
+    refresh_cost: int = Field(3, ge=1, description="每次刷新消耗的天空石；界面读数与此不符时停止", title="每次刷新的天空石")
+    max_failures: int = Field(3, ge=1, le=20, description="连续失败这么多次就停止（刷新/购买没有扣费、确认框没出现等）", title="连续失败上限")
+    dry_run: bool = Field(True, description="只识别和决策，不点购买和刷新", title="演练")
     probe_dialogs: bool = Field(
-        False, description="dry-run 时打开购买/刷新确认框核对内容，然后点取消（用于实机验证识别）",
+        False, description="dry-run 时打开购买/刷新确认框核对内容，然后点取消（用于实机验证识别）", title="核对确认框",
     )

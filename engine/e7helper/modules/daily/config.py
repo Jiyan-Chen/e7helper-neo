@@ -11,10 +11,10 @@ from pydantic.json_schema import SkipJsonSchema
 
 
 class DailyConfig(BaseModel):
-    mail: bool = Field(True, description="领取剩余时间不到一天的邮件（逐封领取，不点「全部领取」）")
-    forest: bool = Field(True, description="精灵之森：领取企鹅巢穴 / 精灵之泉 / 魔罗戈拉的产出，有「照料」就照料")
-    covenant: bool = Field(True, description="誓约召唤：用完当天的免费召唤（优先免费十连；只点显示「免费」的按钮）")
-    dry_run: bool = Field(True, description="只导航和识别，不点领取、照料、召唤")
+    mail: bool = Field(True, description="领取剩余时间不到一天的邮件（逐封领取，不点「全部领取」）", title="邮件")
+    forest: bool = Field(True, description="精灵之森：领取企鹅巢穴 / 精灵之泉 / 魔罗戈拉的产出，有「照料」就照料", title="精灵之森")
+    covenant: bool = Field(True, description="誓约召唤：用完当天的免费召唤（优先免费十连；只点显示「免费」的按钮）", title="誓约召唤")
+    dry_run: bool = Field(True, description="只导航和识别，不点领取、照料、召唤", title="演练")
 
     # ---- 内部接口（不显示在表单里）
     mail_max_hours: SkipJsonSchema[float] = Field(

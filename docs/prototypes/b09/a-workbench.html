@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>原型 A：工作台</title>
+<style>
+  :root {
+    --bg: #e9ecef;
+    --panel: #ffffff;
+    --line: #d5dae0;
+    --ink: #18212b;
+    --ink-2: #5a6572;
+    --ink-3: #8b95a1;
+    --accent: #2456d6;
+    --ok: #1f8a4c;
+    --amber: #b7791f;
+    --amber-bg: #fdf3e1;
+    --red: #c8322a;
+    --red-bg: #fdecea;
+    --num: "Bahnschrift", "DIN Alternate", "Segoe UI", sans-serif;
+    --ui: "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body { background: var(--bg); color: var(--ink); font: 13px/1.5 var(--ui); }
+  button { font: inherit; cursor: pointer; }
+  .app { display: grid; grid-template-rows: 40px 1fr; height: 100vh; min-width: 1100px; }
+
+  /* 顶部设备条 */
+  .strip { display: flex; align-items: center; gap: 22px; padding: 0 12px 0 16px; background: var(--ink); color: #cfd6de; font-size: 12px; }
+  .strip .brand { color: #fff; font-weight: 700; letter-spacing: .02em; margin-right: 8px; }
+  .strip .kv { display: flex; gap: 6px; align-items: center; }
+  .strip .kv b { color: #fff; font-weight: 600; font-family: var(--num); font-size: 13px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #3ccf7a; box-shadow: 0 0 0 3px rgba(60,207,122,.18); }
+  .strip .spacer { flex: 1; }
+  .estop { background: var(--red); color: #fff; border: 0; height: 28px; padding: 0 14px; border-radius: 3px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+  .estop:disabled { background: #3a4552; color: #8b95a1; cursor: default; }
+  .estop i { width: 9px; height: 9px; background: currentColor; display: block; }
+
+  .body { display: grid; grid-template-columns: 188px 1fr 400px; min-height: 0; }
+
+  /* 导航 */
+  nav { border-right: 1px solid var(--line); background: #f5f6f8; padding: 12px 0; overflow: auto; }
+  nav h6 { margin: 14px 16px 6px; font-size: 11px; color: var(--ink-3); font-weight: 600; }
+  nav a { display: flex; justify-content: space-between; align-items: center; padding: 6px 16px; color: var(--ink-2); text-decoration: none; border-left: 3px solid transparent; }
+  nav a:hover { background: #eceff2; color: var(--ink); }
+  nav a.on { color: var(--ink); font-weight: 700; border-left-color: var(--accent); background: #fff; }
+  nav a small { font-family: var(--num); color: var(--ink-3); font-weight: 400; }
+  nav a .tag { font-size: 10px; padding: 0 5px; border: 1px solid var(--line); border-radius: 2px; color: var(--ink-3); }
+
+  /* 主区 */
+  main { overflow: auto; padding: 20px 24px 32px; }
+  .head { display: flex; align-items: baseline; gap: 14px; margin-bottom: 16px; }
+  .head h1 { font-size: 20px; margin: 0; }
+  .head p { margin: 0; color: var(--ink-2); }
+
+  .block { background: var(--panel); border: 1px solid var(--line); margin-bottom: 14px; }
+  .block > header { display: flex; align-items: center; justify-content: space-between; padding: 8px 14px; border-bottom: 1px solid var(--line); font-size: 12px; color: var(--ink-2); font-weight: 600; }
+
+  .timers { display: grid; grid-template-columns: repeat(3, 1fr); }
+  .timer { padding: 14px 16px 12px; border-right: 1px solid var(--line); }
+  .timer:last-child { border-right: 0; }
+  .timer .label { color: var(--ink-2); font-size: 12px; }
+  .timer .val { font-family: var(--num); font-size: 34px; line-height: 1.1; letter-spacing: .01em; font-variant-numeric: tabular-nums; margin: 4px 0 2px; }
+  .timer .val.done { color: var(--ink-3); font-size: 20px; padding: 8px 0 4px; font-family: var(--ui); }
+  .timer .note { color: var(--ink-3); font-size: 12px; }
+
+  /* 运行区 */
+  .run { display: grid; grid-template-columns: 1fr 1fr; }
+  .run > div { padding: 14px 16px; }
+  .run > div + div { border-left: 1px solid var(--line); }
+  .run h3 { margin: 0 0 4px; font-size: 14px; }
+  .run p { margin: 0 0 12px; color: var(--ink-2); font-size: 12px; }
+  .primary { height: 34px; padding: 0 18px; border: 0; border-radius: 3px; background: var(--accent); color: #fff; font-weight: 700; }
+  .primary.real { background: var(--red); }
+  .primary:disabled { background: #b8c0ca; cursor: default; }
+  .switch { position: relative; width: 38px; height: 20px; border-radius: 10px; background: #c3cad3; border: 0; padding: 0; flex: none; transition: background .15s; }
+  .switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: transform .15s; }
+  .switch[aria-checked="true"] { background: var(--accent); }
+  .switch[aria-checked="true"]::after { transform: translateX(18px); }
+  .row { display: flex; align-items: center; gap: 10px; }
+  .next { font-family: var(--num); font-size: 15px; }
+
+  /* 演练横条：开着是琥珀色说明，关掉变成红色警示斜纹 */
+  .mode { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--line); background: var(--amber-bg); }
+  .mode .badge { font-weight: 700; color: var(--amber); border: 1.5px solid var(--amber); padding: 1px 8px; border-radius: 2px; font-size: 12px; }
+  .mode .txt { flex: 1; color: #6e5320; }
+  body.real .mode { background: repeating-linear-gradient(-45deg, var(--red-bg) 0 14px, #f8d6d2 14px 28px); }
+  body.real .mode .badge { color: #fff; background: var(--red); border-color: var(--red); }
+  body.real .mode .txt { color: #8a1f19; font-weight: 600; }
+
+  .fields .f { display: flex; align-items: center; gap: 14px; padding: 10px 14px; border-bottom: 1px solid #eef0f3; }
+  .fields .f:last-child { border-bottom: 0; }
+  .fields .f div { flex: 1; }
+  .fields .f b { display: block; font-size: 13px; }
+  .fields .f span { color: var(--ink-3); font-size: 12px; }
+  .fields .f code { font-family: Consolas, monospace; font-size: 11px; color: var(--ink-3); }
+
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { text-align: left; font-weight: 600; color: var(--ink-3); padding: 6px 14px; border-bottom: 1px solid var(--line); }
+  td { padding: 7px 14px; border-bottom: 1px solid #eef0f3; font-variant-numeric: tabular-nums; }
+  tr:last-child td { border-bottom: 0; }
+  .st { font-weight: 700; }
+  .st.succeeded { color: var(--ok); } .st.failed { color: var(--red); } .st.stopped { color: var(--amber); } .st.running { color: var(--accent); }
+  .pill { font-size: 11px; padding: 0 6px; border-radius: 2px; }
+  .pill.dry { background: var(--amber-bg); color: var(--amber); }
+  .pill.real { background: var(--red-bg); color: var(--red); }
+
+  /* 右栏：画面 + 日志 */
+  aside { border-left: 1px solid var(--line); background: #fff; display: grid; grid-template-rows: auto auto 1fr; min-height: 0; }
+  .frame { position: relative; background: #000; aspect-ratio: 16 / 9; }
+  .frame img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .frame .ov { position: absolute; left: 8px; bottom: 8px; background: rgba(0,0,0,.65); color: #fff; font-size: 11px; padding: 2px 8px; border-radius: 2px; font-family: var(--num); }
+  .frame .ov.r { left: auto; right: 8px; }
+  .logbar { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--line); font-size: 12px; }
+  .logbar b { margin-right: auto; }
+  .logbar button { border: 1px solid var(--line); background: #fff; padding: 1px 8px; border-radius: 2px; color: var(--ink-2); font-size: 11px; }
+  .logbar button.on { background: var(--ink); color: #fff; border-color: var(--ink); }
+  .log { overflow: auto; font: 12px/1.55 Consolas, "Microsoft YaHei UI", monospace; padding: 6px 0; }
+  .log div { display: grid; grid-template-columns: 62px 1fr; padding: 1px 10px; }
+  .log div:hover { background: #f5f7f9; }
+  .log .t { color: var(--ink-3); }
+  .log .WARNING .m { color: var(--amber); }
+  .log .ERROR .m { color: var(--red); }
+  .log .s { color: var(--accent); margin-right: 6px; }
+  .log div.new { animation: hl 1.2s ease-out; }
+  @keyframes hl { from { background: #e8eefc; } to { background: transparent; } }
+  @media (prefers-reduced-motion: reduce) { .log div.new { animation: none; } }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="strip">
+    <span class="brand">e7helper</span>
+    <span class="kv"><span class="dot"></span><b>MuMu#0</b> 已连接</span>
+    <span class="kv">IPC <b>1600×900</b></span>
+    <span class="kv">场景 <b id="scene">lobby</b></span>
+    <span class="kv">计划 <b>2</b> 条，下次 <b id="nextAll"></b></span>
+    <span class="spacer"></span>
+    <span class="kv" id="taskState">空闲</span>
+    <button class="estop" id="estop" disabled><i></i>急停</button>
+  </div>
+  <div class="body">
+    <nav>
+      <h6>任务模块</h6>
+      <a href="#" class="on">日常收取 <span class="tag">持续</span></a>
+      <a href="#">刷神秘商店</a>
+      <a href="#">竞技场 NPC</a>
+      <a href="#">重复刷关 <span class="tag">托管</span></a>
+      <a href="#">示例模块</a>
+      <h6>记录</h6>
+      <a href="#">计划 <small>2</small></a>
+      <a href="#">任务记录</a>
+      <a href="#">日志</a>
+      <a href="#">统计</a>
+      <h6>工具</h6>
+      <a href="#">模板采集</a>
+      <a href="#">设备与设置</a>
+    </nav>
+
+    <main>
+      <div class="head"><h1>日常收取</h1><p>领取快过期的邮件、精灵之森的产出和照料、誓约召唤的免费次数</p></div>
+
+      <section class="block">
+        <header>计时</header>
+        <div class="timers" id="timers"></div>
+      </section>
+
+      <section class="block">
+        <div class="mode">
+          <span class="badge" id="modeBadge">演练</span>
+          <span class="txt" id="modeTxt"></span>
+          <button class="switch" role="switch" aria-checked="true" id="dry" aria-label="演练模式"></button>
+        </div>
+        <div class="run">
+          <div>
+            <h3>单次收菜</h3>
+            <p>用下方设置立即跑一次（约 20–35 秒）</p>
+            <button class="primary" id="runBtn">开始</button>
+          </div>
+          <div>
+            <div class="row" style="justify-content:space-between"><h3>持续收菜</h3><button class="switch" role="switch" aria-checked="true" id="keep" aria-label="持续收菜"></button></div>
+            <p>每日重置后跑一次，精灵之森到时间再跑</p>
+            <div class="row">下次 <span class="next" id="nextRun"></span><span style="color:var(--ink-3)">（精灵之森）</span></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="block fields">
+        <header>设置 <span style="font-weight:400;color:var(--ink-3)">改动自动保存</span></header>
+        <div id="fields"></div>
+      </section>
+
+      <section class="block">
+        <header>最近运行</header>
+        <table><thead><tr><th>时间</th><th>来源</th><th>结果</th><th>用时</th><th>模式</th></tr></thead><tbody id="hist"></tbody></table>
+      </section>
+    </main>
+
+    <aside>
+      <div class="frame"><img src="frame_lobby.jpg" alt="当前游戏画面"><span class="ov">2 fps</span><span class="ov r">lobby</span></div>
+      <div class="logbar"><b>日志</b><button class="on">全部</button><button>本任务</button><button>警告以上</button></div>
+      <div class="log" id="log"></div>
+    </aside>
+  </div>
+</div>
+<script src="mock.js"></script>
+<script>
+  const M = E7Mock;
+  const $ = (id) => document.getElementById(id);
+  let dry = true, running = null;
+
+  function renderTimers() {
+    $("timers").innerHTML = M.timers.map(t => {
+      const cd = M.countdown(t.at);
+      return `<div class="timer"><div class="label">${t.label}</div>
+        <div class="val ${cd ? "" : "done"}">${cd ?? t.note}</div>
+        <div class="note">${cd ? t.note + "，" + M.localTime(t.at) : "明天 3:00 恢复"}</div></div>`;
+    }).join("");
+    $("nextRun").textContent = M.countdown(M.nextRun);
+    $("nextAll").textContent = M.localTime(M.nextRun);
+  }
+  function renderFields() {
+    $("fields").innerHTML = M.fields.map(f => `<div class="f"><div><b>${f.label}</b><span>${f.desc}</span></div>
+      <button class="switch" role="switch" aria-checked="${f.value}" data-k="${f.key}" aria-label="${f.label}"></button></div>`).join("");
+  }
+  function renderMode() {
+    document.body.classList.toggle("real", !dry);
+    $("dry").setAttribute("aria-checked", dry);
+    $("modeBadge").textContent = dry ? "演练" : "实跑";
+    $("modeTxt").textContent = dry ? "演练模式：" + M.dryDesc.on + "。关掉开关才会真的领取。" : "实跑：" + M.dryDesc.off + "。";
+    $("runBtn").textContent = running ? "运行中…" : dry ? "开始演练" : "开始实跑";
+    $("runBtn").classList.toggle("real", !dry);
+  }
+  function renderHist(extra) {
+    const rows = (extra ? [extra] : []).concat(M.history);
+    $("hist").innerHTML = rows.map(h => `<tr><td>${M.when(h.started)}</td><td>${M.sourceText[h.source]}</td>
+      <td class="st ${h.status}">${M.statusText[h.status]}</td><td>${h.duration ? h.duration.toFixed(1) + " 秒" : "—"}</td>
+      <td><span class="pill ${h.dry_run ? "dry" : "real"}">${h.dry_run ? "演练" : "实跑"}</span></td></tr>`).join("");
+  }
+  function addLog([t, lvl, src, msg], fresh) {
+    const d = document.createElement("div");
+    d.className = lvl + (fresh ? " new" : "");
+    d.innerHTML = `<span class="t">${M.clock(t)}</span><span class="m"><span class="s">${src}</span>${msg}</span>`;
+    $("log").appendChild(d);
+    $("log").scrollTop = $("log").scrollHeight;
+  }
+
+  $("dry").onclick = () => { if (!running) { dry = !dry; renderMode(); } };
+  $("keep").onclick = (e) => { const b = e.currentTarget; b.setAttribute("aria-checked", b.getAttribute("aria-checked") !== "true"); };
+  $("fields").onclick = (e) => { const b = e.target.closest(".switch"); if (b) b.setAttribute("aria-checked", b.getAttribute("aria-checked") !== "true"); };
+  $("runBtn").onclick = () => {
+    if (running) return;
+    const rec = { source: "gui", status: "running", started: Date.now() / 1000, duration: 0, dry_run: dry };
+    $("runBtn").disabled = true; $("estop").disabled = false; $("taskState").textContent = "运行中：日常收取";
+    running = M.simulateRun(e => addLog(e, true), status => {
+      rec.status = status; rec.duration = Date.now() / 1000 - rec.started; M.history.unshift(rec);
+      running = null; $("runBtn").disabled = false; $("estop").disabled = true; $("taskState").textContent = "空闲";
+      renderHist(); renderMode();
+    });
+    renderHist(rec); renderMode();
+  };
+  $("estop").onclick = () => running && running();
+
+  M.logs.forEach(l => addLog(l));
+  renderTimers(); renderFields(); renderMode(); renderHist();
+  setInterval(renderTimers, 1000);
+</script>
+</body>
+</html>

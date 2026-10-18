@@ -12,9 +12,9 @@ from pydantic.json_schema import SkipJsonSchema
 
 class ArenaNpcConfig(BaseModel):
     buy_flags: bool = Field(
-        False, description="旗帜用完后用友情点数补旗（100 友情点数换 5 面，每天限一次；绝不用天空石）",
+        False, description="旗帜用完后用友情点数补旗（100 友情点数换 5 面，每天限一次；绝不用天空石）", title="用友情点数补旗",
     )
-    dry_run: bool = Field(True, description="只导航和识别，不点「战斗开始」「快速对战」「购买」")
+    dry_run: bool = Field(True, description="只导航和识别，不点「战斗开始」「快速对战」「购买」", title="演练")
 
     # ---- 内部接口（不显示在表单里）
     max_battles: SkipJsonSchema[int] = Field(0, ge=0, description="最多打几场，0 表示打到旗帜用完")

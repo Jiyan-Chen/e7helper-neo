@@ -27,6 +27,7 @@ from e7helper import __version__
 from e7helper.modules import Module, ModuleRegistryError
 
 from .auth import LOCAL_HOSTS, AuthConfig, HostCheckMiddleware, require_token
+from .capture import build_capture_router
 from .engine import ApiError, Engine
 from .scheduler import Scheduler, ScheduleSpec
 from .ws import Hub, build_ws_router, encode_jpeg
@@ -148,6 +149,7 @@ def create_app(
                 "auth": token is not None}
 
     app.include_router(_core_router(services), prefix="/api", dependencies=[Depends(require_token)])
+    app.include_router(build_capture_router(engine), prefix="/api", dependencies=[Depends(require_token)])
     _mount_module_routes(app, engine)
     app.include_router(build_ws_router(services))
     return app
@@ -186,6 +188,15 @@ def _core_router(services: Services) -> APIRouter:
     @r.get("/status", tags=["基础"], summary="设备、当前任务、助手、调度器概况（同 WS 的 hello）")
     def status() -> dict:
         return services.status()
+
+    @r.post("/shutdown", tags=["基础"], status_code=202, summary="关闭服务（GUI 退出时关掉自己拉起的引擎）")
+    def shutdown(request: Request) -> dict:
+        fn = getattr(request.app.state, "request_shutdown", None)
+        if fn is None:
+            raise ApiError(501, "not_supported", "这个服务不能远程关闭")
+        log.info("收到关闭请求")
+        fn()
+        return {"shutting_down": True}
 
     @r.get("/logs", tags=["基础"], summary="最近的日志")
     def logs(limit: int = Query(200, ge=0, le=2000), level: str = "INFO",

@@ -1,6 +1,6 @@
 # HANDOFF
 
-> 新会话从这里读起。上次更新：2026-10-18（B08 已通过）
+> 新会话从这里读起。上次更新：2026-10-18（B09 已通过）
 
 ## 当前进度
 - **B01 骨架 + 模块契约 + MuMu 设备层**：✅ 已通过，记录见 [reviews/B01.md](reviews/B01.md)。
@@ -11,7 +11,8 @@
 - **B06 重复刷关（托管战斗 + 手动刷讨伐）**：✅ 已通过，记录见 [reviews/B06.md](reviews/B06.md)。
 - **B07 日常收取（邮件 / 精灵之森 / 誓约免费召唤）**：✅ 已通过，记录见 [reviews/B07.md](reviews/B07.md)。
 - **B08 API 层（REST + WebSocket + 定时调度）**：✅ 已通过，记录见 [reviews/B08.md](reviews/B08.md)。
-- 下一块：**B09 GUI**。
+- **B09 GUI（Tauri 2 + React，游戏风）**：✅ 已通过，记录见 [reviews/B09.md](reviews/B09.md)。
+- 下一块：**B10 打包发布**。
 
 ## 已有能力
 ### 设备（B01）
@@ -125,6 +126,21 @@
 - 实测：经 WS 急停 daily，0.1 秒内退出；daily dry-run 一次约 23 秒；空闲时帧频道 4fps、半尺寸 JPEG 约 64KB 一帧。
 - 测试：`tests/test_api.py`、`tests/test_scheduler.py`；`tests/api_fakes.py` 提供只截图不点击的假模块和 `make_engine`（GameSim 当设备）。
 
+### GUI `app/`（B09，详见 architecture.md「GUI」和 reviews/B09.md）
+- 在 `app/` 下：`pnpm install`、`pnpm tauri dev`（桌面应用）、`pnpm dev`（只起网页，浏览器打开 `http://localhost:1420/?url=<引擎地址>&token=<token>`）、`pnpm test`、`pnpm typecheck`、`pnpm build`。
+- **引擎连接**（`src-tauri/src/engine.rs`）：先读 `<数据目录>/api.json`，`/api/health` 正常就直接连；否则拉起 `engine/.venv/Scripts/python.exe -m e7helper.cli serve --port 0`，token 随机生成、经 `E7_API_TOKEN` 传入，按 token 认出自己的服务。
+  - 拉起的进程放进 Windows 作业对象。应用退出时 `POST /api/shutdown`，8 秒后强制结束；外部起的服务不动。
+  - 开发用环境变量：`E7_ENGINE_DIR`、`E7_ENGINE_ARGS`（例如 `--no-connect --paused`）、`E7_DATA_DIR`。引擎输出在 `<数据目录>/logs/engine-stdout.log`。
+- **开发版 / 正式版**（`src/lib/env.ts`；用户意见：正式版面向玩家，按用户思维布局）：
+  - 演练开关只在开发版显示（默认演练，切实跑要确认）；正式版启动任务、建计划一律 `dry_run:false`（`lib/run.ts`）。引擎里模块默认仍是演练。
+  - 只在开发版出现：模板采集、示例模块、日志「全部」、设备后端、引擎地址；`VITE_E7_DEV=1` 可在打包版打开。
+- **页面**：各模块页（通用：说明、计时胶囊、设置自动保存、最近运行、底部开始 / 停止）、计划（列表、新建 / 编辑、推荐计划、总开关）、运行记录、统计、日志、设置（模拟器连接 / 切换实例）、模板采集（开发版）。外壳：顶栏（模拟器、当前画面、下个计划、停止）、左侧菜单、右侧「实时画面 + 动态」。
+- **模块界面扩展**：`src/modules/<id>/index.tsx` 默认导出 `ModuleUI`，自动收集（图标、菜单名、字段图标 / 依赖 / 开发版字段、统计项中文名、推荐计划、`RunExtra`、`Header`、`onConfigSaved`）。daily 的「持续收菜」是 `RunExtra`；repeat_battle 推荐「托管自动结算」计划。
+- **样式**：游戏风（原型 `docs/prototypes/b09/d-epic.html`，用户选定），主题和组件类在 `src/index.css`；背景是压暗的圣域图 `src/assets/bg_sanctuary.jpg`。
+- **引擎新增**：`POST /api/shutdown`；`/api/capture/*` 模板采集接口（`api/capture.py`）；各模块配置字段补了中文 `title`。
+- 测试：前端 `src/lib/*.test.ts`（vitest）；引擎 `tests/test_capture_api.py`。全量 `705 passed, 7 skipped`。
+- 实测：拉起引擎 2.8–5.8 秒；经 GUI 跑 daily 演练 12.4 秒，中途停止立即生效；关闭应用时引擎正常退出并删除 api.json。
+
 ### 模块与 CLI（B01，B03 / B08 更新）
 - 模块：继承 `TaskModule` / `AssistantModule`，放到 `e7helper/modules/<id>/` 就会被自动发现。参考 `modules/hello/`。
 - CLI：`doctor`、`bench`、`screenshot`、`tap`、`modules`、`run <id> [-c JSON] [-t 超时]`（经 runtime）、`scene [-f 图片] [--dismiss] [--watch]`、`capture`（新增 `--tap`）、`match`、`ocr`、`serve`（B08）。
@@ -149,26 +165,31 @@
   - 鉴权用随机 token + Host 校验；调度到点有任务时排队，带等待上限；模板采集 API 推迟到 B09（均为用户选择）。
   - daily 由用户选择单次或持续收菜，GUI 显示模块计时（用户意见）。
   - 默认端口 47800。
+- B09：
+  - 风格选原型 D「游戏风」（用户在 A / B / C 之外要求更贴近游戏），背景用圣域 UI 淡入前的一帧并压暗（用户指定）。
+  - 引擎连接「先连，连不上再拉起」，token 用 `E7_API_TOKEN`（用户选）。
+  - dry_run 开关只在开发版显示，正式版一律实跑；打包版面向玩家，不带开发者思维（用户意见）。
+  - 时间格式后端不动，前端统一转换；模板采集接口在 B09 补，只在开发版使用。
 
-## 下一块（B09 GUI）要做
-ROADMAP：Tauri 2 + React + TS + Vite + Tailwind + shadcn/ui；外壳 + 模块注册表 + JSON Schema 自动表单 + 日志、统计、模板采集页。验收：`pnpm tauri dev` 全流程可用。
+## 下一块（B10 打包发布）要做
+ROADMAP：PyInstaller sidecar + Tauri 安装包。验收：在干净环境装好后能跑。
 1. **先和用户确认**：
-   - 页面清单和布局：设备栏、任务 / 模块页、日志、统计、计划、模板采集；
-   - 引擎怎么启动：开发时手动 `serve` 还是由 Tauri 拉起 sidecar；token 用 `E7_API_TOKEN` 传还是读 api.json；
-   - 模块自定义页面的注册方式（按 module id 挂载）；
-   - 时间格式要不要统一：任务记录 / 日志是 unix 秒，计划 / 计时是 ISO UTC。
-2. **先检查开发环境**：Node、pnpm、Rust、WebView2 有没有装，版本是否够。本机直连 PyPI 很慢，npm 和 crates 大概率也慢，要先问用户用哪个镜像（例如 npmmirror、rsproxy），不要自己改全局配置。
-3. 模板采集页需要后端接口，B08 没做。可能需要：模板列表、按矩形保存模板（写 assets 目录）、在当前帧上测试匹配。要和用户一起定，复用 `TemplateStore` / `capture` 的回验逻辑。
-4. **表单**：
-   - 用 `GET /api/modules/{id}` 的 `config_schema` 生成。内部字段已经用 `SkipJsonSchema` 隐藏。
-   - 保存走 `PUT /api/modules/{id}/config`（整体替换）。
-   - `dry_run` 默认开，界面上要醒目。
-5. **daily 页**：
-   - 显示 `/api/modules/daily/timers` 的倒计时；
-   - 「单次收菜」= `POST /tasks`；
-   - 「持续收菜」开关 = 创建 / 启用 / 停用一条 `module` 触发的计划（`PATCH /schedules/{id} {"enabled":..}`）。
-6. CORS 已允许 `http://tauri.localhost`、`tauri://localhost`、`http://localhost:1420`。前端端口不是 1420 的话要改 `app.py` 的 `DEFAULT_CORS_ORIGINS`。
-7. 不操作游戏的部分优先做。经 GUI 启动任务的真机验证要先征得用户同意，而且只跑 dry-run。
+   - PyInstaller 用 onedir 还是 onefile（onefile 每次启动要解压，慢；onedir 要作为 Tauri 的 `bundle.resources` 带上，而不是 `externalBin`）；
+   - 安装包形式（现在是 NSIS）、安装到当前用户还是全局、中文安装界面、应用名 / 图标（现在是 Tauri 默认图标，可以用游戏风重做）、版本号；
+   - 「干净环境」怎么测：本机是 Windows 11 Pro，可以用 Windows 沙盒（沙盒里没有 MuMu，只能验证安装、启动、拉起引擎、显示「模拟器未连接」），或者另一台机器 / 另一个用户；
+   - 要不要自动更新（建议先不做）。
+2. **引擎冻结要处理的点**：
+   - `core/paths.py` 的 `ENGINE_ROOT` / `ASSETS_DIR` 按源码位置算，冻结后要改成 `sys._MEIPASS`（或 exe 旁边）；`assets/` 要打进包；
+   - 模块用 `pkgutil` 自动发现，PyInstaller 需要 `collect_submodules("e7helper.modules")`；entry-point 外部模块在冻结版里不支持（说明即可）；
+   - rapidocr / onnxruntime 的模型文件、opencv（带 GUI 的那个，`override-dependencies` 排除了 headless）、uvicorn 的动态导入（`uvicorn.protocols` / `websockets` 等）要逐个确认；
+   - `isolate_native_stdout()` 在没有控制台的进程里也要正常（B09 拉起时 stdout 已经重定向到文件，实测正常）；
+   - IPC DLL 来自用户的 MuMu 安装目录，不打包。
+3. **Tauri 侧**：
+   - `engine.rs` 的 `spawn()` 现在找 `<引擎目录>/.venv/Scripts/python.exe`，打包版要改成找随包的引擎 exe（`app.path().resource_dir()`）；开发版保留现状；
+   - `CREATE_NO_WINDOW`、作业对象、`/api/shutdown` 的退出流程保持不变；
+   - 检查正式版确实隐藏了开发者功能（B09 用 `vite preview` 看过一次）。
+4. 依赖安装照旧走华为云镜像（PyInstaller 也是）；体积预计较大（onnxruntime、opencv），记录安装包大小。
+5. 不操作游戏的部分优先做。打包版的真机验证（连 MuMu、跑 daily）要先征得用户同意；正式版没有演练开关、会实跑，所以真机验证要么用开发者开关 `VITE_E7_DEV=1` 构建的包跑演练，要么和用户商量好只跑不消耗资源的项目。
 
 ## 坑
 - **「点击关闭」到处都有**（竞技场战斗记录、托管结算完毕、精灵之森奖励、邮件详情框）：模块弹窗要加背景场景的标题区分（B07）。
@@ -215,3 +236,13 @@ ROADMAP：Tauri 2 + React + TS + Vite + Tailwind + shadcn/ui；外壳 + 模块�
 - **uvicorn 关闭后会重新抛出收到的信号**：Windows 上 SIGBREAK 的默认处理是直接结束进程，`server.run()` 之后的代码不会执行。退出时的清理放在 lifespan 关闭阶段（`create_app(on_shutdown=...)`）。被强制结束（TerminateProcess）时 api.json 会残留，读取方要用 pid 或 `/api/health` 确认。
 - **Starlette TestClient 的 WS 地址默认是 `ws://testserver`**，过不了 Host 校验：测试里用绝对地址 `ws://127.0.0.1:47800/...`。TestClient 还会把默认的 `Authorization` 头带进 WS 请求。
 - WS 测试里事件可能比回复先到，收消息时不要丢掉不匹配的消息（见 `test_api._recv_until`）。
+- **computer-use 认不出开发中的 Tauri exe**（B09）：截 Tauri 窗口用 Win32 `PrintWindow`（见 B09 审核记录的做法，不需要窗口在最前）；点按钮在浏览器面板里打开同一个前端页面（`localhost:1420/?url=&token=`，连同一个引擎）。
+- **`pnpm tauri dev` 和预览配置 `app-vite` / `app-preview` 都占 1420 端口**：先停掉预览再跑 tauri dev。
+- **浏览器面板里只改 `#` 后面的部分不会重新加载页面**：要看新状态就改一下查询参数（例如加 `&r=2`）。
+- **不想碰真机就用 `E7_ENGINE_ARGS="--no-connect --paused"` 加临时 `E7_DATA_DIR`**：`--paused` 会写进 schedules.json（B08 已知问题 3），不要在真实数据目录用。
+- 开发版和正式版共用 `%LOCALAPPDATA%\e7helper`：开发版建的演练计划到了正式版还是演练（列表上标「演练」，正式版重新打开开关或改设置就会改成实跑）。
+- React StrictMode 下 effect 会执行两次：只能发起一次的事（连接 / 拉起引擎）要用 ref 防重入（见 `ConnectGate`）。
+- 测试里保存模板要 `monkeypatch.setattr(paths, "ASSETS_DIR", tmp)`，否则会写进真实的 `engine/assets`。
+- Rust 的 `canonicalize` 在 Windows 上返回带 `\\?\` 前缀的路径，日志里能看到，不影响使用。
+- pnpm 12 默认拦下依赖的 install 脚本（`npm warn allow-scripts`），目前没有影响。
+

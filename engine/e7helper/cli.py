@@ -297,8 +297,11 @@ def serve(
     _ok(f"API 服务：{url}（接口文档 {url}/docs）")
     console.print(f"  token：{token or '[yellow]未启用（--no-auth）[/]'}；已写入 {info_path}")
     config = uvicorn.Config(api, log_config=None, access_log=False, ws="websockets-sansio", lifespan="on")
+    server = uvicorn.Server(config)
+    # POST /api/shutdown（B09）：GUI 退出时让自己拉起的引擎正常关闭（急停任务、断开设备、删 api.json）
+    api.state.request_shutdown = lambda: setattr(server, "should_exit", True)
     try:
-        uvicorn.Server(config).run(sockets=[sock])
+        server.run(sockets=[sock])
     finally:
         remove_info()  # 启动失败等没走到 lifespan 关闭的情况
 

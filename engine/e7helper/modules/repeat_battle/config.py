@@ -32,22 +32,22 @@ class Tier(StrEnum):
 
 
 class RepeatBattleConfig(BaseModel):
-    hunt: Hunt = Field(Hunt.WYVERN, description="讨伐目标")
-    tier: Tier = Field(Tier.HELL, description="难度")
+    hunt: Hunt = Field(Hunt.WYVERN, description="讨伐目标", title="讨伐目标")
+    tier: Tier = Field(Tier.HELL, description="难度", title="难度")
     start_here: bool = Field(
-        False, description="从当前的准备界面开始，不导航（用于普通关卡等；托管也重开这一关）",
+        False, description="从当前的准备界面开始，不导航（用于普通关卡等；托管也重开这一关）", title="从当前准备界面开始",
     )
-    auto_battle: bool = Field(True, description="托管战斗：结算已完成的托管，并在这一关重开")
+    auto_battle: bool = Field(True, description="托管战斗：结算已完成的托管，并在这一关重开", title="托管战斗")
     auto_leaves: int = Field(
-        0, ge=0, le=100, description="重开托管最多用几片生命之叶（1 片打 4 次）；0 表示只用持有的行动力",
+        0, ge=0, le=100, description="重开托管最多用几片生命之叶（1 片打 4 次）；0 表示只用持有的行动力", title="托管最多用几片叶子",
     )
-    manual: bool = Field(True, description="手动刷关：在准备界面反复点「战斗开始」")
-    manual_runs: int = Field(0, ge=0, description="手动最多打几场，0 表示打到行动力不够")
-    refill_leaf: bool = Field(False, description="行动力不够时用生命之叶补（1 片换 80）")
-    max_leaf_refills: int = Field(1, ge=0, le=50, description="本次运行最多用叶子补几次")
-    refill_skystone: bool = Field(False, description="行动力不够时用天空石补（30 换 60；叶子优先）")
-    max_skystone_refills: int = Field(1, ge=0, le=20, description="本次运行最多用天空石补几次")
-    dry_run: bool = Field(True, description="只导航和识别，不点「结算」「开始」「战斗开始」「购买」")
+    manual: bool = Field(True, description="手动刷关：在准备界面反复点「战斗开始」", title="手动刷关")
+    manual_runs: int = Field(0, ge=0, description="手动最多打几场，0 表示打到行动力不够", title="手动最多打几场")
+    refill_leaf: bool = Field(False, description="行动力不够时用生命之叶补（1 片换 80）", title="用生命之叶补行动力")
+    max_leaf_refills: int = Field(1, ge=0, le=50, description="本次运行最多用叶子补几次", title="叶子最多补几次")
+    refill_skystone: bool = Field(False, description="行动力不够时用天空石补（30 换 60；叶子优先）", title="用天空石补行动力")
+    max_skystone_refills: int = Field(1, ge=0, le=20, description="本次运行最多用天空石补几次", title="天空石最多补几次")
+    dry_run: bool = Field(True, description="只导航和识别，不点「结算」「开始」「战斗开始」「购买」", title="演练")
 
     # ---- 内部接口（不显示在表单里）
     auto_prefer_energy: SkipJsonSchema[bool] = Field(True, description="托管时勾选「优先使用持有的行动力」")

@@ -8,3 +8,4 @@ build/
 engine/screenshots/
 node_modules/
 app/src-tauri/target/
+*.tsbuildinfo
