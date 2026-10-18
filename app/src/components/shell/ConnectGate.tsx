@@ -32,7 +32,7 @@ export function ConnectGate({ children }: { children: ReactNode }) {
   return (
     <div className="grid h-full place-items-center">
       <div className="panel flex w-[440px] flex-col items-center gap-4 px-8 py-7 text-center">
-        <div className="text-2xl font-bold tracking-wide">E7 Helper</div>
+        <div className="text-2xl font-bold tracking-wide">第七史诗助手</div>
         <Ornament className="w-full" />
         {state === "loading" ? (
           <>

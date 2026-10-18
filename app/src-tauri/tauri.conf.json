@@ -1,6 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "e7helper",
+  "productName": "第七史诗助手",
+  "mainBinaryName": "e7helper",
   "version": "0.1.0",
   "identifier": "com.e7helper.app",
   "build": {
@@ -12,7 +13,7 @@
   "app": {
     "windows": [
       {
-        "title": "E7 Helper",
+        "title": "第七史诗助手",
         "width": 1280,
         "height": 800,
         "minWidth": 1120,
@@ -38,6 +39,17 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "publisher": "e7helper",
+    "shortDescription": "第七史诗国服 · MuMu 模拟器助手",
+    "windows": {
+      "nsis": {
+        "installMode": "both",
+        "languages": [
+          "SimpChinese"
+        ],
+        "displayLanguageSelector": false
+      }
+    }
   }
 }

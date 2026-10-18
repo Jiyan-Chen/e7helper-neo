@@ -6,7 +6,8 @@ use tauri::{Manager, RunEvent};
 /// 前端启动时调用：拿到引擎的地址和 token（必要时拉起引擎，可能要几秒到几十秒）。
 #[tauri::command]
 async fn engine_connection(app: tauri::AppHandle) -> Result<Connection, String> {
-    tauri::async_runtime::spawn_blocking(move || app.state::<EngineState>().connect())
+    let resource_dir = app.path().resource_dir().ok();
+    tauri::async_runtime::spawn_blocking(move || app.state::<EngineState>().connect(resource_dir.as_deref()))
         .await
         .map_err(|e| e.to_string())?
 }

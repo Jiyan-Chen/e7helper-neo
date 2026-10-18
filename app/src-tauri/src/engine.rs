@@ -4,14 +4,18 @@
 //! - 退出应用时先请求 `POST /api/shutdown` 让引擎正常退出（急停任务、断开设备），超时再强制结束；
 //! - 连上的是别人起的服务时，退出不动它。
 //!
-//! 开发时引擎目录取编译期的 `<app>/../engine`，可以用环境变量 `E7_ENGINE_DIR` 覆盖；`E7_ENGINE_ARGS` 给 serve 附加参数，
-//! `E7_DATA_DIR` 换数据目录（引擎和这里都认）。B10 换成 PyInstaller sidecar。
+//! 拉起什么（B10）：
+//! - 打包版（release 构建）：随包的冻结引擎 `<资源目录>/engine/e7engine.exe`（PyInstaller onedir，见 engine/packaging/）；
+//! - 开发版（debug 构建）：编译期的 `<app>/../engine` 下的 venv（`.venv/Scripts/python.exe -m e7helper.cli`）；
+//! - 两种构建都可以用环境变量 `E7_ENGINE_DIR` 指定源码引擎目录（走 venv）。
+//!
+//! `E7_ENGINE_ARGS` 给 serve 附加参数，`E7_DATA_DIR` 换数据目录（引擎和这里都认）。
 
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -59,13 +63,35 @@ fn data_dir() -> PathBuf {
     base.join("e7helper")
 }
 
-fn engine_dir() -> PathBuf {
+/// 要拉起的引擎。
+#[cfg_attr(debug_assertions, allow(dead_code))]
+enum Launch {
+    /// 随包的冻结引擎 exe
+    Bundled(PathBuf),
+    /// 源码引擎目录（venv）
+    Source(PathBuf),
+}
+
+fn launch_target(resource_dir: Option<&Path>) -> Result<Launch, String> {
     if let Ok(d) = std::env::var("E7_ENGINE_DIR") {
         if !d.is_empty() {
-            return PathBuf::from(d);
+            return Ok(Launch::Source(PathBuf::from(d)));
         }
     }
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..").join("engine")
+    #[cfg(debug_assertions)]
+    {
+        let _ = resource_dir;
+        Ok(Launch::Source(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..").join("engine")))
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        let dir = resource_dir.ok_or_else(|| "找不到应用的资源目录".to_string())?;
+        let exe = dir.join("engine").join("e7engine.exe");
+        if !exe.is_file() {
+            return Err(format!("找不到引擎 {}，请重新安装", exe.display()));
+        }
+        Ok(Launch::Bundled(exe))
+    }
 }
 
 fn read_api_info() -> Option<ApiInfo> {
@@ -108,8 +134,8 @@ fn new_token() -> String {
 }
 
 impl EngineState {
-    /// 返回可用的连接；必要时拉起引擎（阻塞，最长 START_TIMEOUT）。
-    pub fn connect(&self) -> Result<Connection, String> {
+    /// 返回可用的连接；必要时拉起引擎（阻塞，最长 START_TIMEOUT）。`resource_dir` 是应用的资源目录（打包版里有引擎）。
+    pub fn connect(&self, resource_dir: Option<&Path>) -> Result<Connection, String> {
         let mut guard = self.inner.lock().map_err(|_| "内部状态损坏".to_string())?;
 
         // 1. 自己拉起的还活着
@@ -131,7 +157,7 @@ impl EngineState {
         }
 
         // 3. 自己拉起
-        let sp = spawn()?;
+        let sp = spawn(launch_target(resource_dir)?)?;
         let conn = sp.conn.clone();
         *guard = Some(sp);
         Ok(conn)
@@ -159,24 +185,34 @@ impl EngineState {
     }
 }
 
-fn spawn() -> Result<Spawned, String> {
-    let dir = engine_dir();
-    let dir = dir.canonicalize().map_err(|e| format!("找不到引擎目录 {}：{e}", dir.display()))?;
+fn spawn(target: Launch) -> Result<Spawned, String> {
     let token = new_token();
     let logs = data_dir().join("logs");
     fs::create_dir_all(&logs).map_err(|e| format!("创建日志目录失败：{e}"))?;
     let out = File::create(logs.join("engine-stdout.log")).map_err(|e| format!("创建日志文件失败：{e}"))?;
     let err = out.try_clone().map_err(|e| e.to_string())?;
 
-    let venv_python = dir.join(".venv").join("Scripts").join("python.exe");
-    let mut cmd = if venv_python.exists() {
-        let mut c = Command::new(venv_python);
-        c.args(["-m", "e7helper.cli", "serve", "--port", "0"]);
-        c
-    } else {
-        let mut c = Command::new("python");
-        c.args(["-m", "uv", "run", "e7helper", "serve", "--port", "0"]);
-        c
+    let (mut cmd, dir) = match target {
+        Launch::Bundled(exe) => {
+            let dir = exe.parent().map(Path::to_path_buf).unwrap_or_default();
+            let mut c = Command::new(&exe);
+            c.args(["serve", "--port", "0"]);
+            (c, dir)
+        }
+        Launch::Source(dir) => {
+            let dir = dir.canonicalize().map_err(|e| format!("找不到引擎目录 {}：{e}", dir.display()))?;
+            let venv_python = dir.join(".venv").join("Scripts").join("python.exe");
+            let c = if venv_python.exists() {
+                let mut c = Command::new(venv_python);
+                c.args(["-m", "e7helper.cli", "serve", "--port", "0"]);
+                c
+            } else {
+                let mut c = Command::new("python");
+                c.args(["-m", "uv", "run", "e7helper", "serve", "--port", "0"]);
+                c
+            };
+            (c, dir)
+        }
     };
     // 开发调试用：附加参数，例如 E7_ENGINE_ARGS="--no-connect --paused"（不连模拟器、计划暂停）
     if let Ok(extra) = std::env::var("E7_ENGINE_ARGS") {
@@ -184,7 +220,7 @@ fn spawn() -> Result<Spawned, String> {
     }
     cmd.current_dir(&dir)
         .env("E7_API_TOKEN", &token)
-        .env("PYTHONIOENCODING", "utf-8")
+        .env("PYTHONIOENCODING", "utf-8") // 冻结版忽略它，spec 里直接开了 UTF-8 模式
         .stdin(Stdio::null())
         .stdout(Stdio::from(out))
         .stderr(Stdio::from(err));
@@ -212,7 +248,7 @@ fn spawn() -> Result<Spawned, String> {
                 logs.join("engine-stdout.log").display()
             ));
         }
-        // api.json 里写的是真正解释器的 pid（venv 转发器的子进程），所以按 token 认自己的服务
+        // 开发版 api.json 里写的是真正解释器的 pid（venv 转发器的子进程），所以按 token 认自己的服务
         if let Some(info) = read_api_info() {
             if info.token.as_deref() == Some(token.as_str()) && healthy(&info.url) {
                 log::info!("引擎已就绪：{}（{:.1} 秒）", info.url, started.elapsed().as_secs_f32());

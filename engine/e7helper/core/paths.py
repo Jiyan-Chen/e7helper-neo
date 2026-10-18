@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
-ENGINE_ROOT = Path(__file__).resolve().parents[2]
+# 冻结版（PyInstaller onedir，B10）：资源在 sys._MEIPASS（即 e7engine/_internal/）下；源码运行时是 engine/
+FROZEN = bool(getattr(sys, "frozen", False))
+ENGINE_ROOT = Path(getattr(sys, "_MEIPASS")) if FROZEN else Path(__file__).resolve().parents[2]
 ASSETS_DIR = ENGINE_ROOT / "assets"
 
 
