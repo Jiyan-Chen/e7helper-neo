@@ -19,11 +19,13 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from datetime import datetime
+from pathlib import Path
 import numpy as np
 
 from e7helper.core.runtime.stuck import thumb_diff, thumbnail
 from e7helper.core.scene import Dismiss, Popup, Scene
-from e7helper.modules.base import TaskModule
+from e7helper.modules.base import ModuleTimer, TaskModule
 
 from . import ledger as ledger_mod
 from . import page, stats
@@ -97,6 +99,54 @@ class DailyModule(TaskModule):
                            note="邮件详情（自动关闭时点「点击关闭」，不收信）"), replace=True, first=True)
         sc.add_popup(Popup(POPUP_FOREST, ("title/forest", q + "forest/close"), Dismiss.tap(q + "forest/close"),
                            note="精灵之森领取奖励（点击关闭）"), replace=True, first=True)
+
+    # ------------------------------------------------------------ 计时与调度（B08）
+
+    @classmethod
+    def timers(cls, data_dir: Path) -> list[ModuleTimer]:
+        lg = Ledger.open(data_dir, clock=lambda: ledger_mod.utcnow())
+        now = lg.clock()
+        forest_note = "" if lg.forest_next else "下次运行时查看"
+        if lg.forest_next and lg.forest_next <= now:
+            forest_note = "已到时间"
+        return [
+            ModuleTimer("reset", "每日重置", ledger_mod.next_reset(now)),
+            ModuleTimer("forest", "精灵之森", lg.forest_next, forest_note),
+            ModuleTimer("covenant", "誓约免费召唤", None, "今天已用完" if lg.is_done("covenant") else "今天还没用完"),
+        ]
+
+    @classmethod
+    def next_due(cls, config: DailyConfig, data_dir: Path, last_success: datetime | None) -> datetime | None:
+        """持续收菜：本游戏日还没成功跑过就马上跑；之后等下一次重置，或精灵之森到时间（取较早的）。"""
+        lg = Ledger.open(data_dir, clock=lambda: ledger_mod.utcnow())
+        now = lg.clock()
+        if last_success is None or ledger_mod.game_day(last_success) != ledger_mod.game_day(now):
+            return now
+        due = [ledger_mod.next_reset(now)]
+        # forest_next 早于上次成功运行，说明上次没更新它（例如这一项失败了），不作数
+        if config.forest and lg.forest_next is not None and lg.forest_next > last_success:
+            due.append(lg.forest_next)
+        return min(due)
+
+    @classmethod
+    def routes(cls):
+        from fastapi import APIRouter
+
+        from e7helper.core.paths import module_data_dir
+
+        router = APIRouter()
+
+        @router.get("/ledger", summary="日常收取的账本（游戏日、当天做完的项、精灵之森下次时间）")
+        def get_ledger() -> dict:
+            lg = Ledger.open(module_data_dir(cls.id), clock=lambda: ledger_mod.utcnow())
+            return {
+                "day": lg.day,
+                "done": lg.done,
+                "forest_next": lg.forest_next.isoformat() if lg.forest_next else None,
+                "forest_due": lg.forest_due(),
+            }
+
+        return router
 
     # ------------------------------------------------------------ 主流程
 

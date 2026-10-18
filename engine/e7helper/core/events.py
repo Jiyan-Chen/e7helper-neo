@@ -34,6 +34,10 @@ class Topic:
     TASK = "task"  # data: dict（module / status / error …）
     SCENE = "scene"  # data: dict（scene / popup / obscured）
     ASSISTANT = "assistant"  # data: dict（module / state）
+    # B08（API 服务发布）
+    DEVICE = "device"  # data: dict（connected / name / resolution / backend / error）
+    SCHEDULE = "schedule"  # data: dict（id / module / action / reason …）
+    STATS = "stats"  # data: dict（module）：该模块的统计文件可能变了，客户端自己重新拉
 
 
 @dataclass(frozen=True)

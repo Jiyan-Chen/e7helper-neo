@@ -1,6 +1,6 @@
 # HANDOFF
 
-> 新会话从这里读起。上次更新：2026-10-18（B07 已通过）
+> 新会话从这里读起。上次更新：2026-10-18（B08 已通过）
 
 ## 当前进度
 - **B01 骨架 + 模块契约 + MuMu 设备层**：✅ 已通过，记录见 [reviews/B01.md](reviews/B01.md)。
@@ -10,7 +10,8 @@
 - **B05 竞技场 NPC**：✅ 已通过，记录见 [reviews/B05.md](reviews/B05.md)。
 - **B06 重复刷关（托管战斗 + 手动刷讨伐）**：✅ 已通过，记录见 [reviews/B06.md](reviews/B06.md)。
 - **B07 日常收取（邮件 / 精灵之森 / 誓约免费召唤）**：✅ 已通过，记录见 [reviews/B07.md](reviews/B07.md)。
-- 下一块：**B08 API 层**。
+- **B08 API 层（REST + WebSocket + 定时调度）**：✅ 已通过，记录见 [reviews/B08.md](reviews/B08.md)。
+- 下一块：**B09 GUI**。
 
 ## 已有能力
 ### 设备（B01）
@@ -97,9 +98,36 @@
   - 一项失败不影响其他项（`ItemFailed`），核对异常立即停止整个任务（`DailyAnomaly`）。
 - 离线测试用 `tests/daily_sim.py`（「全部领取」、非第一行领取、不免费的召唤、「再召唤一次」都是 DANGER）。
 
-### 模块与 CLI（B01，B03 更新）
+### API 层（B08，详见 architecture.md「API 层」和 reviews/B08.md）
+- `python -m uv run e7helper serve [--port 47800] [--index N] [--no-connect] [--paused] [--no-auth] [--token X] [--allow-host H]`
+  - 默认只监听 127.0.0.1；`--port 0` 随机端口；
+  - `{pid, url, port, token}` 写进 `<数据目录>/api.json`，正常退出（Ctrl+C / CTRL_BREAK）时删除；
+  - 启动后在后台自动连接设备（`--no-connect` 关掉），调度器同时启动。
+- **鉴权**：除 `GET /api/health`、`/docs` 外都要 token（`Authorization: Bearer` 或 `?token=`），并校验 Host 头；日志里的 `token=` 自动打码。
+- **核心路由**（`/api`）：
+  - `status`、`logs`
+  - `device`（`connect` / `disconnect` / `instances` / `screenshot`）、`scene`
+  - `modules` / `modules/{id}`（含 `config_schema`）/ `config`（GET/PUT，存 `modules/<id>/config.json`）/ `stats` / `timers`
+  - `tasks`（POST → 202，409 busy）/ `current` / `stop` / `history`
+  - `assistants`
+  - `schedules`（CRUD + `run`）、`PUT /scheduler {paused}`
+  - 错误格式 `{"error":{"code","message","detail"}}`
+- **模块子路由**：`routes()` 挂到 `/api/modules/<id>/`，不能占用 `config` / `stats` / `timers`。已有 `GET /api/modules/daily/ledger`。
+- **契约新增**：`Module.timers(data_dir) -> list[ModuleTimer]`（GUI 倒计时）、`TaskModule.next_due(config, data_dir, last_success)`（「按模块时间」调度）。daily 都实现了。
+- **WebSocket**：
+  - `/ws?token=`：先推 `hello`；请求 `{"id","op"}`，每个都有 `reply`。操作有 subscribe / unsubscribe / start_task / stop_task / run_schedule / pause / resume / status / ping。事件 `{"type":"event","topic","time","data"}`，主题有 log / task / scene / assistant / device / schedule / stats。
+  - `/ws/frames?token=&fps&scale&quality`：二进制 JPEG。
+- **调度**（`<数据目录>/schedules.json`）：
+  - 触发方式：`interval`（从上次结束算）、`daily`（北京时间 HH:MM）、`module`（`next_due` + 最短间隔，失败时退避）；
+  - 规则：到点忙时排队（`max_wait_minutes` 默认 30），或按计划设置跳过；补跑一次；连续失败 3 次停用；
+  - **计划的 config 是完整快照，调度器不改 dry_run**：要实跑必须在计划里写 `dry_run:false`。
+- **daily 两种用法**（B08 用户意见）：单次 = `POST /tasks`；持续收菜 = `module` 触发的计划（重置后跑一次，精灵之森到时间再跑）。repeat_battle 托管 = `interval` 计划，config 写 `manual:false`。
+- 实测：经 WS 急停 daily，0.1 秒内退出；daily dry-run 一次约 23 秒；空闲时帧频道 4fps、半尺寸 JPEG 约 64KB 一帧。
+- 测试：`tests/test_api.py`、`tests/test_scheduler.py`；`tests/api_fakes.py` 提供只截图不点击的假模块和 `make_engine`（GameSim 当设备）。
+
+### 模块与 CLI（B01，B03 / B08 更新）
 - 模块：继承 `TaskModule` / `AssistantModule`，放到 `e7helper/modules/<id>/` 就会被自动发现。参考 `modules/hello/`。
-- CLI：`doctor`、`bench`、`screenshot`、`tap`、`modules`、`run <id> [-c JSON] [-t 超时]`（经 runtime）、`scene [-f 图片] [--dismiss] [--watch]`、`capture`（新增 `--tap`）、`match`、`ocr`。
+- CLI：`doctor`、`bench`、`screenshot`、`tap`、`modules`、`run <id> [-c JSON] [-t 超时]`（经 runtime）、`scene [-f 图片] [--dismiss] [--watch]`、`capture`（新增 `--tap`）、`match`、`ocr`、`serve`（B08）。
 
 ## 关键决策
 - 基准分辨率 1600×900。本机 MuMu 已经是 1600×900（平板模式 tablet.2）。
@@ -117,17 +145,30 @@
 - B06：托管 + 手动放在同一个模块（任务互斥，拆开就不能同时跑）；不用快速战斗；异界（专用代币）和迷宫不做；开托管时勾选「优先使用持有的行动力」。
 - B07：日常只做邮件（剩余一天以内）、精灵之森（领取 + 照料）、誓约免费召唤（方案 A：优先免费十连，用完为止）；派遣（轮换活动）、骑士团（将改版）、每日任务 / 通行券不做。每日重置 = GMT-7 中午 12 点 = 北京时间 3 点。顶栏货币核对保留（用户确认）。
 - 实跑阶段的录屏可以由我自行录（B07 用户确认）；采 fixture 时仍按用户说「开始 / 好了」。
+- B08：
+  - 鉴权用随机 token + Host 校验；调度到点有任务时排队，带等待上限；模板采集 API 推迟到 B09（均为用户选择）。
+  - daily 由用户选择单次或持续收菜，GUI 显示模块计时（用户意见）。
+  - 默认端口 47800。
 
-## 下一块（B08 API 层）要做
-ROADMAP：FastAPI 核心路由 + 模块子路由自注册 + WebSocket（日志、状态、帧、统计）；任务定时调度（按间隔反复启动模块）。验收：接口测试；能用 WS 控制任务启停。
-1. 先和用户确认范围：路由清单（设备、模块列表 / schema、任务启停 / 状态、统计、模板采集要不要先做）、WS 频道和消息格式、定时调度的形式（间隔 / 每天固定时刻 / 重置后）、监听地址和端口、要不要鉴权。
-2. 已知的调度需求：
-   - `repeat_battle` 只开托管时按间隔反复启动（B06 用户确认）；
-   - `daily` 每天重置后（北京时间 3 点后）跑一次，精灵之森按 `ledger.json` 的 `forest_next` 再跑（B07）；
-   - 任务互斥：调度到点时有任务在跑要排队或跳过（`RuntimeBusy`）。
-3. `Module.routes()` 已在契约里（返回 `APIRouter | None`，挂到 `/api/modules/<id>/`）；事件总线主题 `frame` / `log` / `task` / `scene` / `assistant` 已有，WS 订阅它们即可。
-4. 入口必须先 `isolate_native_stdout()`；依赖装 FastAPI / uvicorn 时用华为云镜像。
-5. 不操作游戏的部分优先做；需要真机验证时（例如经 API 启动 `daily` dry-run）先征得用户同意。
+## 下一块（B09 GUI）要做
+ROADMAP：Tauri 2 + React + TS + Vite + Tailwind + shadcn/ui；外壳 + 模块注册表 + JSON Schema 自动表单 + 日志、统计、模板采集页。验收：`pnpm tauri dev` 全流程可用。
+1. **先和用户确认**：
+   - 页面清单和布局：设备栏、任务 / 模块页、日志、统计、计划、模板采集；
+   - 引擎怎么启动：开发时手动 `serve` 还是由 Tauri 拉起 sidecar；token 用 `E7_API_TOKEN` 传还是读 api.json；
+   - 模块自定义页面的注册方式（按 module id 挂载）；
+   - 时间格式要不要统一：任务记录 / 日志是 unix 秒，计划 / 计时是 ISO UTC。
+2. **先检查开发环境**：Node、pnpm、Rust、WebView2 有没有装，版本是否够。本机直连 PyPI 很慢，npm 和 crates 大概率也慢，要先问用户用哪个镜像（例如 npmmirror、rsproxy），不要自己改全局配置。
+3. 模板采集页需要后端接口，B08 没做。可能需要：模板列表、按矩形保存模板（写 assets 目录）、在当前帧上测试匹配。要和用户一起定，复用 `TemplateStore` / `capture` 的回验逻辑。
+4. **表单**：
+   - 用 `GET /api/modules/{id}` 的 `config_schema` 生成。内部字段已经用 `SkipJsonSchema` 隐藏。
+   - 保存走 `PUT /api/modules/{id}/config`（整体替换）。
+   - `dry_run` 默认开，界面上要醒目。
+5. **daily 页**：
+   - 显示 `/api/modules/daily/timers` 的倒计时；
+   - 「单次收菜」= `POST /tasks`；
+   - 「持续收菜」开关 = 创建 / 启用 / 停用一条 `module` 触发的计划（`PATCH /schedules/{id} {"enabled":..}`）。
+6. CORS 已允许 `http://tauri.localhost`、`tauri://localhost`、`http://localhost:1420`。前端端口不是 1420 的话要改 `app.py` 的 `DEFAULT_CORS_ORIGINS`。
+7. 不操作游戏的部分优先做。经 GUI 启动任务的真机验证要先征得用户同意，而且只跑 dry-run。
 
 ## 坑
 - **「点击关闭」到处都有**（竞技场战斗记录、托管结算完毕、精灵之森奖励、邮件详情框）：模块弹窗要加背景场景的标题区分（B07）。
@@ -170,3 +211,7 @@ ROADMAP：FastAPI 核心路由 + 模块子路由自注册 + WebSocket（日志�
 - **讨伐的难度卡片随地下城变化**（后出的地下城只有「讨伐异界」），不能按固定位置点。
 - 结算界面的「确认」入场动画期间点击会被吞，补点即可（每场多约 2 秒）。
 - **不要按固定坐标点顶栏**：没有托管时时钟图标不存在，原位置变成天空石的「+」（B06 误点进过天空石充值页，没有购买）。先定位图标。
+- **`find_install` 找不到显式路径时会继续找注册表和常见路径**：`--mumu-root` 指向不存在的目录**拦不住**连接真机。不想碰设备时用 `serve --no-connect`（B08 踩过：冒烟测试意外连上 MuMu 截了一张图）。
+- **uvicorn 关闭后会重新抛出收到的信号**：Windows 上 SIGBREAK 的默认处理是直接结束进程，`server.run()` 之后的代码不会执行。退出时的清理放在 lifespan 关闭阶段（`create_app(on_shutdown=...)`）。被强制结束（TerminateProcess）时 api.json 会残留，读取方要用 pid 或 `/api/health` 确认。
+- **Starlette TestClient 的 WS 地址默认是 `ws://testserver`**，过不了 Host 校验：测试里用绝对地址 `ws://127.0.0.1:47800/...`。TestClient 还会把默认的 `Authorization` 头带进 WS 请求。
+- WS 测试里事件可能比回复先到，收消息时不要丢掉不匹配的消息（见 `test_api._recv_until`）。

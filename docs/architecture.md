@@ -44,8 +44,10 @@ class Module(ABC):
     def setup(self) -> None               # 钩子：加载模板/数据
     @classmethod config_schema() -> dict  # JSON Schema，前端用来自动生成表单
     @classmethod routes() -> APIRouter | None  # 可选，B08 挂载到 /api/modules/<id>/
+    @classmethod timers(data_dir) -> list[ModuleTimer]  # 可选（B08）：GUI 显示的倒计时
 
 class TaskModule(Module):      def run(self) -> None              # 会操作游戏；用 self.ctl 操作
+    @classmethod next_due(config, data_dir, last_success) -> datetime | None  # 可选（B08）：「按模块时间」调度
 class AssistantModule(Module): def on_frame(self, frame) -> None  # 只读帧，不得点击
 ```
 `ModuleContext` 提供：`device`、`logger`、`assets_dir`、`data_dir`、`stop_event`、`extras`、`vision`（B02）、`events`、`controller`（B03）。后续块只会追加字段（storage、data），不会修改已有字段。模块里用 `self.vision` / `self.ctl` / `self.events` 取对应能力（未设置时报错）。
@@ -81,7 +83,7 @@ python -m uv run e7helper ocr [-f x.png] [-r x,y,w,h] [--line | --number]
 进程内发布/订阅。`EventBus.subscribe(topic, callback, threaded=False, maxsize=1)`，`*` 订阅全部主题。
 - 同步订阅在发布者线程里直接调用；`threaded=True` 时在独立线程里处理，队列满时丢最旧的（帧用 maxsize=1，只看最新帧）。
 - 订阅者抛异常只记日志，不影响发布者和其他订阅者。
-- 内置主题 `Topic`：`frame`（BGR 帧）、`log`（`LogBridge` 把 logging 记录转成事件）、`task`（任务开始/结束）、`scene`（场景变化）、`assistant`（助手挂载/卸下）。B08 的 WebSocket 会订阅这些主题。
+- 内置主题 `Topic`：`frame`（BGR 帧）、`log`（`LogBridge` 把 logging 记录转成事件）、`task`（任务开始/结束）、`scene`（场景变化）、`assistant`（助手挂载/卸下）；B08 新增 `device`（连接状态）、`schedule`（计划触发 / 排队 / 跳过 / 停用）、`stats`（任务结束，该模块的统计可能变了）。API 的 WebSocket 转发除 `frame` 以外的全部主题。
 
 ## 场景与弹窗 `e7helper.core.scene`（B03）
 | 文件 | 职责 |
@@ -136,6 +138,66 @@ CLI：
 python -m uv run e7helper run <id> [-c JSON] [-t 超时秒] [-d 助手运行秒]   # 经 runtime 运行
 python -m uv run e7helper scene [-f 图片 ...] [--dismiss] [--watch]        # 识别场景/弹窗、关闭弹窗、持续观察
 ```
+
+## API 层 `e7helper.api`（B08）
+```
+python -m uv run e7helper serve [--port 47800] [--index N] [--no-connect] [--paused] [--no-auth] [--token X] [--allow-host H]
+```
+| 文件 | 职责 |
+|---|---|
+| `engine.py` | `Engine`：与 HTTP 无关的后台状态。设备连接 / 断开（自己持有 `EventBus` 和 `LogBridge`，设备重连不丢订阅）、`Runtime`（`bridge_logs=False`）、启停任务（记录来源，结束后写 `tasks.jsonl` 并发布 `stats`）、保存的模块配置、统计 / 计时读取、日志缓存（2000 条）。错误统一抛 `ApiError(status, code, message)` |
+| `scheduler.py` | `Scheduler`：计划的增删改查和触发（见下文），一个后台线程每秒 `tick()` |
+| `auth.py` | 随机 token（`Authorization: Bearer` 或 `?token=`）、Host 头校验中间件、日志里的 `token=` 打码 |
+| `ws.py` | `/ws` 控制 + 事件频道，`/ws/frames` 帧频道 |
+| `app.py` | `create_app(engine, token=...)`：核心路由、模块子路由挂载、CORS、lifespan（启动时后台自动连接设备、启动调度器；退出时急停任务、关设备） |
+
+- **启动**：`serve` 先绑定端口（`--port 0` 随机），把 `{pid, url, port, token}` 写进 `<数据目录>/api.json`（正常退出时删除），再启动 uvicorn。默认只监听 127.0.0.1。
+- **鉴权**：除 `GET /api/health`、`/docs`、`/openapi.json` 外都要 token。Host 头必须是 localhost / 127.0.0.1 / ::1（或 `--allow-host` 指定的），防 DNS rebinding。WebSocket 不受 CORS 限制，所以 token 是必须的。
+- **错误格式**：`{"error": {"code": "...", "message": "...", "detail": ...}}`。常见：404 `unknown_module` / `unknown_schedule`，409 `busy`（有任务在跑 / 不能断开），422 `invalid_config`（`detail` 是 pydantic 的错误列表），503 `no_device`。请求体本身的校验错误是 FastAPI 默认的 422 格式。
+
+### 核心路由（前缀 `/api`）
+| 路由 | 说明 |
+|---|---|
+| `GET /health` | 不需要 token |
+| `GET /status` | 设备、当前任务、助手、调度器概况（和 WS 的 hello 相同） |
+| `GET /logs?limit&level&since` | 最近的日志 |
+| `GET /device`、`POST /device/connect {index?}`、`POST /device/disconnect`、`GET /device/instances` | 设备状态 / 连接 / 断开（有任务时 409）/ MuMu 实例列表 |
+| `GET /device/screenshot?format=png\|jpeg&scale&quality`、`GET /scene` | 只读：截图、识别当前场景和弹窗（不关弹窗） |
+| `GET /modules`、`GET /modules/{id}` | 模块列表；单个模块含 `config_schema` 和保存的配置 |
+| `GET/PUT /modules/{id}/config` | 保存的配置（`modules/<id>/config.json`，整体替换、补全默认值） |
+| `GET /modules/{id}/stats?limit`、`GET /modules/{id}/timers` | `stats.json` + `history.jsonl` 最近 N 行；模块计时 |
+| `POST /tasks {module, config?, timeout?}` → 202 | 不给 config 用保存的配置；有任务在跑 409 |
+| `GET /tasks/current`、`POST /tasks/stop`、`GET /tasks/history?limit&module` | 当前任务 / 急停 / 记录（新的在前） |
+| `GET /assistants`、`POST /assistants/{id}`、`DELETE /assistants/{id}` | 助手模块挂载 / 卸下 |
+| `GET/POST /schedules`、`GET/PATCH/DELETE /schedules/{id}`、`POST /schedules/{id}/run`、`PUT /scheduler {paused}` | 定时调度 |
+
+**模块子路由**：`Module.routes()` 返回的路由挂到 `/api/modules/<id>/`，同样要 token。第一段路径不能是 `config` / `stats` / `timers` 或路径参数，否则启动时报 `ModuleRegistryError`。fastapi 在 `routes()` 里再导入。已有：`GET /api/modules/daily/ledger`。
+
+### WebSocket
+- `/ws?token=`：连上后先收到 `{"type":"hello","data":<status>}`。请求 `{"id", "op", ...}`，每个都有回复 `{"type":"reply","id","ok","data"|"error"}`：
+  - `ping`、`status`
+  - `subscribe {topics, log_level?}` / `unsubscribe {topics?}`：默认什么都不订阅，`*` = 除帧以外全部
+  - `start_task {module, config?, timeout?}`、`stop_task`
+  - `run_schedule {schedule}`、`pause_scheduler`、`resume_scheduler`
+
+  事件格式：`{"type":"event","topic","time","data"}`。每个客户端的事件队列 1000 条，满了丢最旧的；回复单独排队，不丢。
+- `/ws/frames?token=&fps=2&scale=0.5&quality=70`：二进制 JPEG。有任务时转发任务截图（节流）；任务 1 秒没截图或空闲时自己截图（只读）。设备没连上时每秒发一条文本 `{"type":"status","connected":false}`。
+
+### 定时调度
+计划 = 用户部分 `ScheduleSpec`（`module`、`name`、`enabled`、`trigger`、`config`、`timeout`、`on_busy`、`max_wait_minutes`）+ 调度器维护的 `state`（`next_run`、`last_*`、`failures`、`queued_since`、`running_task`），存在 `<数据目录>/schedules.json`。
+- 触发方式：
+  - `{"type":"interval","minutes":30}`：新建 / 重新启用后立即跑，之后从上次**结束**算起；
+  - `{"type":"daily","at":"03:05"}`：北京时间（固定 UTC+8）；
+  - `{"type":"module","min_interval_minutes":10}`：由 `TaskModule.next_due()` 决定，至少隔 min_interval，连续失败时按 2 的幂增大。
+- **配置是完整快照**：新建时不给 `config` 就复制模块保存的配置。调度器不改 `dry_run`，所以计划要实跑，必须在计划里写 `dry_run: false`。
+- **补跑**：错过的时刻启动后只补一次。
+- **忙时**：`on_busy="queue"`（默认）排队，空闲后按入队先后启动，超过 `max_wait_minutes`（默认 30）放弃这一次；`"skip"` 直接跳过。
+- **设备**：到点时设备没连上，先试连一次，连不上就跳过。
+- **失败**：failed / stuck / timeout 连续 3 次自动停用；急停不计。
+- **总开关**：`PUT /scheduler {"paused": true}` 只停触发，不影响正在跑的任务。
+- 已知需求：
+  - `repeat_battle` 托管：`interval`，config `{"manual": false, "auto_battle": true, "dry_run": false}`；
+  - `daily` 持续收菜：`module`（`next_due` = 本游戏日没成功跑过就马上跑，否则取下一次重置和 `forest_next` 中较早的）；单次收菜直接 `POST /tasks`。
 
 ## 已有模块
 ### `secret_shop` 刷神秘商店（B04）

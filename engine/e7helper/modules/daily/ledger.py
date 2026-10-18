@@ -34,6 +34,13 @@ def game_day(t: datetime) -> date:
     return (t.astimezone(UTC) + timedelta(hours=24 - RESET_UTC_HOUR)).date()
 
 
+def next_reset(t: datetime) -> datetime:
+    """t 之后（不含 t）的下一次每日重置（UTC 19:00），带时区。"""
+    t = t.astimezone(UTC)
+    reset = t.replace(hour=RESET_UTC_HOUR, minute=0, second=0, microsecond=0)
+    return reset if reset > t else reset + timedelta(days=1)
+
+
 class Ledger:
     def __init__(self, path: Path, clock: Callable[[], datetime] = utcnow):
         self.path = path

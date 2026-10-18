@@ -115,7 +115,9 @@ class Runtime:
         frame_interval: float = 0.5,
         debug_root: Path | None = None,
         seed: int | None = None,
+        bridge_logs: bool = True,
     ):
+        """bridge_logs=False：调用方（例如 API 服务）已经自己把日志接到 bus 上，这里不再重复桥接。"""
         name = device.name
         with _claimed_lock:
             if name in _claimed:
@@ -145,8 +147,9 @@ class Runtime:
             self.bus.subscribe(Topic.LOG, lambda e: self.recent_logs.append(e.data), name="runtime:recent_logs"),
             self.bus.subscribe(Topic.FRAME, self._on_frame, name="runtime:frame_clock"),
         ]
-        self._log_bridge = LogBridge(self.bus, logging.DEBUG)
-        logging.getLogger().addHandler(self._log_bridge)
+        self._log_bridge = LogBridge(self.bus, logging.DEBUG) if bridge_logs else None
+        if self._log_bridge is not None:
+            logging.getLogger().addHandler(self._log_bridge)
 
     # ------------------------------------------------------------ 生命周期
 
@@ -162,7 +165,8 @@ class Runtime:
         self._closed.set()
         if self._pump is not None:
             self._pump.join(timeout)
-        logging.getLogger().removeHandler(self._log_bridge)
+        if self._log_bridge is not None:
+            logging.getLogger().removeHandler(self._log_bridge)
         for s in self._subs:
             s.unsubscribe()
         if self._own_bus:

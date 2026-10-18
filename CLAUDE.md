@@ -37,6 +37,7 @@ python -m uv sync
 python -m uv run pytest                        # 单元测试
 E7_DEVICE_TESTS=1 python -m uv run pytest -m device   # 真机测试（需 MuMu 运行）
 python -m uv run e7helper doctor | bench | screenshot | tap X Y | modules | run <id>
+python -m uv run e7helper serve [--no-connect]       # API 服务（B08），端口和 token 见 %LOCALAPPDATA%\e7helper\api.json
 ```
 
 ## 本机环境（开发者）

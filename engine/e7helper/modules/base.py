@@ -13,6 +13,7 @@ import logging
 import threading
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
@@ -56,6 +57,19 @@ class ModuleContext:
     controller: Controller | None = None
 
 
+@dataclass(frozen=True)
+class ModuleTimer:
+    """模块对外公布的计时（B08），GUI 用来显示倒计时，例如「每日重置」「精灵之森」。
+
+    at 为带时区的时间；None 表示没有确定的时间（note 里说明原因，例如「今天已完成」「下次运行时查看」）。
+    """
+
+    key: str
+    label: str
+    at: datetime | None = None
+    note: str = ""
+
+
 class Module(ABC):
     id: ClassVar[str]
     name: ClassVar[str]
@@ -78,8 +92,17 @@ class Module(ABC):
 
     @classmethod
     def routes(cls) -> APIRouter | None:
-        """可选：模块自定义 HTTP 路由，挂载在 /api/modules/<id>/ 下（B08 接入）。"""
+        """可选：模块自定义 HTTP 路由，挂载在 /api/modules/<id>/ 下（B08）。
+
+        路径的第一段不能是 config / stats / timers（核心路由占用）。路由里需要模块数据时用
+        `core.paths.module_data_dir(cls.id)`；fastapi 在 routes() 里再导入，免得拖慢 CLI 启动。
+        """
         return None
+
+    @classmethod
+    def timers(cls, data_dir: Path) -> list[ModuleTimer]:
+        """可选（B08）：模块的计时，例如下一次每日重置、精灵之森下次可领。只读文件，不碰设备。"""
+        return []
 
     @property
     def device(self) -> Device:
@@ -116,6 +139,19 @@ class TaskModule(Module):
     @abstractmethod
     def run(self) -> None:
         """执行任务。应定期检查 self.stopped 以响应急停。"""
+
+    @classmethod
+    def next_due(cls, config: BaseModel, data_dir: Path, last_success: datetime | None) -> datetime | None:
+        """可选（B08）：「按模块时间」的计划用它决定下一次运行时间（带时区）。
+
+        last_success 是这条计划上一次成功结束的时间（没有为 None）。返回 None 表示暂时不需要运行。
+        只读文件，不碰设备；调度器会定期调用，并另外保证两次运行之间的最短间隔。
+        """
+        return None
+
+    @classmethod
+    def supports_next_due(cls) -> bool:
+        return cls.next_due.__func__ is not TaskModule.next_due.__func__
 
 
 class AssistantModule(Module):

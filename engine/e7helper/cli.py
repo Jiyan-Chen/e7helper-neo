@@ -236,6 +236,73 @@ def run(
         raise typer.Exit(1)
 
 
+@app.command()
+def serve(
+    host: Annotated[str, typer.Option("--host", help="监听地址；默认只监听本机")] = "127.0.0.1",
+    port: Annotated[int, typer.Option("--port", "-p", help="端口；0 表示随机（实际端口写进 api.json）")] = 47800,
+    index: IndexOpt = None,
+    mumu_root: RootOpt = None,
+    token: Annotated[Optional[str], typer.Option("--token", envvar="E7_API_TOKEN",
+                                                 help="指定 token；默认每次启动随机生成")] = None,
+    no_auth: Annotated[bool, typer.Option("--no-auth", help="不校验 token（开发用；Host 校验仍然生效）")] = False,
+    allow_host: Annotated[Optional[list[str]], typer.Option("--allow-host", help="额外允许的 Host 名，可多次指定")] = None,
+    paused: Annotated[bool, typer.Option("--paused", help="调度器以暂停状态启动（会写进 schedules.json）")] = False,
+    no_connect: Annotated[bool, typer.Option("--no-connect", help="启动时不自动连接设备")] = False,
+) -> None:
+    """启动 API 服务（REST + WebSocket + 定时调度）。端口和 token 写进 <数据目录>/api.json。"""
+    import os
+    import socket
+
+    import uvicorn
+
+    from e7helper.api import Engine, create_app, generate_token
+    from e7helper.api.auth import LOCAL_HOSTS, RedactTokenFilter
+    from e7helper.api.engine import default_device_factory, write_json_atomic
+    from e7helper.core.paths import data_dir
+
+    family = socket.AF_INET6 if ":" in host else socket.AF_INET
+    sock = socket.socket(family, socket.SOCK_STREAM)
+    try:
+        sock.bind((host, port))
+    except OSError as e:
+        _fail(f"无法监听 {host}:{port}：{e}")
+        raise typer.Exit(1)
+    port = sock.getsockname()[1]
+    token = None if no_auth else (token or generate_token())
+    allowed = set(LOCAL_HOSTS) | {h.lower() for h in allow_host or ()}
+    if host not in ("0.0.0.0", "::"):
+        allowed.add(host.lower())
+
+    for name in ("uvicorn.error", "uvicorn.access"):
+        logging.getLogger(name).addFilter(RedactTokenFilter())
+    engine = Engine(device_factory=default_device_factory(mumu_root), index=index)
+    info_path = data_dir() / "api.json"
+    pid = os.getpid()
+
+    def remove_info() -> None:
+        try:
+            if json.loads(info_path.read_text(encoding="utf-8")).get("pid") == pid:
+                info_path.unlink()
+        except (OSError, ValueError):
+            pass
+
+    api = create_app(engine, token=token, allowed_hosts=frozenset(allowed), autoconnect=not no_connect,
+                     on_shutdown=[remove_info])
+    if paused:
+        api.state.services.scheduler.set_paused(True)
+    url_host = f"[{host}]" if ":" in host else host
+    url = f"http://{url_host}:{port}"
+    write_json_atomic(info_path, {"pid": pid, "url": url, "host": host, "port": port, "token": token,
+                                  "started": datetime.now().isoformat(timespec="seconds")})
+    _ok(f"API 服务：{url}（接口文档 {url}/docs）")
+    console.print(f"  token：{token or '[yellow]未启用（--no-auth）[/]'}；已写入 {info_path}")
+    config = uvicorn.Config(api, log_config=None, access_log=False, ws="websockets-sansio", lifespan="on")
+    try:
+        uvicorn.Server(config).run(sockets=[sock])
+    finally:
+        remove_info()  # 启动失败等没走到 lifespan 关闭的情况
+
+
 def _print_state(label: str, state: SceneState) -> None:
     color = "green" if state.clear and state.scene else ("yellow" if state.popup else "red")
     extra = "（画面被压暗）" if state.obscured else ""

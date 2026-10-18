@@ -4,6 +4,7 @@ from .base import (
     Module,
     ModuleContext,
     ModuleKind,
+    ModuleTimer,
     TaskModule,
 )
 from .registry import ModuleRegistryError, discover
@@ -15,6 +16,7 @@ __all__ = [
     "ModuleContext",
     "ModuleKind",
     "ModuleRegistryError",
+    "ModuleTimer",
     "TaskModule",
     "discover",
 ]

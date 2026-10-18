@@ -11,6 +11,9 @@ dependencies = [
     "rich>=13.7",
     "rapidocr>=3.10.0",
     "onnxruntime>=1.31.0",
+    "fastapi>=0.143.3",
+    "uvicorn>=0.30",
+    "websockets>=17.2",
 ]
 
 [project.scripts]
@@ -19,7 +22,10 @@ e7helper = "e7helper.cli:app"
 # 第三方模块通过 entry-point 组 "e7helper.modules" 注册，见 docs/architecture.md
 
 [dependency-groups]
-dev = ["pytest>=8.2"]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=8.2",
+]
 
 [build-system]
 requires = ["hatchling"]
