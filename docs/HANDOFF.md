@@ -1,6 +1,6 @@
 # HANDOFF
 
-> 新会话从这里读起。上次更新：2026-10-16（B06 已通过）
+> 新会话从这里读起。上次更新：2026-10-18（B07 已通过）
 
 ## 当前进度
 - **B01 骨架 + 模块契约 + MuMu 设备层**：✅ 已通过，记录见 [reviews/B01.md](reviews/B01.md)。
@@ -9,7 +9,8 @@
 - **B04 刷神秘商店**：✅ 已通过，记录见 [reviews/B04.md](reviews/B04.md)。
 - **B05 竞技场 NPC**：✅ 已通过，记录见 [reviews/B05.md](reviews/B05.md)。
 - **B06 重复刷关（托管战斗 + 手动刷讨伐）**：✅ 已通过，记录见 [reviews/B06.md](reviews/B06.md)。
-- 下一块：**B07 日常收取**。
+- **B07 日常收取（邮件 / 精灵之森 / 誓约免费召唤）**：✅ 已通过，记录见 [reviews/B07.md](reviews/B07.md)。
+- 下一块：**B08 API 层**。
 
 ## 已有能力
 ### 设备（B01）
@@ -26,11 +27,12 @@
 - 模板：`engine/assets/<module_id>/cn/<name>.png` + `.json`。
   - 查找顺序：模块自己的 → `common`。
   - 已有模板：
-    - `common`：`back`、`top/skystone`、`top/gold`、`dialog/cancel`、`dialog/confirm`、`lobby/secret_shop`（带 `tap`）、`lobby/shop`；B05 新增 `lobby/arena`、`top/flag`、`arena/mode_arena`；B06 新增 `lobby/battle`、`title/battle`、`title/prep`、`top/energy`（行动力）、`top/auto_clock`（托管图标表盘）；B03 新增 `title/secret_shop`、`title/shop`、`title/arena`、`title/sanctuary`、`popup/notice`、`popup/network_error`、`popup/network_retry`
+    - `common`：`back`、`top/skystone`、`top/gold`、`dialog/cancel`、`dialog/confirm`、`lobby/secret_shop`（带 `tap`）、`lobby/shop`；B05 新增 `lobby/arena`、`top/flag`、`arena/mode_arena`；B06 新增 `lobby/battle`、`title/battle`、`title/prep`、`top/energy`（行动力）、`top/auto_clock`（托管图标表盘）；B03 新增 `title/secret_shop`、`title/shop`、`title/arena`、`title/sanctuary`、`popup/notice`、`popup/network_error`、`popup/network_retry`；B07 新增 `lobby/sanctuary`（带 `tap`）、`lobby/summon`、`top/mail`、`title/mail`、`title/forest`、`title/summon`
     - `secret_shop`：`title`、`refresh`、`buy`；B04 新增 `coin`、`dialog/buy_title`、`dialog/buy_ok`、`dialog/refresh_text`、`item/covenant`、`item/mystic`
     - `arena_npc`（B05）：`tab/npc`、`npc/*`、`prep/*`、`battle/*`、`result/*`、`record/*`、`buy/*`，共 21 个
     - `repeat_battle`（B06）：`menu/hunt`、`hunt/header`、`prep/*`、`auto/*`、`battle/*`、`clear`、`result/*`、`after/*`、`energy/*`，共 27 个
-- fixtures：`engine/tests/fixtures/`（B06 后约 86MB）。B06 新增 36 张 `rb_*`（讨伐导航、准备界面各状态、托管各框、战斗、CLEAR、结算、战后、行动力不足；期望结果在 `tests/test_repeat_battle.py`）。此前的包括 `lobby`、`secret_shop`、`secret_shop_scrolled`、`secret_shop_refresh_confirm`；B05 新增 17 张 `arena_*`（模式选择外的竞技场各界面、战斗中、两种结算、补旗框三种状态）；B04 新增 `secret_shop_relist(_scrolled)`、`secret_shop_buy_confirm`、`secret_shop_sold`、`secret_shop_bought_toast`；B03 新增 `shop`、`arena`、`arena_notice`、`sanctuary`、`sanctuary_help`、`lobby_exit_confirm`、`lobby_network_error`。模板的期望结果在 `tests/test_vision_fixtures.py`，场景的期望结果在 `tests/test_scene.py`。
+    - `daily`（B07）：`sanctuary/forest`、`forest/*`、`mail/*`、`summon/*`，共 18 个
+- fixtures：`engine/tests/fixtures/`（B07 后约 137MB）。B07 新增 35 张 `daily_*`（大厅、圣域白天 / 夜晚、精灵之森各状态和奖励框、邮件列表 / 详情框 / 领取后、召唤页、誓约页 21/21 · 11/21 · 1/21 · 用完 · 带光效、召唤动画、十连结果、单抽结果；期望结果在 `tests/test_daily.py`）。B06 新增 36 张 `rb_*`（讨伐导航、准备界面各状态、托管各框、战斗、CLEAR、结算、战后、行动力不足；期望结果在 `tests/test_repeat_battle.py`）。此前的包括 `lobby`、`secret_shop`、`secret_shop_scrolled`、`secret_shop_refresh_confirm`；B05 新增 17 张 `arena_*`（模式选择外的竞技场各界面、战斗中、两种结算、补旗框三种状态）；B04 新增 `secret_shop_relist(_scrolled)`、`secret_shop_buy_confirm`、`secret_shop_sold`、`secret_shop_bought_toast`；B03 新增 `shop`、`arena`、`arena_notice`、`sanctuary`、`sanctuary_help`、`lobby_exit_confirm`、`lobby_network_error`。模板的期望结果在 `tests/test_vision_fixtures.py`，场景的期望结果在 `tests/test_scene.py`。
 - CLI：
   - `capture <module> <name>`：弹窗框选，或用 `-f 文件 -r x,y,w,h` 指定
   - `match <module> [names] [-f] [-a]`
@@ -84,6 +86,17 @@
   - 状态图标的红点要按图标亮度归一化，并用多帧排除转动的光效（`auto_state` + `dots_match`）；
   - 离线测试用 `tests/rb_sim.py`（战后界面一直在动、弹窗淡出、点到「推荐配置」= DANGER）。
 
+### 日常收取 `daily`（B07，详见 architecture.md「已有模块」和 reviews/B07.md）
+- `python -m uv run e7helper run daily`：默认 **dry-run**（三项都进去识别，不点领取 / 照料 / 召唤 / 收信）
+- 实跑：`-c '{"dry_run": false}'`；表单只有 `mail`、`forest`、`covenant`、`dry_run`；内部字段 `mail_max_hours`（默认 24）、`mail_max_claims`、`covenant_max`、`force`（忽略账本）
+- 按天记账：`%LOCALAPPDATA%\e7helper\modules\daily\ledger.json`（游戏日北京时间 3 点切换；誓约当天用完就不进去；精灵之森按最短倒计时记下次时间）；统计 `history.jsonl`、`stats.json`
+- 实测：全部三项约 20–35 秒；免费十连约 7–10 秒，单抽约 15 秒（动画不能跳过）
+- 可以复用的做法：
+  - 「有没有花东西」对比**顶栏货币区域的画面**，前后各两帧、两两都变才算（排除背景光效；见 `page.changed_pixels_all`）；
+  - 点了按钮后弹出的确认 / 详情框要核对内容再点（邮件详情框核对剩余时间）；认不出的静止画面就停，不乱点；
+  - 一项失败不影响其他项（`ItemFailed`），核对异常立即停止整个任务（`DailyAnomaly`）。
+- 离线测试用 `tests/daily_sim.py`（「全部领取」、非第一行领取、不免费的召唤、「再召唤一次」都是 DANGER）。
+
 ### 模块与 CLI（B01，B03 更新）
 - 模块：继承 `TaskModule` / `AssistantModule`，放到 `e7helper/modules/<id>/` 就会被自动发现。参考 `modules/hello/`。
 - CLI：`doctor`、`bench`、`screenshot`、`tap`、`modules`、`run <id> [-c JSON] [-t 超时]`（经 runtime）、`scene [-f 图片] [--dismiss] [--watch]`、`capture`（新增 `--tap`）、`match`、`ocr`。
@@ -102,16 +115,27 @@
 - 有消耗的任务 dry-run 默认开启；表单只放用户真正需要的开关，其余参数作为引擎内部接口（B05 用户意见）。
 - 本仓库没有配置远程；「推送到 main」= 把本地 main 快进到块分支的提交（B05 用户确认合入 main）。
 - B06：托管 + 手动放在同一个模块（任务互斥，拆开就不能同时跑）；不用快速战斗；异界（专用代币）和迷宫不做；开托管时勾选「优先使用持有的行动力」。
+- B07：日常只做邮件（剩余一天以内）、精灵之森（领取 + 照料）、誓约免费召唤（方案 A：优先免费十连，用完为止）；派遣（轮换活动）、骑士团（将改版）、每日任务 / 通行券不做。每日重置 = GMT-7 中午 12 点 = 北京时间 3 点。顶栏货币核对保留（用户确认）。
+- 实跑阶段的录屏可以由我自行录（B07 用户确认）；采 fixture 时仍按用户说「开始 / 好了」。
 
-## 下一块（B07 日常收取）要做
-ROADMAP：圣域、派遣、免费召唤、公会捐献、邮件，按天记录；验收标准是各项单独实跑。
-1. 先和用户确认范围：先做哪几项、各项的入口和「已领取 / 今日已完成」怎么判断、模块 id 怎么拆（参考 B06：任务互斥，同一次运行要做的事放进同一个模块，用开关分别启用）。
-2. 需要采集的界面：按项告诉用户切到哪个界面；只做导航的点击可以由我来点，录屏由用户控制（说「开始」才录、说「好了」就停，做法见 reviews/B05.md「录屏做法」）。
-3. 每项都要能判断「今天已经做过」（按天记录到模块数据目录，以游戏的每日重置时间为界，重置时间先实测）。
-4. 安全：领取类操作一般不消耗资源，但免费召唤、公会捐献要核对确实是免费或用的是哪种资源；有消耗的确认框注册成本模块弹窗（自动关闭时点取消）；dry-run 阶段不点领取 / 召唤 / 捐献，实跑前征得用户同意。
-5. 验收：各项 dry-run 识别正确（fixtures + 模拟器），用户同意后各项单独实跑一次。
+## 下一块（B08 API 层）要做
+ROADMAP：FastAPI 核心路由 + 模块子路由自注册 + WebSocket（日志、状态、帧、统计）；任务定时调度（按间隔反复启动模块）。验收：接口测试；能用 WS 控制任务启停。
+1. 先和用户确认范围：路由清单（设备、模块列表 / schema、任务启停 / 状态、统计、模板采集要不要先做）、WS 频道和消息格式、定时调度的形式（间隔 / 每天固定时刻 / 重置后）、监听地址和端口、要不要鉴权。
+2. 已知的调度需求：
+   - `repeat_battle` 只开托管时按间隔反复启动（B06 用户确认）；
+   - `daily` 每天重置后（北京时间 3 点后）跑一次，精灵之森按 `ledger.json` 的 `forest_next` 再跑（B07）；
+   - 任务互斥：调度到点时有任务在跑要排队或跳过（`RuntimeBusy`）。
+3. `Module.routes()` 已在契约里（返回 `APIRouter | None`，挂到 `/api/modules/<id>/`）；事件总线主题 `frame` / `log` / `task` / `scene` / `assistant` 已有，WS 订阅它们即可。
+4. 入口必须先 `isolate_native_stdout()`；依赖装 FastAPI / uvicorn 时用华为云镜像。
+5. 不操作游戏的部分优先做；需要真机验证时（例如经 API 启动 `daily` dry-run）先征得用户同意。
 
 ## 坑
+- **「点击关闭」到处都有**（竞技场战斗记录、托管结算完毕、精灵之森奖励、邮件详情框）：模块弹窗要加背景场景的标题区分（B07）。
+- **有些邮件点「领取」后会弹出详情框**，要再点「收信」；邮件列表按剩余时间排序，快过期的在最上面（B07）。
+- **誓约召唤的免费气泡会换位置**：有免费十连时在「召唤10次」上方，只剩单抽时移到「1次召唤」上方（B07）。
+- **单抽的结果是一张卡片**，只有左下「返回」，没有「召唤结果」标题；单抽动画没有「跳过」（B07）。
+- **誓约页背景的星星光效会飘进顶栏**：按画面比对顶栏时单帧会多几十个像素，要多帧取交集（B07）。
+- 圣域背景分白天 / 夜晚，用标题模板认，不要用背景（B07）。
 - `wm size` 返回的是竖屏 900x1600，不要用它判断分辨率；用 `device.resolution`（来自 IPC）。
 - `cv2.imwrite` 不支持中文路径，用 `core.imageio.read_image` / `write_image`。
 - 测试点击要避开桌面图标。(800,450) 是 KernelSU 图标的位置。

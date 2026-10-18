@@ -178,6 +178,18 @@ python -m uv run e7helper scene [-f 图片 ...] [--dismiss] [--watch]        # �
 - 一场按战后「持有行动力」的减少量核对：讨伐会掉落行动力，只检查「不超过一场的消耗」。
 - 进行中的托管框只点底部空白关闭，绝不点「中断」。
 
+### `daily` 日常收取：邮件 / 精灵之森 / 誓约免费召唤（B07）
+| 文件 | 职责 |
+|---|---|
+| `__init__.py` | `DailyModule`：按 邮件 → 精灵之森 → 誓约召唤 的顺序做（各有开关），每项前后回到大厅；一项失败不影响其他项（任务最后记为失败），核对异常（`DailyAnomaly`）立即停止整个任务。`setup()` 注册场景 `daily_mail` / `daily_forest` / `daily_covenant` / `daily_summon` / `daily_summon_anim` / `daily_summon_hero` / `daily_summon_results` 和弹窗 `daily_forest_reward`（点击关闭）/ `daily_mail_detail`（自动关闭时点「点击关闭」，不收信） |
+| `page.py` | 纯函数识别：邮件行（「领取」锚点 + 剩余时间 OCR）、邮件数、邮件详情框；精灵之森三张卡和照料；誓约召唤的免费按钮、剩余免费气泡、顶栏货币区域 |
+| `ledger.py` | 按天记账 `ledger.json`：游戏日（北京时间 3 点 = UTC 19:00 切换）、当天做完的项、精灵之森下次时间 |
+| `config.py` / `stats.py` | `DailyConfig`（表单只有三个开关和 `dry_run`）；`history.jsonl`、`stats.json` |
+
+- 账本只用来省导航：誓约召唤当天用完就不进去；精灵之森按界面上最短的倒计时决定下次进入时间。能不能领、领没领到都以画面为准。
+- 「有没有花东西」的核对：召唤前后对比**顶栏货币区域的画面**，比逐个 OCR 读数可靠，不受图标和数字宽度影响。前后各取两帧（间隔 0.6 秒），两两比较都变了的像素 ≤ 60 才算没变：背景立绘的星星光效会飘进这块区域（单帧最多约 80 个像素，只出现一帧）；数字真的变化时是 5000+。其他有多种货币的界面也可以这样核对。
+- 「点击关闭」在多个弹窗里都有（竞技场战斗记录、托管结算完毕、精灵之森奖励），模块弹窗要加背景场景的标题来区分。
+
 ## 新增一个模块
 1. 新建 `engine/e7helper/modules/<id>/__init__.py`，继承 `TaskModule` 或 `AssistantModule`，设置 `id`、`name`、`config_model`。
 2. 模板和资源放在 `engine/assets/<id>/cn/`，通过 `self.ctx.assets_dir` 访问；模板用 `e7helper capture <id> <name>` 采集，代码里用 `self.vision.find(frame, name)`。

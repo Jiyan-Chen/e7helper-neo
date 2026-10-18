@@ -40,5 +40,5 @@ python -m uv run e7helper doctor | bench | screenshot | tap X Y | modules | run 
 ```
 
 ## 本机环境（开发者）
-- MuMu 6.6.4，安装在 `E:\MuMuPlayer-12.0`（新版 `nx_main` 结构），实例 0：Android 15，1600×900，adb `127.0.0.1:16384`。
+- MuMu 6.8.7（B07 时 `doctor` 显示），安装在 `E:\MuMuPlayer-12.0`（新版 `nx_main` 结构），实例 0：Android 15，1600×900，adb `127.0.0.1:16384`。
 - Python 3.13 x64。
