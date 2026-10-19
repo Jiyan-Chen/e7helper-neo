@@ -6,7 +6,7 @@
   └───────────────▲ REST + WebSocket（B08）────────────┘
   ┌───────────────┴──── engine/ (Python) ─────────────────┐
   │ api/      核心路由 + 各模块自注册的子路由与 WS 频道           │
-  │ modules/  hello(示例) automation…(B04+) rta_draft…(B12+)   │
+  │ modules/  hello(示例) automation…(B04+) rta_draft…(B13+)   │
   │ core/     geometry paths log | runtime events vision scene  │
   │           data storage（B02+ 逐步加入）                       │
   │ device/   MuMuManager + nemu IPC(主) + adb(后备)             │
