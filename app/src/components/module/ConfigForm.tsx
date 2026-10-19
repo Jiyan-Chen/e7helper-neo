@@ -18,6 +18,12 @@ export function ConfigForm({
   errors: FieldErrors;
   ui: ModuleUI;
 }) {
+  const locks = ui.fieldLocks?.(config) ?? {};
+  // 被锁定的字段和设置不一致时（刚改了别的字段，或者旧设置）把锁定值写进设置
+  const stale = Object.entries(locks).filter(([k, v]) => config[k] !== v);
+  useEffect(() => {
+    for (const [k, v] of stale) update(k, v);
+  }, [JSON.stringify(stale)]); // eslint-disable-line react-hooks/exhaustive-deps -- 只在需要同步的内容变化时执行
   const visible = fields.filter(
     (f) => f.key !== "dry_run" && !ui.hiddenFields?.includes(f.key) && (isDev || !ui.devFields?.includes(f.key)),
   );
@@ -28,12 +34,14 @@ export function ConfigForm({
     <div className="flex flex-col gap-2">
       {shown.map((f) => {
         const dep = ui.fieldDeps?.[f.key];
-        const off = dep !== undefined && config[dep] === false;
+        const locked = f.key in locks;
+        const off = (dep !== undefined && config[dep] === false) || locked;
+        const value = locked ? locks[f.key] : config[f.key];
         const subs = visible.filter((s) => ui.subFields?.[s.key] === f.key);
         const Custom = ui.fieldRenderers?.[f.key];
-        if (Custom) return <Custom key={f.key} field={f} value={config[f.key]} onChange={(v) => update(f.key, v)} />;
+        if (Custom) return <Custom key={f.key} field={f} value={value} onChange={(v) => update(f.key, v)} />;
         return (
-          <FieldRow key={f.key} field={f} value={config[f.key]} onChange={(v) => update(f.key, v)} error={errors[f.key]}
+          <FieldRow key={f.key} field={f} value={value} onChange={(v) => update(f.key, v)} error={errors[f.key]}
             disabled={off} ui={ui} devOnly={!!ui.devFields?.includes(f.key)}>
             {subs.map((s) => (
               <SubOption key={s.key} field={s} value={config[s.key]} onChange={(v) => update(s.key, v)}

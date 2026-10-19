@@ -262,7 +262,7 @@ pnpm typecheck
 | `src/lib/flow.ts` | B11：流程的数据形状和步骤树操作（按 id 定位、插入 / 移动 / 复制、编号、中文描述、本地检查、校验错误定位） |
 | `src/modules/<id>/index.tsx` | 模块的界面扩展，见下 |
 
-**模块界面扩展**：在 `src/modules/<id>/index.tsx` 默认导出 `ModuleUI`（`src/modules/types.ts`），`import.meta.glob` 自动收集、按 module id 挂载；没有的模块用通用页。可以提供：图标和菜单顺序、菜单短名、运行按钮文字、字段图标、字段依赖（控制项关掉时变灰）、附加选项 `subFields`（画在主开关那一行里，B12）、自己画的字段 `fieldRenderers`（例如书签刷取的商品选择，B12）、只在开发版显示的字段、统计项中文名（统计页按它显示）、推荐计划（计划页一键添加）、`RunExtra`（运行条左侧控件）、`Header`、`onConfigSaved`。
+**模块界面扩展**：在 `src/modules/<id>/index.tsx` 默认导出 `ModuleUI`（`src/modules/types.ts`），`import.meta.glob` 自动收集、按 module id 挂载；没有的模块用通用页。可以提供：图标和菜单顺序、菜单短名、运行按钮文字、字段图标、字段依赖（控制项关掉时变灰）、附加选项 `subFields`（画在主开关那一行里，B12）、自己画的字段 `fieldRenderers`（例如书签刷取的商品选择，B12）、按设置锁定字段 `fieldLocks`（例如重复刷关选食人魔时难度锁定成异界，锁定值会自动写进设置，B12a）、只在开发版显示的字段、统计项中文名（统计页按它显示）、推荐计划（计划页一键添加）、`RunExtra`（运行条左侧控件）、`Header`、`onConfigSaved`。
 - 例：`daily` 的「持续收菜」= `RunExtra`，开关一条 `module` 触发的计划；`onConfigSaved` 把新设置同步进这条计划的配置快照。
 - 例：`repeat_battle` 的推荐计划「托管自动结算」= 每 30 分钟、`manual: false`。
 
@@ -322,18 +322,25 @@ pnpm bundle                                                       # = tauri buil
 - 顶栏数字连续两帧一致才采用（数字有滚动动画）。
 - 离线测试用 `tests/shop_sim.py` 这类模拟器：点到确认默认进入 DANGER，按需模拟扣费、吞点击、网络重试、重复扣费。
 
-### `repeat_battle` 重复刷关：托管战斗 + 手动刷关（B06）
+### `repeat_battle` 重复刷关：托管战斗 + 手动刷关（B06，讨伐异界 B12a）
 | 文件 | 职责 |
 |---|---|
-| `__init__.py` | `RepeatBattleModule`：大厅 → 战斗 → 讨伐 → 选地下城（OCR，必要时翻页）→ 选难度（OCR，难度卡片随地下城变化）→ 准备界面（或 `start_here`）；托管：完成就结算、没有就按配置重开；手动：切普通战斗 → 战斗开始 → CLEAR → 确认 → 重新进行 → 循环，每回到准备界面检查托管；行动力不够时可选叶子 / 天空石补充。`setup()` 注册场景 `rb_menu` / `rb_hunt` / `rb_prep` / `rb_battle` / `rb_clear` / `rb_result` / `rb_after` 和弹窗 `rb_auto`（托管进度框）/ `rb_auto_setup` / `rb_auto_settled` / `rb_auto_confirm`（点取消）/ `rb_energy`（点取消） |
-| `page.py` | 纯函数识别：顶栏行动力 / 天空石 / 托管图标（`auto_state` + `auto_dot` + `dots_match`）、讨伐列表与难度、准备界面、托管进度框 / 设置框、`plan_auto`（份数与将使用的行动力 / 叶子）、行动力不足框、战后读数、自动战斗图标 |
-| `config.py` | `RepeatBattleConfig`、`Hunt`（飞龙 / 魔像 / 报丧妖）、`Tier`（中级 / 上级 / 地狱级；异界用专用代币，暂不支持） |
-| `stats.py` | `history.jsonl`、`stats.json`（手动场次、托管结算 / 重开、行动力、叶子、天空石） |
+| `__init__.py` | `RepeatBattleModule`：大厅 → 战斗 → 讨伐 → 选地下城（OCR，必要时翻页）→ 选难度（OCR，难度卡片随地下城变化）→ 准备界面（或 `start_here`）；托管：完成就结算、没有就按配置重开；手动：切普通战斗 → 战斗开始 → CLEAR → 确认 → 重新进行 → 循环，每回到准备界面检查托管；行动力（异界：光谱核心）不够时可选叶子 / 天空石补充。`setup()` 注册场景 `rb_menu` / `rb_hunt` / `rb_prep` / `rb_battle` / `rb_clear` / `rb_result` / `rb_after` 和弹窗 `rb_auto`（托管进度框）/ `rb_auto_setup` / `rb_auto_settled` / `rb_auto_confirm`（点取消）/ `rb_energy`（点取消）/ `rb_core`（购买光谱核心，点取消） |
+| `page.py` | 纯函数识别：顶栏行动力 / 天空石 / 光谱核心 / 托管图标（`auto_state` + `auto_dot` + `dots_match`）、讨伐列表与难度、准备界面、托管进度框 / 设置框、`plan_auto`（份数与将使用的行动力或核心 / 叶子）、行动力不足框、购买光谱核心框（`read_core_dialog`）、战后读数、自动战斗图标 |
+| `config.py` | `RepeatBattleConfig`、`Hunt`（飞龙 / 魔像 / 报丧妖 / 阿吉玛纳克 / 卡戴斯 / 食人魔）、`Tier`（中级 / 上级 / 地狱级 / 异界）、`OTHERWORLD_ONLY`（只有异界的地下城：食人魔） |
+| `stats.py` | `history.jsonl`、`stats.json`（手动场次、托管结算 / 重开、行动力、光谱核心、叶子、天空石） |
 
 - 托管 = 游戏以前的「重复战斗」：设份数（1 份 = 4 次），用行动力或叶子付费，后台按最快通关记录自动打；「无记录」的关卡开不了，且「无记录」只在普通战斗模式显示。
 - 托管是否完成看顶栏图标左上的红点。图标可能整体变灰（从「重新进行」回到准备界面时），要按表盘亮度归一化；进行中的光弧单帧可能扫过红点位置，要隔 0.6 秒看 3 帧、红点位置不变才算完成。
 - 一场按战后「持有行动力」的减少量核对：讨伐会掉落行动力，只检查「不超过一场的消耗」。
+- 托管份数上限 `auto_max_units`（表单「托管最多几份」，B12a 起在表单里）：0 = 能凑几份就几份。
 - 进行中的托管框只点底部空白关闭，绝不点「中断」。
+- **讨伐异界**（B12a）消耗**光谱核心**（顶栏行动力左边的红色图标，只在讨伐列表 / 准备界面显示）：
+  - 准备界面没有快速战斗，也没有切换钮（原来切换钮的位置是「战斗开始」按钮的右端，不能点）；按钮上是核心「消耗/持有」；
+  - 胜利后没有 CLEAR 和结算页：宝珠画面「请轻触屏幕领取奖励。」（场景 `rb_ow_reward`）点一下，直接到战后界面「完成奖励」（`rb_after`，按钮和普通难度相同）；
+  - 托管 1 次 = 1 个核心或 2 片叶子；份数框显示叶子数（最少 2，+1 加 2）；勾选框是「优先使用持有的光谱核心」。`plan_auto` 用 `runs_per_unit` / `leaves_per_unit` 区分（普通 4 / 1，异界 1 / 2）；设置框「1 次消耗」的叶子读数（0.25 / 2）不对就不开；
+  - 补充：点顶栏核心图标打开「购买光谱核心」框（叶子 2 换 1、天空石 80 换 1、数量「1/N」保持 1），不点「战斗开始」去触发；核对后买 1 个，按顶栏核心 +1 和天空石读数差确认。核心不会自然回复，核对不留余量；
+  - 只有食人魔只有异界一种难度；GUI 选食人魔时难度锁定成异界（`ModuleUI.fieldLocks`），引擎收到别的难度直接停止并提示。
 
 ### `daily` 日常收取：邮件 / 精灵之森 / 誓约免费召唤 / 竞技场（B07，竞技场 B12 并入）
 | 文件 | 职责 |

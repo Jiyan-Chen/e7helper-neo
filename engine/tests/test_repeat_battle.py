@@ -1,4 +1,7 @@
-"""B06 重复刷关：界面识别、托管设置核对、补行动力框核对、整个流程（用 fixtures + RbSim 离线模拟）。"""
+"""B06 重复刷关：界面识别、托管设置核对、补行动力框核对、整个流程（用 fixtures + RbSim 离线模拟）。
+
+B12a 加了讨伐异界：光谱核心读数、购买光谱核心框、异界托管设置框、三个后出的地下城（fixtures rb_ow_* 等）。
+"""
 
 import dataclasses
 import json
@@ -17,7 +20,7 @@ from e7helper.core.scene import default_detector
 from e7helper.core.vision import Vision, normalize_text
 from e7helper.modules.base import ModuleContext
 from e7helper.modules.repeat_battle import RepeatBattleConfig, RepeatBattleModule, page
-from e7helper.modules.repeat_battle.config import Hunt, Tier
+from e7helper.modules.repeat_battle.config import OTHERWORLD_ONLY, Hunt, Tier
 from e7helper.modules.repeat_battle.page import AutoState, PrepMode
 
 
@@ -55,11 +58,24 @@ def _frame(name, size=(1600, 900)):
     ("rb_hunt_list", "rb_hunt", None),
     ("rb_hunt_list_golem", "rb_hunt", None),
     ("rb_hunt_list_end", "rb_hunt", None),
+    ("rb_hunt_list_azimanak", "rb_hunt", None),
+    ("rb_hunt_list_kades", "rb_hunt", None),
+    ("rb_hunt_list_ogre", "rb_hunt", None),
     ("rb_prep_quick", "rb_prep", None),
     ("rb_prep_quick_done", "rb_prep", None),
     ("rb_prep_battle", "rb_prep", None),
     ("rb_prep_battle_running", "rb_prep", None),
     ("rb_prep_norecord", "rb_prep", None),
+    ("rb_ow_prep", "rb_prep", None),
+    ("rb_ow_prep_norecord", "rb_prep", None),
+    ("rb_ow_prep_norecord_toast", "rb_prep", None),  # 无记录时点托管：底部提示「需先留下1次通关记录」
+    ("rb_ow_prep_kades", "rb_prep", None),
+    ("rb_ow_auto_setup", None, "rb_auto_setup"),
+    ("rb_ow_auto_setup_checked", None, "rb_auto_setup"),
+    ("rb_ow_auto_setup_4", None, "rb_auto_setup"),
+    ("rb_ow_core_buy", None, "rb_core"),
+    ("rb_ow_reward", "rb_ow_reward", None),  # 异界胜利：宝珠「请轻触屏幕领取奖励」（没有 CLEAR）
+    ("rb_ow_after", "rb_after", None),  # 异界战后「完成奖励」
     ("rb_auto_setup", None, "rb_auto_setup"),
     ("rb_auto_setup_checked", None, "rb_auto_setup"),
     ("rb_auto_setup_disabled", None, "rb_auto_setup"),
@@ -102,6 +118,15 @@ def test_read_skystone(vision):
     assert page.read_skystone(vision, _frame("rb_prep_battle")) == 19728
 
 
+@pytest.mark.parametrize(("fixture", "cores"), [
+    ("rb_ow_prep", 27), ("rb_ow_prep_kades", 27), ("rb_hunt_list_azimanak", 27), ("rb_hunt_list", 22),
+    ("rb_prep_battle", 22), ("rb_lobby_no_auto", None), ("rb_battle_menu", None),  # 大厅和战斗菜单没有核心
+])
+@pytest.mark.parametrize("size", [(1600, 900), (1280, 720)])
+def test_read_core(vision, fixture, cores, size):
+    assert page.read_core(vision, _frame(fixture, size)) == cores
+
+
 def test_read_energy_none_without_top_bar(vision):
     assert page.read_energy(vision, _frame("rb_battle")) is None
 
@@ -111,6 +136,10 @@ def test_read_energy_none_without_top_bar(vision):
     ("rb_prep_battle_running", PrepMode.BATTLE, 20, 7, False),
     ("rb_prep_quick", PrepMode.QUICK, 200, 59, False),
     ("rb_prep_norecord", PrepMode.BATTLE, 20, 82, True),
+    # 异界：没有快速战斗，按钮上是光谱核心「1/27」，按钮整体右移约 17 像素
+    ("rb_ow_prep", PrepMode.BATTLE, 1, 27, False),
+    ("rb_ow_prep_norecord", PrepMode.BATTLE, 1, 27, True),
+    ("rb_ow_prep_kades", PrepMode.BATTLE, 1, 27, True),
 ])
 @pytest.mark.parametrize("size", [(1600, 900), (1280, 720)])
 def test_read_prep(vision, fixture, mode, cost, held, no_record, size):
@@ -123,9 +152,13 @@ def test_read_prep_none_under_dialog(vision):
     assert page.read_prep(vision, _frame("rb_energy_low")) is None  # 按钮被压暗，max_diff 不通过
 
 
-@pytest.mark.parametrize(("fixture", "hunt"), [("rb_prep_battle", "讨伐双足飞龙"), ("rb_prep_norecord", "讨伐魔像")])
-def test_read_stage(vision, fixture, hunt):
-    assert page.read_stage(vision, _frame(fixture)) == (hunt, "讨伐地狱级")
+@pytest.mark.parametrize(("fixture", "hunt", "tier"), [
+    ("rb_prep_battle", "讨伐双足飞龙", "讨伐地狱级"), ("rb_prep_norecord", "讨伐魔像", "讨伐地狱级"),
+    ("rb_ow_prep", "讨伐食人魔", "讨伐异界"), ("rb_ow_prep_norecord", "讨伐阿吉玛纳克", "讨伐异界"),
+    ("rb_ow_prep_kades", "讨伐卡戴斯", "讨伐异界"),
+])
+def test_read_stage(vision, fixture, hunt, tier):
+    assert page.read_stage(vision, _frame(fixture)) == (hunt, tier)
 
 
 @pytest.mark.parametrize(("fixture", "state"), [
@@ -162,6 +195,11 @@ def test_running_arc_needs_several_frames(vision):
     ("rb_hunt_list", Hunt.WYVERN, True), ("rb_hunt_list", Hunt.BANSHEE, True), ("rb_hunt_list", Hunt.GOLEM, True),
     ("rb_hunt_list_golem", Hunt.GOLEM, True), ("rb_hunt_list_end", Hunt.WYVERN, False),
     ("rb_hunt_list_end", Hunt.BANSHEE, False),
+    ("rb_hunt_list", Hunt.AZIMANAK, False), ("rb_hunt_list_end", Hunt.AZIMANAK, True),
+    ("rb_hunt_list_end", Hunt.KADES, True), ("rb_hunt_list_end", Hunt.OGRE, True),
+    ("rb_hunt_list_kades", Hunt.KADES, True), ("rb_hunt_list_kades", Hunt.BANSHEE, True),
+    ("rb_hunt_list_azimanak", Hunt.AZIMANAK, True),
+    ("rb_hunt_list_azimanak", Hunt.KADES, False),  # 名字被屏幕底边截掉一半：点不准，当作不可见（B12a）
 ])
 def test_find_hunt(vision, fixture, hunt, found):
     r = page.find_hunt(vision, _frame(fixture), hunt)
@@ -198,9 +236,30 @@ def test_read_auto_progress_none(vision):
 ])
 def test_read_auto_setup(vision, fixture, energy, use, checked, enabled):
     s = page.read_auto_setup(vision, _frame(fixture))
-    assert (s.energy, s.leaves, s.run_energy, s.count, s.count_max) == (energy, 291, 20, 1, 100)
+    assert (s.energy, s.leaves, s.run_energy, s.run_leaves, s.count, s.count_max) == (energy, 291, 20, 0.25, 1, 100)
     assert (s.use_energy, s.use_leaves, s.checked, s.check_enabled) == (*use, checked, enabled)
     assert "约4次" in s.estimate
+
+
+@pytest.mark.parametrize("size", [(1600, 900), (1280, 720)])
+def test_read_auto_setup_three_digit_energy(vision, size):
+    """行动力 110：右上数字整组右对齐、往左移，按固定区域会读成 10（B12a 真机 dry-run 发现）。"""
+    s = page.read_auto_setup(vision, _frame("rb_auto_setup_110", size))
+    assert (s.energy, s.leaves, s.run_energy, s.run_leaves, s.count) == (110, 334, 20, 0.25, 1)
+    assert (s.use_energy, s.use_leaves, s.checked) == (0, 1, False)
+
+
+@pytest.mark.parametrize(("fixture", "count", "use", "checked", "runs"), [
+    ("rb_ow_auto_setup", 2, (0, 2), False, 1),
+    ("rb_ow_auto_setup_checked", 2, (1, 0), True, 1),
+    ("rb_ow_auto_setup_4", 4, (2, 0), True, 2),  # +1 一次：份数框 2 → 4（多打 1 次）
+])
+def test_read_auto_setup_otherworld(vision, fixture, count, use, checked, runs):
+    """异界托管：1 次消耗 1 个光谱核心或 2 片叶子，份数框是叶子数（B12a 实测）。"""
+    s = page.read_auto_setup(vision, _frame(fixture))
+    assert (s.energy, s.leaves, s.run_energy, s.run_leaves, s.count, s.count_max) == (27, 334, 1, 2.0, count, 100)
+    assert (s.use_energy, s.use_leaves, s.checked, s.check_enabled) == (*use, checked, True)
+    assert f"约{runs}次" in s.estimate
 
 
 def test_read_auto_setup_none(vision):
@@ -231,6 +290,20 @@ def test_plan_auto_max_units(energy, leaves, max_units, plan):
     assert page.plan_auto(energy, 20, leaves, True, max_units) == plan
 
 
+@pytest.mark.parametrize(("cores", "leaves", "prefer", "max_units", "plan"), [
+    (27, 0, True, 0, (54, 27, 0)),  # 份数框是叶子数：27 次 = 54
+    (27, 0, True, 1, (2, 1, 0)),
+    (1, 4, True, 0, (6, 1, 4)),  # 1 个核心 + 4 片叶子 = 3 次
+    (0, 3, True, 0, (2, 0, 2)),  # 叶子按 2 片一档，单出来的 1 片不用
+    (0, 1, True, 0, (0, 0, 0)),
+    (5, 4, False, 0, (4, 0, 4)),  # 不勾优先使用核心：全用叶子
+    (80, 0, True, 0, (100, 50, 0)),  # 份数框上限 100 = 50 次
+])
+def test_plan_auto_otherworld(cores, leaves, prefer, max_units, plan):
+    assert page.plan_auto(cores, 1, leaves, prefer, max_units, runs_per_unit=1,
+                          leaves_per_unit=page.OW_LEAVES_PER_RUN) == plan
+
+
 def test_read_energy_dialog(vision):
     d = page.read_energy_dialog(vision, _frame("rb_energy_low"))
     assert (d.leaf, d.skystone, d.left_selected, d.right_selected) == (True, True, True, False)
@@ -250,10 +323,36 @@ def test_read_energy_dialog_skystone_selected(vision):
 
 def test_read_energy_dialog_none_elsewhere(vision):
     assert page.read_energy_dialog(vision, _frame("rb_prep_battle")) is None
+    assert page.read_energy_dialog(vision, _frame("rb_ow_core_buy")) is None
+
+
+@pytest.mark.parametrize("size", [(1600, 900), (1280, 720)])
+def test_read_core_dialog(vision, size):
+    d = page.read_core_dialog(vision, _frame("rb_ow_core_buy", size))
+    assert (d.leaf, d.skystone, d.left_selected, d.right_selected) == (True, True, True, False)
+    assert (d.leaf_cost, d.leaf_gain, d.leaf_hold) == (2, 1, 334)
+    assert (d.sky_cost, d.sky_gain, d.sky_hold) == (80, 1, 16111)
+    assert (d.qty, d.qty_max) == (1, 3)
+
+
+def test_read_core_dialog_skystone_selected(vision):
+    """把左边选项的亮边框挪到右边，模拟选中天空石。"""
+    f = _frame("rb_ow_core_buy").copy()
+    left, right = Rect(478, 288, 290, 24), Rect(834, 288, 290, 24)
+    f[right.y:right.bottom, right.x:right.right] = f[left.y:left.bottom, left.x:left.right]
+    f[left.y:left.bottom, left.x:left.right] = 15
+    d = page.read_core_dialog(vision, f)
+    assert (d.left_selected, d.right_selected) == (False, True)
+
+
+def test_read_core_dialog_none_elsewhere(vision):
+    assert page.read_core_dialog(vision, _frame("rb_ow_prep")) is None
+    assert page.read_core_dialog(vision, _frame("rb_energy_low")) is None
 
 
 def test_read_after_energy(vision):
     assert page.read_after_energy(vision, _frame("rb_after")) == (20, 94)
+    assert page.read_after_energy(vision, _frame("rb_ow_after")) == (1, 25)  # 异界：光谱核心
     assert page.read_after_energy(vision, _frame("rb_result")) is None
 
 
@@ -270,11 +369,17 @@ def test_auto_icon_still_vs_rotating(vision):
 
 def test_config_schema_only_user_fields():
     props = RepeatBattleConfig.model_json_schema()["properties"]
-    assert set(props) == {"hunt", "tier", "start_here", "auto_battle", "auto_leaves", "manual", "manual_runs",
+    assert set(props) == {"hunt", "tier", "start_here", "auto_battle", "auto_max_units", "auto_leaves", "manual",
+                          "manual_runs",
                           "refill_leaf", "max_leaf_refills", "refill_skystone", "max_skystone_refills", "dry_run"}
     cfg = RepeatBattleConfig()
     assert cfg.dry_run and not cfg.refill_leaf and not cfg.refill_skystone and cfg.auto_leaves == 0
     assert cfg.auto_prefer_energy  # 用户要求：开托管时勾选「优先使用持有的行动力」
+    schema = RepeatBattleConfig.model_json_schema()
+    assert schema["$defs"]["Hunt"]["enum"] == ["双足飞龙", "魔像", "报丧妖", "阿吉玛纳克", "卡戴斯", "食人魔"]
+    assert schema["$defs"]["Tier"]["enum"] == ["中级", "上级", "地狱级", "异界"]
+    assert OTHERWORLD_ONLY == {Hunt.OGRE}  # 用户确认：只有食人魔没有其他难度
+    assert cfg.auto_max_units == 0 and props["auto_max_units"]["title"] == "托管最多几份"  # B12a 用户意见放进表单
 
 
 # ---------------------------------------------------------------- 流程（RbSim）
@@ -297,21 +402,22 @@ def _fast_waits(monkeypatch):
 
 
 TOP_BAR = {"rb_lobby_no_auto", "rb_lobby_auto_running", "rb_lobby_auto_done", "rb_battle_menu", "rb_hunt_list",
-           "rb_hunt_list_end", "rb_prep_quick", "rb_prep_battle"}
+           "rb_hunt_list_end", "rb_prep_quick", "rb_prep_battle", "rb_ow_prep"}
 
 
 def _patch_reads(sim, monkeypatch):
     """截图上的数字是固定的：读数换成模拟器的值（模板判定仍然用真实截图）。"""
     orig_prep, orig_setup = page.read_prep, page.read_auto_setup
     orig_progress, orig_dialog = page.read_auto_progress, page.read_energy_dialog
+    orig_core_dialog = page.read_core_dialog
 
     def read_prep(vision, frame):
         p = orig_prep(vision, frame)
         if p is None:
             return None
-        cost = sim.cost * (10 if p.mode is PrepMode.QUICK else 1)
+        cost = sim.run_cost * (10 if p.mode is PrepMode.QUICK else 1)
         # 「无记录」只在普通战斗模式显示（实测 B06）
-        return dataclasses.replace(p, cost=cost, held=sim.energy,
+        return dataclasses.replace(p, cost=cost, held=sim.fuel,
                                    no_record=sim.no_record and p.mode is PrepMode.BATTLE)
 
     def read_auto_setup(vision, frame):
@@ -319,8 +425,9 @@ def _patch_reads(sim, monkeypatch):
         if s is None:
             return None
         use_e, use_l = sim.setup_use()
-        return dataclasses.replace(s, energy=sim.energy, leaves=sim.leaves, run_energy=sim.cost, count=sim.count,
-                                   count_max=100, use_energy=use_e, use_leaves=use_l, checked=sim.checked,
+        return dataclasses.replace(s, energy=sim.fuel, leaves=sim.leaves, run_energy=sim.run_cost,
+                                   run_leaves=2.0 if sim.ow else 0.25, count=sim.count, count_max=100,
+                                   use_energy=use_e, use_leaves=use_l, checked=sim.checked,
                                    check_enabled=sim.check_enabled)
 
     def read_auto_progress(vision, frame):
@@ -329,6 +436,13 @@ def _patch_reads(sim, monkeypatch):
 
     def read_energy_dialog(vision, frame):
         d = orig_dialog(vision, frame)
+        if d is None:
+            return None
+        return dataclasses.replace(d, left_selected=sim.option == "leaf", right_selected=sim.option == "skystone",
+                                   leaf_hold=sim.leaves, sky_hold=sim.skystone)
+
+    def read_core_dialog(vision, frame):
+        d = orig_core_dialog(vision, frame)
         if d is None:
             return None
         return dataclasses.replace(d, left_selected=sim.option == "leaf", right_selected=sim.option == "skystone",
@@ -345,18 +459,20 @@ def _patch_reads(sim, monkeypatch):
     top = lambda v: (lambda vision, frame: v() if sim.screen in TOP_BAR else None)  # noqa: E731
     monkeypatch.setattr(page, "read_energy", top(lambda: sim.energy))
     monkeypatch.setattr(page, "read_skystone", top(lambda: sim.skystone))
+    monkeypatch.setattr(page, "read_core", top(lambda: sim.cores))
     monkeypatch.setattr(page, "auto_state", top(lambda: AutoState(sim.auto)))
     monkeypatch.setattr(page, "auto_dot", top(lambda: np.full((16, 16), sim.auto == "done")))
     monkeypatch.setattr(page, "read_prep", read_prep)
     monkeypatch.setattr(page, "read_auto_setup", read_auto_setup)
     monkeypatch.setattr(page, "read_auto_progress", read_auto_progress)
     monkeypatch.setattr(page, "read_energy_dialog", read_energy_dialog)
+    monkeypatch.setattr(page, "read_core_dialog", read_core_dialog)
     monkeypatch.setattr(page, "find_hunt", find_hunt)
     monkeypatch.setattr(page, "find_tier", find_tier)
     monkeypatch.setattr(page, "read_stage", lambda vision, frame: (normalize_text(f"讨伐{sim.selected}"),
                                                                     normalize_text(f"讨伐{sim.tier}")))
-    monkeypatch.setattr(page, "read_after_energy", lambda vision, frame: (sim.cost, sim.energy)
-                        if sim.screen == "rb_after" else None)
+    monkeypatch.setattr(page, "read_after_energy", lambda vision, frame: (sim.run_cost, sim.fuel)
+                        if sim.screen in ("rb_after", "rb_ow_after") else None)
 
 
 def _run(sim, tmp_path, monkeypatch, *, timeout=120, **cfg):
@@ -420,17 +536,24 @@ def test_missing_tier_stops(tmp_path, monkeypatch):
     assert _history(tmp_path)[-1]["stop_reason"] == "讨伐双足飞龙没有「中级」难度（或没有解锁）"
 
 
-def test_start_here_abyss_not_supported(tmp_path, monkeypatch):
-    sim = RbSim("prep", tier="异界")
-    result = _run(sim, tmp_path, monkeypatch, start_here=True)
+def test_start_here_otherworld(tmp_path, monkeypatch):
+    """从异界准备界面开始（B12a 前会直接停止）：按光谱核心算，dry-run 停在准备界面。"""
+    sim = RbSim("prep", tier="异界", cores=5)
+    result = _run(sim, tmp_path, monkeypatch, start_here=True, auto_battle=False)
     assert result.status is TaskStatus.SUCCEEDED, result.error
     _assert_safe(sim)
-    assert _history(tmp_path)[-1]["stop_reason"] == "讨伐双足飞龙 讨伐异界 消耗异界代币，暂不支持"
+    assert sim.toggles == 0  # 异界没有快速战斗，不去点切换钮的位置（那里是战斗开始按钮）
+    rec = _history(tmp_path)[-1]
+    assert rec["currency"] == "光谱核心" and rec["energy_start"] == 5
+    assert any("光谱核心 5，每场 1，够打 5 场" in w for w in rec["would"]), rec["would"]
 
 
 @pytest.mark.parametrize(("fixture", "tier", "y"), [
     ("rb_hunt_list", Tier.MID, 211), ("rb_hunt_list", Tier.HIGH, 346), ("rb_hunt_list", Tier.HELL, 481),
     ("rb_hunt_list_ogre", Tier.HELL, None), ("rb_hunt_list_ogre", Tier.MID, None),
+    ("rb_hunt_list", Tier.OTHERWORLD, 616), ("rb_hunt_list_ogre", Tier.OTHERWORLD, 211),  # 食人魔只有异界
+    ("rb_hunt_list_azimanak", Tier.HELL, 481), ("rb_hunt_list_azimanak", Tier.OTHERWORLD, 616),
+    ("rb_hunt_list_kades", Tier.MID, 211), ("rb_hunt_list_kades", Tier.OTHERWORLD, 616),
 ])
 def test_find_tier(vision, fixture, tier, y):
     r = page.find_tier(vision, _frame(fixture), tier)
@@ -672,3 +795,155 @@ def test_wrong_prep_goes_back_and_reselects(tmp_path, monkeypatch):
     _assert_safe(sim)
     assert (sim.selected, sim.tier) == ("双足飞龙", "地狱级")
 
+
+
+# ---------------------------------------------------------------- 讨伐异界（B12a）
+
+
+def test_ogre_needs_otherworld_tier(tmp_path, monkeypatch):
+    """食人魔只有异界：选了别的难度直接停下并提示（GUI 会锁定成异界，这里是引擎兜底），不去导航。"""
+    sim = RbSim("lobby")
+    result = _run(sim, tmp_path, monkeypatch, hunt=Hunt.OGRE, tier=Tier.HELL)
+    assert result.status is TaskStatus.SUCCEEDED, result.error
+    assert sim.taps == [] and sim.swipes == []
+    assert _history(tmp_path)[-1]["stop_reason"] == "讨伐食人魔只有异界难度，请把难度改成异界"
+
+
+@pytest.mark.parametrize(("hunt", "swipes"), [(Hunt.OGRE, 1), (Hunt.KADES, 1), (Hunt.WYVERN, 0)])
+def test_dry_run_otherworld_from_lobby(tmp_path, monkeypatch, hunt, swipes):
+    """dry-run：大厅 → 讨伐 → （往下翻）→ 地下城 → 异界 → 准备界面；托管按核心算份数，设好后关闭；停在准备界面。"""
+    sim = RbSim("lobby", cores=3)
+    result = _run(sim, tmp_path, monkeypatch, hunt=hunt, tier=Tier.OTHERWORLD)
+    assert result.status is TaskStatus.SUCCEEDED, result.error
+    _assert_safe(sim)
+    assert (sim.selected, sim.tier) == (hunt.value, "异界") and len(sim.swipes) == swipes
+    assert "rb_ow_auto_setup" in sim.history and sim.screen == "rb_ow_prep"
+    assert sim.count == 6 and sim.checked  # 3 个核心 = 3 次 = 份数框 6；勾选「优先使用持有的光谱核心」
+    assert sim.starts == 0 and sim.auto_starts == [] and sim.core_taps == 0 and sim.toggles == 0
+    rec = _history(tmp_path)[-1]
+    assert rec["stage"] == f"讨伐{hunt.value} 讨伐异界" and rec["currency"] == "光谱核心"
+    assert any("开托管 3 份（约 3 次），用光谱核心 3、叶子 0" in w for w in rec["would"]), rec["would"]
+    assert any("光谱核心 3，每场 1，够打 3 场" in w for w in rec["would"]), rec["would"]
+
+
+def test_live_otherworld_auto_then_manual(tmp_path, monkeypatch):
+    """实跑异界：托管限 1 份（1 个核心）；剩下 2 个核心手动打 2 场；核心用完、没开补充就停。"""
+    sim = RbSim("lobby", cores=3, energy=50, auto_start="ok", start="ok")
+    result = _run(sim, tmp_path, monkeypatch, dry_run=False, hunt=Hunt.OGRE, tier=Tier.OTHERWORLD,
+                  auto_max_units=1)
+    assert result.status is TaskStatus.SUCCEEDED, result.error
+    _assert_safe(sim)
+    assert sim.auto_starts == [(2, 1, 0)] and sim.auto == "running"
+    assert sim.battles == 2 and sim.cores == 0 and sim.energy == 50  # 行动力不动
+    assert "rb_ow_reward" in sim.history and "rb_clear" not in sim.history  # 异界胜利后是宝珠画面
+    rec = _history(tmp_path)[-1]
+    assert rec["stop_reason"] == "光谱核心不够（0/1）" and rec["cores_spent"] == 2 and rec["energy_spent"] == 0
+    assert rec["autos"][0]["cores"] == 1 and rec["autos"][0]["energy"] == 0 and rec["autos"][0]["runs"] == 1
+    totals = _totals(tmp_path)
+    assert totals["cores_spent"] == 3 and totals["energy_spent"] == 0 and totals["battles"] == 2
+    assert sim.core_taps == 0  # 没开补充：不打开购买框
+
+
+def test_live_otherworld_auto_with_leaves(tmp_path, monkeypatch):
+    """没有核心、允许托管用 3 片叶子：叶子按 2 片一档，开 1 份（份数框 2，叶子 2）。"""
+    sim = RbSim("lobby", cores=0, auto_start="ok")
+    result = _run(sim, tmp_path, monkeypatch, dry_run=False, manual=False, hunt=Hunt.KADES, tier=Tier.OTHERWORLD,
+                  auto_leaves=3)
+    assert result.status is TaskStatus.SUCCEEDED, result.error
+    _assert_safe(sim)
+    assert sim.auto_starts == [(2, 0, 2)] and sim.leaves == 289
+    assert _history(tmp_path)[-1]["leaves_spent"] == 2
+
+
+def test_otherworld_no_record_skips_auto(tmp_path, monkeypatch):
+    """阿吉玛纳克 / 卡戴斯的异界在实机上是「无记录」：不点托管战斗（点了只会弹提示）。"""
+    sim = RbSim("prep", hunt="阿吉玛纳克", tier="异界", no_record=True)
+    result = _run(sim, tmp_path, monkeypatch, start_here=True)
+    assert result.status is TaskStatus.SUCCEEDED, result.error
+    _assert_safe(sim)
+    assert "rb_ow_auto_setup" not in sim.history and sim.toggles == 0
+    assert any("无记录" in w for w in _history(tmp_path)[-1]["would"])
+
+
+@pytest.mark.parametrize(("refill", "option", "leaves", "skystone"), [
+    ({"refill_leaf": True, "refill_skystone": True}, "leaf", 289, 19728),  # 叶子优先：2 片换 1 个
+    ({"refill_skystone": True}, "skystone", 291, 19648),  # 天空石 80 换 1 个
+])
+def test_live_otherworld_refill(tmp_path, monkeypatch, refill, option, leaves, skystone):
+    """核心不够：点顶栏核心图标打开购买框（不点战斗开始），选中选项、核对后购买 1 个，再打。"""
+    sim = RbSim("lobby", cores=0, start="ok", refill="ok")
+    result = _run(sim, tmp_path, monkeypatch, dry_run=False, auto_battle=False, hunt=Hunt.OGRE,
+                  tier=Tier.OTHERWORLD, manual_runs=1, **refill)
+    assert result.status is TaskStatus.SUCCEEDED, result.error
+    _assert_safe(sim)
+    assert sim.core_taps == 1 and sim.refills == [option] and sim.battles == 1 and sim.cores == 0
+    assert (sim.leaves, sim.skystone) == (leaves, skystone)
+    rec = _history(tmp_path)[-1]
+    assert rec["leaf_refills"] == (option == "leaf") and rec["skystone_refills"] == (option == "skystone")
+    assert rec["skystone_spent"] == 19728 - skystone
+
+
+def test_live_otherworld_refill_limit_then_stop(tmp_path, monkeypatch):
+    sim = RbSim("lobby", cores=0, start="ok", refill="ok")
+    result = _run(sim, tmp_path, monkeypatch, dry_run=False, auto_battle=False, hunt=Hunt.OGRE,
+                  tier=Tier.OTHERWORLD, refill_leaf=True, max_leaf_refills=2)
+    assert result.status is TaskStatus.SUCCEEDED, result.error
+    _assert_safe(sim)
+    assert sim.refills == ["leaf", "leaf"] and sim.battles == 2
+    assert _history(tmp_path)[-1]["stop_reason"] == "光谱核心不够（0/1），本次已补 叶子 2 次 / 天空石 0 次"
+
+
+def test_dry_run_probe_core_refill_only_cancels(tmp_path, monkeypatch):
+    sim = RbSim("lobby", cores=0)
+    result = _run(sim, tmp_path, monkeypatch, auto_battle=False, hunt=Hunt.OGRE, tier=Tier.OTHERWORLD,
+                  refill_skystone=True, probe_dialogs=True)
+    assert result.status is TaskStatus.SUCCEEDED, result.error
+    _assert_safe(sim)
+    assert "rb_ow_core_buy" in sim.history and sim.refills == [] and sim.option == "skystone"
+    assert sim.screen == "rb_ow_prep"
+    rec = _history(tmp_path)[-1]
+    assert any("用 80 天空石补 1 光谱核心" in w for w in rec["would"]), rec["would"]
+
+
+def test_otherworld_refill_wrong_qty_does_not_buy(tmp_path, monkeypatch):
+    """购买数量不是 1（例如上次停在 3）：不买，点取消。"""
+    sim = RbSim("lobby", cores=0, refill="ok")
+    _patch_reads(sim, monkeypatch)
+    orig = page.read_core_dialog
+    monkeypatch.setattr(page, "read_core_dialog",
+                        lambda v, f: None if (d := orig(v, f)) is None else dataclasses.replace(d, qty=3))
+    with Runtime(sim, scenes=default_detector(), humanize=Humanize.off(), debug_root=tmp_path / "debug",
+                 seed=1) as rt:
+        result = rt.run_task(RepeatBattleModule, RepeatBattleConfig(
+            dry_run=False, auto_battle=False, hunt=Hunt.OGRE, tier=Tier.OTHERWORLD, refill_leaf=True), timeout=120)
+    assert result.status is TaskStatus.SUCCEEDED, result.error
+    _assert_safe(sim)
+    assert sim.refills == [] and sim.screen == "rb_ow_prep"
+    assert "购买数量不是 1（3/3）" in _history(tmp_path)[-1]["stop_reason"]
+
+
+def test_live_otherworld_refill_wrong_amount_is_anomaly(tmp_path, monkeypatch):
+    """买完核心读数没有 +1：立即停止并记为失败。"""
+    sim = RbSim("lobby", cores=0, refill="ok")
+    orig = sim.tap
+
+    def tap(x, y, duration=0.05):
+        orig(x, y, duration)
+        if sim.refills and sim.cores == 1:
+            sim.cores = 0
+
+    sim.tap = tap
+    result = _run(sim, tmp_path, monkeypatch, dry_run=False, auto_battle=False, hunt=Hunt.OGRE,
+                  tier=Tier.OTHERWORLD, refill_leaf=True)
+    assert result.status is TaskStatus.FAILED, result.error
+    assert "预期 +1" in result.error and sim.starts == 0
+
+
+def test_resume_from_otherworld_reward(tmp_path, monkeypatch):
+    """任务从异界宝珠画面开始（B12a 实跑时上一次停在这里）：点一下 → 战后 → 重新进行 → 准备界面。"""
+    sim = RbSim("rb_ow_reward", tier="异界", hunt="食人魔", cores=25)
+    result = _run(sim, tmp_path, monkeypatch, start_here=True, auto_battle=False)
+    assert result.status is TaskStatus.SUCCEEDED, result.error
+    _assert_safe(sim)
+    assert sim.history[:3] == ["rb_ow_reward", "rb_ow_after", "rb_ow_prep"]
+    assert _history(tmp_path)[-1]["stop_reason"] == "dry-run 停在准备界面"

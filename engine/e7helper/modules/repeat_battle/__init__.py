@@ -18,6 +18,13 @@
 - 补行动力：默认关闭。开启后先用叶子，再用天空石，各自不超过次数上限；点「购买」前核对选中的是要用的选项、
   价格（叶子 1 换 80、天空石 30 换 60）和持有量；购买后按行动力增加量和天空石读数差确认。补充框自动关闭时点取消。
 - dry_run（默认开启）只导航、打开托管框读数（设置框会改份数，但不点开始），不点「结算」「开始」「战斗开始」「购买」。
+
+讨伐异界（B12a，详见 docs/reviews/B12a.md）：消耗光谱核心（顶栏红色图标）而不是行动力，流程同上，区别是
+- 准备界面没有快速战斗；按钮上是「消耗/持有」光谱核心；
+- 胜利后没有 CLEAR 和结算页：宝珠画面「请轻触屏幕领取奖励。」点一下，直接到战后界面「完成奖励」；
+- 托管 1 次 = 1 个核心或 2 片叶子，份数框按叶子数显示、每点一次 +1 加 2；勾选框是「优先使用持有的光谱核心」；
+- 补充：点顶栏核心图标打开「购买光谱核心」框（叶子 2 换 1、天空石 80 换 1，数量保持 1），核对后购买，
+  按顶栏核心 +1 和天空石读数差确认。不点「战斗开始」去触发补充框。
 """
 
 from __future__ import annotations
@@ -33,14 +40,15 @@ from e7helper.core.vision import normalize_text
 from e7helper.modules.base import TaskModule
 
 from . import page, stats
-from .config import Hunt, RepeatBattleConfig, Tier
-from .page import AutoProgress, AutoSetup, AutoState, EnergyDialog, Prep, PrepMode
+from .config import OTHERWORLD_ONLY, Hunt, RepeatBattleConfig, Tier
+from .page import AutoProgress, AutoSetup, AutoState, CoreDialog, EnergyDialog, Prep, PrepMode
 
 MENU = "rb_menu"  # 战斗菜单（一般 / 赛季 / 事件）
 HUNT = "rb_hunt"  # 讨伐：难度 + 地下城列表
 PREP = "rb_prep"  # 准备战斗
 BATTLE = "rb_battle"
 CLEAR = "rb_clear"  # 胜利「CLEAR」，点一下继续
+OW_REWARD = "rb_ow_reward"  # 异界胜利：宝珠「请轻触屏幕领取奖励。」，点一下直接到战后界面（没有 CLEAR 和结算页）
 RESULT = "rb_result"  # 获得的道具 + 确认
 AFTER = "rb_after"  # 离开 / 大厅 / 重新进行
 POPUP_AUTO = "rb_auto"  # 托管进度框（进行中 / 已完成 / 已结算）
@@ -48,6 +56,7 @@ POPUP_SETUP = "rb_auto_setup"  # 托管设置框
 POPUP_SETTLED = "rb_auto_settled"  # 结算完毕
 POPUP_CONFIRM = "rb_auto_confirm"  # 是否开始托管战斗？
 POPUP_ENERGY = "rb_energy"  # 行动力不足（购买行动力）
+POPUP_CORE = "rb_core"  # 购买光谱核心（异界）
 POPUP_NETWORK = "network"
 
 POLL = 0.15
@@ -60,6 +69,7 @@ UNKNOWN_POPUP = 4.0  # 点开始后出现认不出的弹窗（例如背包已满
 AUTO_REGEN = 2  # 核对时允许行动力自然回复的量
 LEAF_COST, LEAF_GAIN = 1, 80
 SKY_COST, SKY_GAIN = 30, 60
+CORE_LEAF_COST, CORE_SKY_COST, CORE_GAIN = 2, 80, 1  # 光谱核心：叶子 2 换 1、天空石 80 换 1
 COUNT_TAP_WAIT = 1.5  # 点 +1 后等份数变化
 AUTO_DOT_GAP = 0.6  # 判断托管是否完成时每帧间隔（3 帧跨 1.2 秒）
 # 自动战斗：图标连续 AUTO_STILL 秒变化 < AUTO_DIFF 认为没开（开启后图标一直旋转；技能演出时图标会消失）
@@ -97,6 +107,7 @@ class RepeatBattleModule(TaskModule):
             Scene(AFTER, (q + "after/retry", q + "after/leave"), note="战后：离开 / 大厅 / 重新进行"),
             Scene(BATTLE, (q + "battle/pause",), (q + "after/retry",), note="战斗中"),
             Scene(CLEAR, (q + "clear",), note="战斗胜利 CLEAR"),
+            Scene(OW_REWARD, (q + "ow_reward",), note="异界胜利：请轻触屏幕领取奖励"),
             Scene(RESULT, (q + "result/items", q + "result/ok"), note="结算：获得的道具"),
         ):
             sc.add_scene(scene, replace=True, first=True)
@@ -111,6 +122,8 @@ class RepeatBattleModule(TaskModule):
                   note="是否开始托管战斗（自动关闭时点取消）"),
             Popup(POPUP_ENERGY, (q + "energy/title", q + "energy/cancel"), Dismiss.tap(q + "energy/cancel"),
                   note="行动力不足（自动关闭时点取消）"),
+            Popup(POPUP_CORE, (q + "core/title", q + "core/cancel"), Dismiss.tap(q + "core/cancel"),
+                  note="购买光谱核心（自动关闭时点取消）"),
         ):
             sc.add_popup(popup, replace=True, first=True)
 
@@ -120,18 +133,22 @@ class RepeatBattleModule(TaskModule):
         cfg: RepeatBattleConfig = self.config
         self.run_stats = stats.RunStats(dry_run=cfg.dry_run)
         self._consecutive_failures = 0
-        self._energy: int | None = None
+        self._energy: int | None = None  # 当前关卡消耗的东西的持有数（行动力，异界是光谱核心）
         self._stage = ""
+        self._ow = not cfg.start_here and cfg.tier is Tier.OTHERWORLD  # 异界：消耗光谱核心
         mode = "dry-run（不点结算、开始和购买）" if cfg.dry_run else "实跑"
         target = "当前准备界面" if cfg.start_here else f"讨伐{cfg.hunt.value} {cfg.tier.value}"
-        self.log.info("重复刷关：%s；目标 %s；托管 %s（叶子最多 %d）；手动 %s（%s 场）；补行动力 叶子 %s / 天空石 %s",
+        self.log.info("重复刷关：%s；目标 %s；托管 %s（叶子最多 %d）；手动 %s（%s 场）；补充 叶子 %s / 天空石 %s",
                       mode, target, "开" if cfg.auto_battle else "关", cfg.auto_leaves, "开" if cfg.manual else "关",
                       cfg.manual_runs or "不限", f"开 ×{cfg.max_leaf_refills}" if cfg.refill_leaf else "关",
                       f"开 ×{cfg.max_skystone_refills}" if cfg.refill_skystone else "关")
         try:
+            if not cfg.start_here and cfg.hunt in OTHERWORLD_ONLY and cfg.tier is not Tier.OTHERWORLD:
+                raise StopRepeat(f"讨伐{cfg.hunt.value}只有异界难度，请把难度改成异界")
             self._enter()
+            self.run_stats.currency = self._cur
             self.run_stats.energy_start = self._read_energy_stable()
-            self.log.info("准备界面：%s，行动力 %d", self._stage, self._energy)
+            self.log.info("准备界面：%s，%s %d", self._stage, self._cur, self._energy)
             if cfg.auto_battle:
                 self._handle_auto()
             if not cfg.manual:
@@ -159,8 +176,8 @@ class RepeatBattleModule(TaskModule):
         cfg: RepeatBattleConfig = self.config
         ctl = self.ctl
         # 战后 / 结算界面一直有动画，先不等静止认出来；其他界面再等静止
-        state = ctl.wait_scene(("lobby", MENU, HUNT, PREP, AFTER, RESULT), timeout=20, settle=False)
-        if state.is_(RESULT, AFTER):
+        state = ctl.wait_scene(("lobby", MENU, HUNT, PREP, AFTER, RESULT, OW_REWARD), timeout=20, settle=False)
+        if state.is_(RESULT, AFTER, OW_REWARD):
             state = self._after_to_prep(state)
         else:
             state = ctl.wait_scene(state.scene, timeout=20)
@@ -168,8 +185,7 @@ class RepeatBattleModule(TaskModule):
             if not state.is_(PREP):
                 raise StopRepeat(f"start_here 要求停在准备界面，当前：{state}")
             self._stage = " ".join(page.read_stage(self.vision, ctl.screenshot()))
-            if "异界" in self._stage:
-                raise StopRepeat(f"{self._stage} 消耗异界代币，暂不支持")
+            self._ow = normalize_text(f"讨伐{Tier.OTHERWORLD.value}") in self._stage
             return
         if state.is_(PREP):
             if self._stage_ok():
@@ -227,6 +243,8 @@ class RepeatBattleModule(TaskModule):
         """在结算 / 战后界面时回到准备界面（「重新进行」只是回到准备界面，不消耗行动力）。"""
         ctl = self.ctl
         q = f"{self.id}:"
+        if state.is_(OW_REWARD):
+            state = ctl.tap_until(page.CLEAR_TAP, AFTER, timeout=30, retry_after=RESULT_RETRY, max_taps=6, settle=False)
         if state.is_(RESULT):
             state = ctl.tap_until(q + "result/ok", AFTER, retry_after=RESULT_RETRY, max_taps=5, settle=False)
         return ctl.tap_until(q + "after/retry", PREP, timeout=30, retry_after=3.0)
@@ -346,13 +364,20 @@ class RepeatBattleModule(TaskModule):
             self._close_dialog()
             self._fail(f"托管设置框读数不全：{setup}")
             return
+        runs_per_unit, leaves_per_unit = self._auto_unit
+        run_leaves = leaves_per_unit / runs_per_unit
+        if setup.run_leaves != run_leaves and (self._ow or setup.run_leaves is not None):
+            # 份数怎么算取决于每次用几片叶子：读数不对就不开（异界一定要读到）
+            self._close_dialog()
+            raise StopRepeat(f"不开托管：设置框 1 次消耗叶子 {setup.run_leaves}，预期 {run_leaves:g}（{setup}）")
         count, use_energy, use_leaves = page.plan_auto(setup.energy, setup.run_energy,
                                                        min(cfg.auto_leaves, setup.leaves), cfg.auto_prefer_energy,
-                                                       cfg.auto_max_units)
+                                                       cfg.auto_max_units, runs_per_unit=runs_per_unit,
+                                                       leaves_per_unit=leaves_per_unit)
         if count == 0:
             self._close_dialog()
-            msg = (f"行动力 {setup.energy} 不够 1 份（{setup.run_energy * page.RUNS_PER_UNIT}），"
-                   f"也不允许用叶子（auto_leaves={cfg.auto_leaves}），不开托管")
+            msg = (f"{self._cur} {setup.energy} 不够 1 份（{setup.run_energy * runs_per_unit}），"
+                   f"叶子也不够或不允许用（auto_leaves={cfg.auto_leaves}），不开托管")
             self.log.info(msg)
             if cfg.dry_run:
                 self.run_stats.would.append(msg)
@@ -362,8 +387,9 @@ class RepeatBattleModule(TaskModule):
         if problem:
             self._close_dialog()
             raise StopRepeat(f"不开托管：{problem}（{setup}）")
-        runs = count * page.RUNS_PER_UNIT
-        msg = f"在 {self._stage} 开托管 {count} 份（约 {runs} 次），用行动力 {use_energy}、叶子 {use_leaves}"
+        runs = count // leaves_per_unit * runs_per_unit
+        msg = (f"在 {self._stage} 开托管 {count // leaves_per_unit} 份（约 {runs} 次），"
+               f"用{self._cur} {use_energy}、叶子 {use_leaves}")
         if cfg.dry_run:
             self.run_stats.would.append(msg)
             self.log.info("[dry-run] 托管设置核对通过，下一步会%s；关闭设置框", msg)
@@ -386,13 +412,19 @@ class RepeatBattleModule(TaskModule):
         energy_after = self._read_energy_stable()
         sky_after = self._read_skystone_stable()
         spent = energy_before - energy_after
-        if not (use_energy - AUTO_REGEN <= spent <= use_energy) or sky_after != sky_before:
-            raise RepeatAnomaly(f"开托管后行动力 {energy_before} → {energy_after}（预期减少 {use_energy}），"
+        regen = 0 if self._ow else AUTO_REGEN  # 光谱核心不会自然回复
+        if not (use_energy - regen <= spent <= use_energy) or sky_after != sky_before:
+            raise RepeatAnomaly(f"开托管后{self._cur} {energy_before} → {energy_after}（预期减少 {use_energy}），"
                                 f"天空石 {sky_before} → {sky_after}")
         r = self.run_stats
-        r.autos.append(stats.AutoRun("started", self._stage, runs, spent, use_leaves))
+        auto = stats.AutoRun("started", self._stage, runs, 0, use_leaves)
+        if self._ow:
+            auto.cores = spent
+        else:
+            auto.energy = spent
+        r.autos.append(auto)
         r.leaves_spent += use_leaves
-        self.log.info("✔ 托管已开始：%s；行动力 %d → %d", msg, energy_before, energy_after)
+        self.log.info("✔ 托管已开始：%s；%s %d → %d", msg, self._cur, energy_before, energy_after)
         self._ok()
 
     def _configure_setup(self, setup: AutoSetup, count: int) -> AutoSetup:
@@ -404,9 +436,10 @@ class RepeatBattleModule(TaskModule):
             ctl.tap_rect(page.SETUP_CHECK, delay=False)
             setup = self._wait_for(lambda f: s if (s := self._setup_probe(f)) and s.checked == want_checked else None,
                                    timeout=COUNT_TAP_WAIT) or self._read_setup()
-        if setup.count != 1:
+        least = self._auto_unit[1]  # 「最少」：普通难度 1 片叶子，异界 2 片
+        if setup.count != least:
             ctl.tap_rect(page.SETUP_MIN, delay=False)
-            setup = self._wait_for(lambda f: s if (s := self._setup_probe(f)) and s.count == 1 else None,
+            setup = self._wait_for(lambda f: s if (s := self._setup_probe(f)) and s.count == least else None,
                                    timeout=COUNT_TAP_WAIT) or self._read_setup()
         misses = 0
         while setup.count is not None and setup.count != count and misses < 5:
@@ -463,7 +496,8 @@ class RepeatBattleModule(TaskModule):
             self._refill(prep)
             return
         if cfg.dry_run:
-            msg = f"手动刷 {self._stage}：行动力 {prep.held}，每场 {prep.cost}，够打 {prep.held // max(1, prep.cost)} 场"
+            msg = (f"手动刷 {self._stage}：{self._cur} {prep.held}，每场 {prep.cost}，"
+                   f"够打 {prep.held // max(1, prep.cost)} 场")
             self.run_stats.would.append(msg)
             self.log.info("[dry-run] 下一步会%s；不点战斗开始", msg)
             raise StopRepeat("dry-run 停在准备界面")
@@ -478,7 +512,7 @@ class RepeatBattleModule(TaskModule):
             self._handle_auto()
         prep = self._battle_mode()
         if prep is None or prep.cost is None or prep.held is None:
-            self._fail(f"准备界面没切到普通战斗或读不出行动力（{prep}）")
+            self._fail(f"准备界面没切到普通战斗或读不出{self._cur}（{prep}）")
             return None
         return prep
 
@@ -502,7 +536,7 @@ class RepeatBattleModule(TaskModule):
         ctl = self.ctl
         before = prep.held
         n = len(self.run_stats.battles) + 1
-        self.log.info("开始第 %d 场：%s，行动力 %d（每场 %d）", n, self._stage, before, prep.cost)
+        self.log.info("开始第 %d 场：%s，%s %d（每场 %d）", n, self._stage, self._cur, before, prep.cost)
         t0 = time.monotonic()
         ctl.tap_match(prep.button, ref=f"{self.id}:prep/start", delay=False)
         if not self._wait_clear():
@@ -515,7 +549,7 @@ class RepeatBattleModule(TaskModule):
         seconds = time.monotonic() - t0
         r = self.run_stats
         r.battles.append(stats.Battle(self._stage, before, after, round(seconds, 1)))
-        self.log.info("✔ 第 %d 场完成，用时 %.0f 秒，行动力 %d → %d", n, seconds, before, after)
+        self.log.info("✔ 第 %d 场完成，用时 %.0f 秒，%s %d → %d", n, seconds, self._cur, before, after)
         self._ok()
         ctl.tap_until(f"{self.id}:after/retry", PREP, timeout=30, retry_after=3.0)
 
@@ -524,8 +558,11 @@ class RepeatBattleModule(TaskModule):
         self._energy = after
         spent = before - after
         if spent > cost:
-            raise RepeatAnomaly(f"行动力 {before} → {after}，减少 {spent}，超过一场的消耗 {cost}")
-        self.run_stats.energy_spent += max(0, spent)
+            raise RepeatAnomaly(f"{self._cur} {before} → {after}，减少 {spent}，超过一场的消耗 {cost}")
+        if self._ow:
+            self.run_stats.cores_spent += max(0, spent)
+        else:
+            self.run_stats.energy_spent += max(0, spent)
 
     def _wait_clear(self) -> bool:
         """点开始后等到 CLEAR / 结算，返回 True；一直停在准备界面（点击被吞）返回 False。
@@ -550,14 +587,14 @@ class RepeatBattleModule(TaskModule):
             if moving:
                 ctl.progress()
             prev_thumb = thumb
-            if state.is_(CLEAR, RESULT, AFTER):
+            if state.is_(CLEAR, OW_REWARD, RESULT, AFTER):
                 return True
             if state.popup == POPUP_NETWORK:
                 ctl.dismiss_popups(state=state)
                 continue
-            if state.popup == POPUP_ENERGY:
+            if state.popup in (POPUP_ENERGY, POPUP_CORE):
                 ctl.dismiss_popups(state=state)  # 点取消
-                raise StopRepeat("点战斗开始时弹出了「行动力不足」")
+                raise StopRepeat(f"点战斗开始时弹出了{'「购买光谱核心」' if state.popup == POPUP_CORE else '「行动力不足」'}")
             if state.popup is not None:
                 # 过场（压暗的演出）在动，不算弹窗；静止的认不出的框才计时
                 popup_since = None if moving else (popup_since or now)
@@ -578,7 +615,10 @@ class RepeatBattleModule(TaskModule):
             ctl.sleep(POLL)
 
     def _finish_battle(self) -> None:
-        """CLEAR（点一下继续）→ 结算（确认）→ 战后界面。确认不消耗东西，没反应就补点。"""
+        """CLEAR（点一下继续）→ 结算（确认）→ 战后界面。确认不消耗东西，没反应就补点。
+
+        异界：宝珠「请轻触屏幕领取奖励」（点一下）→ 直接到战后界面「完成奖励」（B12a 实跑发现）。
+        """
         ctl = self.ctl
         state = ctl.detect()
         if not state.is_(RESULT, AFTER):
@@ -630,116 +670,153 @@ class RepeatBattleModule(TaskModule):
         self._auto_still_since = None
         self._auto_prev = None
 
-    # ------------------------------------------------------------ 补行动力
+    # ------------------------------------------------------------ 补充（行动力 / 光谱核心）
 
     def _refill(self, prep: Prep) -> None:
-        """行动力不够一场：按配置用叶子 / 天空石补一次（在「行动力不足」框里买），然后回到循环。"""
+        """不够打一场：按配置用叶子 / 天空石补一次，然后回到循环。
+
+        行动力：点「战斗开始」弹出「行动力不足」框（1 叶子换 80 / 30 天空石换 60）；
+        光谱核心（异界）：点顶栏核心图标打开「购买光谱核心」框（2 叶子换 1 / 80 天空石换 1，数量保持 1）。
+        """
         cfg: RepeatBattleConfig = self.config
         ctl = self.ctl
         r = self.run_stats
+        cur = self._cur
         leaf_ok = cfg.refill_leaf and r.leaf_refills < cfg.max_leaf_refills
         sky_ok = cfg.refill_skystone and r.skystone_refills < cfg.max_skystone_refills
-        short = f"行动力不够（{prep.held}/{prep.cost}）"
+        short = f"{cur}不够（{prep.held}/{prep.cost}）"
         if not (leaf_ok or sky_ok):
             used = f"，本次已补 叶子 {r.leaf_refills} 次 / 天空石 {r.skystone_refills} 次" if \
                 (r.leaf_refills or r.skystone_refills) else ""
             raise StopRepeat(f"{short}{used}")
         top = self._read_energy_stable()
         if top >= prep.cost:
-            self._fail(f"按钮上的行动力 {prep.held} 和顶栏 {top} 不一致")
+            self._fail(f"按钮上的{cur} {prep.held} 和顶栏 {top} 不一致")
             return
         if cfg.dry_run and not cfg.probe_dialogs:
-            msg = f"{short}，用{'叶子' if leaf_ok else '天空石'}补行动力"
+            msg = f"{short}，用{'叶子' if leaf_ok else '天空石'}补{cur}"
             r.would.append(msg)
             self.log.info("[dry-run] 下一步会%s（probe_dialogs 时才实际打开补充框核对）", msg)
-            raise StopRepeat("dry-run 不补行动力")
+            raise StopRepeat(f"dry-run 不补{cur}")
         sky_before = self._read_skystone_stable()
-        # 行动力不够时「战斗开始」只会弹出「行动力不足」框（按钮读数和顶栏读数都已核对不够）
-        ctl.tap_match(prep.button, ref=f"{self.id}:prep/start", delay=False)
-        dialog = self._wait_for(self._energy_probe, timeout=DIALOG_WAIT)
+        if self._ow:
+            # 点顶栏的光谱核心图标（实测和它左上的「+」一样打开购买框）；不点「战斗开始」去触发
+            icon = self.vision.find(ctl.screenshot(), "top/core")
+            if icon is None:
+                raise RepeatAnomaly("顶栏没有光谱核心图标，打不开购买框")
+            ctl.tap_match(icon, ref="top/core", delay=False)
+        else:
+            # 行动力不够时「战斗开始」只会弹出「行动力不足」框（按钮读数和顶栏读数都已核对不够）
+            ctl.tap_match(prep.button, ref=f"{self.id}:prep/start", delay=False)
+        dialog = self._wait_for(self._refill_probe, timeout=DIALOG_WAIT)
         if dialog is None:
-            raise RepeatAnomaly(f"行动力不够时点战斗开始，没有出现「行动力不足」框（{ctl.last_state}）")
-        use_leaf = leaf_ok and dialog.leaf and (dialog.leaf_hold or 0) >= LEAF_COST
+            raise RepeatAnomaly(f"没有出现{self._refill_title}框（{ctl.last_state}）")
+        (leaf_cost, _), (sky_cost, _) = self._prices
+        use_leaf = leaf_ok and dialog.leaf and (dialog.leaf_hold or 0) >= leaf_cost
         if not use_leaf and not sky_ok:
-            self._cancel_energy()
+            self._cancel_refill()
             raise StopRepeat(f"{short}，叶子不够（持有 {dialog.leaf_hold}），也没开天空石补充")
         dialog = self._select_option(dialog, use_leaf)
-        problem = self._check_energy_dialog(dialog, use_leaf)
+        problem = self._check_refill_dialog(dialog, use_leaf)
         if problem:
-            self._cancel_energy()
-            raise StopRepeat(f"不补行动力：{problem}（{dialog}）")
+            self._cancel_refill()
+            raise StopRepeat(f"不补{cur}：{problem}（{dialog}）")
         what = "叶子" if use_leaf else "天空石"
-        cost, gain = (LEAF_COST, LEAF_GAIN) if use_leaf else (SKY_COST, SKY_GAIN)
+        cost, gain = self._prices[0 if use_leaf else 1]
         if cfg.dry_run:
-            msg = f"用 {cost} {what}补 {gain} 行动力（{dialog}）"
+            msg = f"用 {cost} {what}补 {gain} {cur}（{dialog}）"
             r.would.append(msg)
             self.log.info("[dry-run] 补充框核对通过，下一步会%s；点取消", msg)
-            self._cancel_energy()
-            raise StopRepeat("dry-run 不补行动力")
-        self.log.info("补行动力：%s", dialog)
+            self._cancel_refill()
+            raise StopRepeat(f"dry-run 不补{cur}")
+        self.log.info("补%s：%s", cur, dialog)
         ctl.sleep(0.15)
-        ctl.tap_match(dialog.buy, ref=f"{self.id}:energy/buy", delay=False)
-        self._wait_popup_gone(POPUP_ENERGY)  # 淡出期间不能交给弹窗规则（会点取消）
-        after = self._verify_refill(top, gain)
+        ctl.tap_match(dialog.buy, ref=f"{self.id}:{'core' if self._ow else 'energy'}/buy", delay=False)
+        self._wait_popup_gone(self._refill_popup)  # 淡出期间不能交给弹窗规则（会点取消）
+        after = self._verify_refill(top)
         sky_after = self._read_skystone_stable()
         gained = after - top
         sky_spent = sky_before - sky_after
-        if not (gain <= gained <= gain + AUTO_REGEN) or sky_spent != (0 if use_leaf else SKY_COST):
-            raise RepeatAnomaly(f"用{what}补行动力后：行动力 {top} → {after}（预期 +{gain}），"
+        regen = 0 if self._ow else AUTO_REGEN  # 光谱核心不会自然回复
+        if not (gain <= gained <= gain + regen) or sky_spent != (0 if use_leaf else sky_cost):
+            raise RepeatAnomaly(f"用{what}补{cur}后：{cur} {top} → {after}（预期 +{gain}），"
                                 f"天空石 {sky_before} → {sky_after}")
         if use_leaf:
             r.leaf_refills += 1
-            r.leaves_spent += LEAF_COST
+            r.leaves_spent += leaf_cost
         else:
             r.skystone_refills += 1
             r.skystone_spent += sky_spent
-        self.log.info("✔ 用%s补了行动力：%d → %d", what, top, after)
+        self.log.info("✔ 用%s补了%s：%d → %d", what, cur, top, after)
         self._ok()
 
-    def _energy_probe(self, frame: np.ndarray) -> EnergyDialog | None:
-        return page.read_energy_dialog(self.vision, frame) if self.ctl.detect(frame).popup == POPUP_ENERGY else None
+    @property
+    def _refill_popup(self) -> str:
+        return POPUP_CORE if self._ow else POPUP_ENERGY
+
+    @property
+    def _refill_title(self) -> str:
+        return "「购买光谱核心」" if self._ow else "「行动力不足」"
+
+    @property
+    def _prices(self) -> tuple[tuple[int, int], tuple[int, int]]:
+        """((叶子花几片, 换多少), (天空石花多少, 换多少))"""
+        if self._ow:
+            return (CORE_LEAF_COST, CORE_GAIN), (CORE_SKY_COST, CORE_GAIN)
+        return (LEAF_COST, LEAF_GAIN), (SKY_COST, SKY_GAIN)
+
+    def _refill_probe(self, frame: np.ndarray) -> EnergyDialog | None:
+        if self.ctl.detect(frame).popup != self._refill_popup:
+            return None
+        return (page.read_core_dialog if self._ow else page.read_energy_dialog)(self.vision, frame)
 
     def _select_option(self, dialog: EnergyDialog, leaf: bool) -> EnergyDialog:
         """选中要用的付款选项（左：叶子，右：天空石），返回选中后的读数。"""
         if (leaf and dialog.left_selected and not dialog.right_selected) or \
                 (not leaf and dialog.right_selected and not dialog.left_selected):
             return dialog
-        self.ctl.tap_rect(page.LEFT_OPTION if leaf else page.RIGHT_OPTION, delay=False)
+        if self._ow:
+            self.ctl.tap_rect(page.CORE_LEFT_OPTION if leaf else page.CORE_RIGHT_OPTION, delay=False)
+        else:
+            self.ctl.tap_rect(page.LEFT_OPTION if leaf else page.RIGHT_OPTION, delay=False)
         self.ctl.sleep(0.3)
         want = (lambda d: d.left_selected and not d.right_selected) if leaf else \
             (lambda d: d.right_selected and not d.left_selected)
-        return self._wait_for(lambda f: d if (d := self._energy_probe(f)) and want(d) else None,
-                              timeout=3.0) or self._wait_for(self._energy_probe, timeout=3.0) or dialog
+        return self._wait_for(lambda f: d if (d := self._refill_probe(f)) and want(d) else None,
+                              timeout=3.0) or self._wait_for(self._refill_probe, timeout=3.0) or dialog
 
-    def _check_energy_dialog(self, d: EnergyDialog, leaf: bool) -> str | None:
+    def _check_refill_dialog(self, d: EnergyDialog, leaf: bool) -> str | None:
         """返回不能购买的原因；可以买返回 None。"""
+        (leaf_cost, leaf_gain), (sky_cost, sky_gain) = self._prices
+        if isinstance(d, CoreDialog) and (d.qty != 1 or not d.qty_max):
+            return f"购买数量不是 1（{d.qty}/{d.qty_max}）"
         if leaf:
             if not d.leaf:
                 return "左边不是生命之叶选项"
             if not d.left_selected or d.right_selected:
                 return "选中的不是生命之叶"
-            if d.leaf_cost != LEAF_COST or d.leaf_gain != LEAF_GAIN:
-                return f"叶子价格读数不符（预期 {LEAF_COST} 换 {LEAF_GAIN}）"
-            if d.leaf_hold is None or d.leaf_hold < LEAF_COST:
+            if d.leaf_cost != leaf_cost or d.leaf_gain != leaf_gain:
+                return f"叶子价格读数不符（预期 {leaf_cost} 换 {leaf_gain}）"
+            if d.leaf_hold is None or d.leaf_hold < leaf_cost:
                 return f"叶子不够（持有 {d.leaf_hold}）"
             return None
         if not d.skystone:
             return "右边不是天空石选项"
         if not d.right_selected or d.left_selected:
             return "选中的不是天空石"
-        if d.sky_cost != SKY_COST or d.sky_gain != SKY_GAIN:
-            return f"天空石价格读数不符（预期 {SKY_COST} 换 {SKY_GAIN}）"
+        if d.sky_cost != sky_cost or d.sky_gain != sky_gain:
+            return f"天空石价格读数不符（预期 {sky_cost} 换 {sky_gain}）"
         keep = self.config.skystone_keep
-        if d.sky_hold is None or d.sky_hold - SKY_COST < keep:
+        if d.sky_hold is None or d.sky_hold - sky_cost < keep:
             return f"天空石不够（持有 {d.sky_hold}，保底 {keep}）"
         return None
 
-    def _cancel_energy(self) -> None:
-        """点「行动力不足」框的取消（按弹窗规则），回到准备界面。"""
+    def _cancel_refill(self) -> None:
+        """点补充框的取消（按弹窗规则），回到准备界面。"""
         self.ctl.wait_scene(PREP, timeout=30)
 
-    def _verify_refill(self, before: int, gain: int) -> int:
-        """点购买后：等框关闭、回到准备界面，轮询顶栏行动力直到变化（或 VERIFY_TIMEOUT 秒），返回稳定读数。"""
+    def _verify_refill(self, before: int) -> int:
+        """点购买后：等框关闭、回到准备界面，轮询顶栏读数直到变化（或 VERIFY_TIMEOUT 秒），返回稳定读数。"""
         ctl = self.ctl
         deadline = time.monotonic() + VERIFY_TIMEOUT
         popup_since = None
@@ -748,11 +825,11 @@ class RepeatBattleModule(TaskModule):
             now = time.monotonic()
             if state.is_(PREP):
                 popup_since = None
-                energy = page.read_energy(self.vision, ctl.last_frame)
-                if energy is not None and energy != before:
+                value = self._read_fuel(ctl.last_frame)
+                if value is not None and value != before:
                     break
             elif state.is_(BATTLE):
-                raise RepeatAnomaly("补行动力后游戏直接开始了战斗（没见过，停止核对）")
+                raise RepeatAnomaly(f"补{self._cur}后游戏直接开始了战斗（没见过，停止核对）")
             else:
                 popup_since = popup_since or now
                 if state.popup == POPUP_NETWORK or now - popup_since >= POPUP_GRACE:
@@ -778,9 +855,22 @@ class RepeatBattleModule(TaskModule):
             ctl.sleep(0.15)
         raise RepeatAnomaly(f"顶栏{what}读不出或不稳定（最后一次：{prev}）")
 
+    @property
+    def _cur(self) -> str:
+        """这一关消耗的东西：行动力，异界是光谱核心。"""
+        return "光谱核心" if self._ow else "行动力"
+
+    @property
+    def _auto_unit(self) -> tuple[int, int]:
+        """托管一份 = (几次, 几片叶子)：普通难度 1 片叶子打 4 次，异界 2 片叶子打 1 次。"""
+        return (1, page.OW_LEAVES_PER_RUN) if self._ow else (page.RUNS_PER_UNIT, 1)
+
+    def _read_fuel(self, frame: np.ndarray) -> int | None:
+        return (page.read_core if self._ow else page.read_energy)(self.vision, frame)
+
     def _read_energy_stable(self) -> int:
-        """顶栏行动力，连续两帧一致才采用（数字有滚动动画）。"""
-        self._energy = self._read_stable(lambda f: page.read_energy(self.vision, f), "行动力")
+        """顶栏行动力（异界：光谱核心），连续两帧一致才采用（数字有滚动动画）。"""
+        self._energy = self._read_stable(self._read_fuel, self._cur)
         return self._energy
 
     def _read_skystone_stable(self) -> int:
@@ -817,4 +907,4 @@ class RepeatBattleModule(TaskModule):
             raise StopRepeat(f"连续失败 {n} 次，最后一次：{msg}")
 
 
-__all__ = ["Hunt", "RepeatAnomaly", "RepeatBattleConfig", "RepeatBattleModule", "StopRepeat", "Tier"]
+__all__ = ["OTHERWORLD_ONLY", "Hunt", "RepeatAnomaly", "RepeatBattleConfig", "RepeatBattleModule", "StopRepeat", "Tier"]

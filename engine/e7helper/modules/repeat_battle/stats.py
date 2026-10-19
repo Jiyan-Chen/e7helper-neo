@@ -1,7 +1,7 @@
 """重复刷关的统计，写到模块数据目录：
 
 - `history.jsonl`：每次运行追加一行（含 dry-run）
-- `stats.json`：累计（只统计实跑：手动场次、托管结算/重开次数、行动力消耗、叶子和天空石补充）
+- `stats.json`：累计（只统计实跑：手动场次、托管结算/重开次数、行动力 / 光谱核心消耗、叶子和天空石补充）
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ def now() -> str:
 @dataclass
 class Battle:
     stage: str
-    energy_before: int | None
+    energy_before: int | None  # 持有行动力（异界：光谱核心）
     energy_after: int | None
     seconds: float
     time: str = field(default_factory=now)
@@ -37,6 +37,7 @@ class AutoRun:
     runs: int | None  # 结算：完成次数；重开：预计次数（份数 × 4）
     energy: int = 0  # 重开时用掉的行动力（按顶栏读数差）
     leaves: int = 0  # 重开时设置框显示将使用的叶子
+    cores: int = 0  # 异界：重开时用掉的光谱核心（按顶栏读数差）
     time: str = field(default_factory=now)
 
 
@@ -46,16 +47,18 @@ class RunStats:
     started: str = field(default_factory=now)
     ended: str | None = None
     stage: str = ""
+    currency: str = "行动力"  # 这一关消耗的东西（异界是光谱核心）
     battles: list[Battle] = field(default_factory=list)  # 看到 CLEAR 和结算、且行动力没有多扣的场次
     autos: list[AutoRun] = field(default_factory=list)
     energy_spent: int = 0  # 手动战斗按读数差计（讨伐会掉落行动力，差值可能小于消耗）
+    cores_spent: int = 0  # 异界手动战斗用掉的光谱核心（按读数差）
     leaf_refills: int = 0  # 确认行动力增加后才计
     skystone_refills: int = 0
-    leaves_spent: int = 0  # 补行动力 + 托管设置框显示的叶子
+    leaves_spent: int = 0  # 补充 + 托管设置框显示的叶子
     skystone_spent: int = 0  # 按顶栏读数差
     would: list[str] = field(default_factory=list)  # dry-run 时下一步会做的事
     failures: int = 0
-    energy_start: int | None = None
+    energy_start: int | None = None  # 持有行动力（异界：光谱核心）
     energy_end: int | None = None
     stop_reason: str = ""
 
@@ -63,9 +66,10 @@ class RunStats:
         claimed = sum(a.action == "claimed" for a in self.autos)
         started = sum(a.action == "started" for a in self.autos)
         s = (f"{self.stage or '?'}：手动 {len(self.battles)} 场，托管结算 {claimed} 次、重开 {started} 次，"
-             f"行动力消耗 {self.energy_spent}，补行动力 叶子 {self.leaf_refills} 次 / 天空石 {self.skystone_refills} 次"
+             f"行动力消耗 {self.energy_spent}，光谱核心消耗 {self.cores_spent}，"
+             f"补{self.currency} 叶子 {self.leaf_refills} 次 / 天空石 {self.skystone_refills} 次"
              f"（叶子 {self.leaves_spent}，天空石 {self.skystone_spent}），失败 {self.failures} 次，"
-             f"行动力 {self.energy_start} → {self.energy_end}，停止原因：{self.stop_reason}")
+             f"{self.currency} {self.energy_start} → {self.energy_end}，停止原因：{self.stop_reason}")
         if self.dry_run:
             s = f"[dry-run] {s}；会做：{'；'.join(self.would) or '无'}"
         return s
@@ -87,6 +91,7 @@ def save(data_dir: Path, run: RunStats) -> None:
         total["auto_started"] += sum(a.action == "started" for a in run.autos)
         total["auto_runs_claimed"] += sum(a.runs or 0 for a in run.autos if a.action == "claimed")
         total["energy_spent"] += run.energy_spent + sum(a.energy for a in run.autos)
+        total["cores_spent"] += run.cores_spent + sum(a.cores for a in run.autos)
         total["leaf_refills"] += run.leaf_refills
         total["skystone_refills"] += run.skystone_refills
         total["leaves_spent"] += run.leaves_spent
@@ -101,7 +106,7 @@ def save(data_dir: Path, run: RunStats) -> None:
 
 def load_totals(data_dir: Path) -> dict:
     total = {"runs": 0, "battles": 0, "auto_claimed": 0, "auto_started": 0, "auto_runs_claimed": 0,
-             "energy_spent": 0, "leaf_refills": 0, "skystone_refills": 0, "leaves_spent": 0, "skystone_spent": 0,
+             "energy_spent": 0, "cores_spent": 0, "leaf_refills": 0, "skystone_refills": 0, "leaves_spent": 0, "skystone_spent": 0,
              "updated": None}
     path = data_dir / "stats.json"
     if path.exists():

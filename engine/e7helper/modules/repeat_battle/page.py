@@ -1,4 +1,5 @@
-"""重复刷关界面的识别：顶栏读数、讨伐列表、准备界面、托管战斗（顶栏图标、进度框、设置框）、行动力不足框、战后界面。
+"""重复刷关界面的识别：顶栏读数、讨伐列表、准备界面、托管战斗（顶栏图标、进度框、设置框）、行动力不足框、
+光谱核心购买框（异界，B12a）、战后界面。
 
 全部是纯函数（输入 Vision + 帧），不点击，方便用 fixtures 离线测试。坐标一律是 1600x900 基准（实测 B06）。
 """
@@ -7,6 +8,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
+
+import re
 
 import cv2
 import numpy as np
@@ -20,17 +23,19 @@ from .config import Hunt, Tier
 
 HUNT_LIST = Rect(1285, 160, 300, 740)  # 右侧「可进入的地下城」卡片列表（可上下滑动）
 HUNT_SWIPE = ((1428, 760), (1428, 300))  # 向上滑动列表（看下面的地下城）
-# 中间的难度卡片：随选中的地下城变化（飞龙 / 魔像 / 报丧妖有 中级~异界 四张，后出的地下城只有「讨伐异界」）
+_HUNT_NAME_MIN_H = 26
+# 中间的难度卡片：随选中的地下城变化（大多有 中级~异界 四张，食人魔只有「讨伐异界」，B12a 实测）
 TIER_LIST = Rect(955, 170, 300, 700)
 PREP_HUNT = Rect(1155, 92, 330, 42)  # 准备界面右上「讨伐双足飞龙」
 PREP_TIER = Rect(1155, 142, 300, 42)  # 「讨伐地狱级」
-MODE_TOGGLE = Rect(1520, 796, 60, 64)  # 右下角 快速战斗 / 普通战斗 切换钮
+MODE_TOGGLE = Rect(1520, 796, 60, 64)  # 右下角 快速战斗 / 普通战斗 切换钮（异界没有快速战斗，也没有这个钮）
 _PREP_COST_DX, _PREP_COST_W = -145, 115  # 开始按钮左边「消耗/持有」，相对按钮文字模板
 
 # ---------------------------------------------------------------- 顶栏
 
 _NUM_GAP, _NUM_H = 4, 44
 _ENERGY_W, _SKYSTONE_W = 110, 110
+_CORE_W = 52  # 光谱核心数字右边紧挨着行动力图标
 
 # 托管时钟图标：完成后左上角有静止的红点；进行中是外圈一段橙色光弧在转。红点区域相对表盘模板命中框。
 # 从「重新进行」回到准备界面时，顶栏部分图标（托管、背包、邮件、菜单）变灰，亮度约为平时的 0.38，
@@ -46,19 +51,22 @@ SETTLED_CLOSE = (800, 658)  # 「结算完毕」框的「点击关闭」
 AUTO_PROGRESS = Rect(835, 300, 80, 36)  # 进度框「战斗进度：4/4」的数字
 AUTO_STAGE = Rect(700, 142, 200, 40)  # 进度框「讨伐地狱级」
 # 设置框
-SETUP_ENERGY = Rect(1100, 76, 45, 32)  # 右上持有行动力
-SETUP_LEAF = Rect(1176, 76, 60, 32)  # 右上持有生命之叶
-SETUP_RUN_ENERGY = Rect(1038, 316, 50, 34)  # 1 次消耗行动力
+# 右上「行动力（异界：光谱核心）图标 数字 叶子图标 数字」，整组右对齐，数字位数变了位置就变（B12a：行动力 110 时
+# 按固定区域读成了 10），所以整行识别，取最后两个数字
+SETUP_HEADER = Rect(1030, 66, 230, 50)
+SETUP_RUN_ENERGY = Rect(1038, 316, 50, 34)  # 1 次消耗行动力（异界：光谱核心）
+SETUP_RUN_LEAF = Rect(1150, 316, 85, 34)  # 1 次消耗生命之叶：普通难度「0.25」，异界「2」
 SETUP_CHECK = Rect(697, 383, 38, 38)  # 「优先使用持有的行动力」勾选框
 SETUP_CHECK_LABEL = Rect(745, 388, 225, 28)
-SETUP_COUNT = Rect(900, 515, 140, 45)  # 「1/100」：预计使用生命之叶（每份打 4 次）
+SETUP_COUNT = Rect(900, 515, 140, 45)  # 「1/100」：预计使用生命之叶（普通难度每片打 4 次；异界每次 2 片，+1 加一次）
 SETUP_MIN = Rect(695, 517, 62, 40)  # 「最少」
 SETUP_MINUS = Rect(768, 517, 60, 40)  # 「-1」
 SETUP_PLUS = Rect(1095, 517, 60, 40)  # 「+1」
 SETUP_USE_ENERGY = Rect(880, 622, 70, 40)  # 下方「将使用」行动力
 SETUP_USE_LEAF = Rect(1025, 622, 60, 40)  # 下方「将使用」生命之叶
 SETUP_ESTIMATE = Rect(770, 680, 400, 30)  # 「预计完成：约4次·预计时长：约0小时7分钟」
-RUNS_PER_UNIT = 4  # 每份（1 片叶子）打 4 次
+RUNS_PER_UNIT = 4  # 普通难度每份（1 片叶子）打 4 次
+OW_LEAVES_PER_RUN = 2  # 异界每次 2 片叶子（或 1 个光谱核心），份数框按叶子数显示、每点一次 +1 加 2（B12a 实测）
 _CHECK_GREEN = 0.1  # 勾选后绿色对勾占勾选框约 20%
 _LABEL_ENABLED = 130  # 可勾选时标签文字是白的（98 分位灰度 186），不可勾选时变灰（71）
 
@@ -71,6 +79,17 @@ _RIGHT_EDGE = Rect(840, 380, 270, 14)
 SELECTED_BRIGHT = 150
 _LEAF_COST, _LEAF_GAIN, _LEAF_HOLD = Rect(520, 478, 40, 32), Rect(672, 478, 56, 32), Rect(565, 511, 115, 32)
 _SKY_COST, _SKY_GAIN, _SKY_HOLD = Rect(872, 478, 52, 32), Rect(1030, 478, 56, 32), Rect(912, 511, 140, 32)
+
+# ---------------------------------------------------------------- 光谱核心购买框（点顶栏核心图标打开，B12a）
+
+CORE_LEFT_OPTION = Rect(478, 298, 288, 164)  # 生命之叶 2 → 1
+CORE_RIGHT_OPTION = Rect(835, 298, 288, 164)  # 天空石 80 → 1
+_CORE_LEFT_EDGE = Rect(490, 292, 270, 14)  # 选中的选项上边框是亮黄色（最亮一行约 199，未选中约 16）
+_CORE_RIGHT_EDGE = Rect(845, 292, 265, 14)
+_CORE_LEAF_COST, _CORE_LEAF_GAIN = Rect(515, 392, 45, 34), Rect(680, 392, 45, 34)
+_CORE_SKY_COST, _CORE_SKY_GAIN = Rect(870, 392, 55, 34), Rect(1038, 392, 45, 34)
+_CORE_LEAF_HOLD, _CORE_SKY_HOLD = Rect(555, 425, 130, 34), Rect(905, 425, 150, 34)
+CORE_QTY = Rect(750, 510, 100, 62)  # 「1/3」：这次买几个 / 最多能买几个
 
 # ---------------------------------------------------------------- 战后
 
@@ -113,12 +132,13 @@ class AutoProgress:
 
 @dataclass(frozen=True)
 class AutoSetup:
-    energy: int | None  # 持有行动力
+    energy: int | None  # 持有行动力（异界：光谱核心）
     leaves: int | None  # 持有生命之叶
-    run_energy: int | None  # 1 次消耗行动力
-    count: int | None  # 预计使用生命之叶的份数（每份打 4 次）
+    run_energy: int | None  # 1 次消耗行动力（异界：光谱核心）
+    run_leaves: float | None  # 1 次消耗生命之叶（普通 0.25，异界 2）
+    count: int | None  # 份数框：预计使用生命之叶（普通难度每片打 4 次，异界每次 2 片）
     count_max: int | None
-    use_energy: int | None  # 将使用的行动力
+    use_energy: int | None  # 将使用的行动力（异界：光谱核心）
     use_leaves: int | None  # 将使用的生命之叶
     checked: bool  # 已勾选「优先使用持有的行动力」
     check_enabled: bool  # 可以勾选（行动力不够一份时不可勾选）
@@ -126,9 +146,9 @@ class AutoSetup:
     start: Match
 
     def __str__(self) -> str:
-        return (f"持有行动力 {self.energy}、叶子 {self.leaves}；1 次 {self.run_energy} 行动力；份数 {self.count}/"
-                f"{self.count_max}；将使用行动力 {self.use_energy}、叶子 {self.use_leaves}；"
-                f"优先行动力 {'开' if self.checked else '关'}{'' if self.check_enabled else '（不可选）'}；{self.estimate}")
+        return (f"持有 {self.energy}、叶子 {self.leaves}；1 次 {self.run_energy} 或 {self.run_leaves} 片叶子；份数 "
+                f"{self.count}/{self.count_max}；将使用 {self.use_energy}、叶子 {self.use_leaves}；"
+                f"优先使用持有的 {'开' if self.checked else '关'}{'' if self.check_enabled else '（不可选）'}；{self.estimate}")
 
 
 @dataclass(frozen=True)
@@ -150,6 +170,17 @@ class EnergyDialog:
         sel = "叶子" if self.left_selected else ("天空石" if self.right_selected else "?")
         return (f"叶子 {self.leaf_cost} → {self.leaf_gain}（持有 {self.leaf_hold}），天空石 {self.sky_cost} → "
                 f"{self.sky_gain}（持有 {self.sky_hold}），选中：{sel}")
+
+
+@dataclass(frozen=True)
+class CoreDialog(EnergyDialog):
+    """「购买光谱核心」框：选项和行动力不足框一样（左叶子 / 右天空石），多一个购买数量。"""
+
+    qty: int | None  # 这次买几个（打开时是 1）
+    qty_max: int | None  # 最多能买几个
+
+    def __str__(self) -> str:
+        return f"{super().__str__()}，数量 {self.qty}/{self.qty_max}"
 
 
 # ---------------------------------------------------------------- 顶栏
@@ -174,6 +205,11 @@ def read_energy(vision: Vision, frame: np.ndarray) -> int | None:
 
 def read_skystone(vision: Vision, frame: np.ndarray) -> int | None:
     return _num_right_of(vision, frame, "top/skystone", _SKYSTONE_W, False)
+
+
+def read_core(vision: Vision, frame: np.ndarray) -> int | None:
+    """顶栏光谱核心（异界代币）持有数。只在讨伐列表、准备界面等显示，大厅没有。"""
+    return _num_right_of(vision, frame, "top/core", _CORE_W, False)
 
 
 def auto_dot(vision: Vision, frame: np.ndarray) -> np.ndarray | None:
@@ -217,7 +253,8 @@ def find_hunt(vision: Vision, frame: np.ndarray, hunt: Hunt) -> Rect | None:
     """在讨伐列表里找目标地下城的名字（OCR，约 0.4 秒），返回名字的位置；不在当前可见范围返回 None。"""
     want = normalize_text(f"讨伐{hunt.value}")
     for r in vision.ocr.read(frame, HUNT_LIST):
-        if normalize_text(r.text) == want:
+        # 名字被屏幕底边截掉一半时也能认出来（高约 18，完整约 35），但点不准，当作不在可见范围（B12a）
+        if normalize_text(r.text) == want and r.rect.h >= _HUNT_NAME_MIN_H:
             return r.rect
     return None
 
@@ -295,10 +332,12 @@ def read_auto_setup(vision: Vision, frame: np.ndarray) -> AutoSetup | None:
         return None
     ocr = vision.ocr
     frac = ocr.read_fraction(frame, SETUP_COUNT)
+    nums = [int(t) for r in ocr.read(frame, SETUP_HEADER) if (t := r.text.replace(",", "")).isdigit()]
     return AutoSetup(
-        energy=ocr.read_number(frame, SETUP_ENERGY),
-        leaves=ocr.read_number(frame, SETUP_LEAF),
+        energy=nums[-2] if len(nums) >= 2 else None,
+        leaves=nums[-1] if len(nums) >= 2 else None,
         run_energy=ocr.read_number(frame, SETUP_RUN_ENERGY),
+        run_leaves=_parse_float(ocr.read_line(frame, SETUP_RUN_LEAF).text),
         count=None if frac is None else frac[0],
         count_max=None if frac is None else frac[1],
         use_energy=ocr.read_number(frame, SETUP_USE_ENERGY),
@@ -310,18 +349,26 @@ def read_auto_setup(vision: Vision, frame: np.ndarray) -> AutoSetup | None:
     )
 
 
-def plan_auto(energy: int, run_energy: int, max_leaves: int, prefer_energy: bool,
-              max_units: int = 0) -> tuple[int, int, int]:
-    """托管要设的份数，以及预计使用的行动力和叶子：(份数, 行动力, 叶子)。
+def _parse_float(text: str) -> float | None:
+    m = re.search(r"\d+(?:\.\d+)?", text)
+    return float(m.group()) if m else None
 
-    每份打 RUNS_PER_UNIT 次；勾选「优先使用持有的行动力」时先用行动力凑整份，剩下的用叶子（最多 max_leaves 片）。
-    max_units > 0 时份数不超过它（先少用叶子）。
+
+def plan_auto(energy: int, run_energy: int, max_leaves: int, prefer_energy: bool,
+              max_units: int = 0, *, runs_per_unit: int = RUNS_PER_UNIT,
+              leaves_per_unit: int = 1) -> tuple[int, int, int]:
+    """托管份数框要设的值，以及预计使用的行动力（异界：光谱核心）和叶子：(份数框的值, 行动力, 叶子)。
+
+    份数框显示的是叶子数，一「份」是点一次 +1 加的量：普通难度 1 片叶子 = 4 次（runs_per_unit=4,
+    leaves_per_unit=1），异界 2 片叶子 = 1 次（runs_per_unit=1, leaves_per_unit=2）。勾选「优先使用持有的…」时
+    先用行动力 / 核心凑整份，剩下的用叶子（最多 max_leaves 片）。max_units > 0 时份数不超过它（先少用叶子）。
+    份数框最多 100。
     """
-    unit = run_energy * RUNS_PER_UNIT
+    unit = run_energy * runs_per_unit
     energy_units = energy // unit if prefer_energy and unit > 0 else 0
-    count = min(100, energy_units + max_leaves, max_units or 100)
-    use_energy_units = min(count, energy_units)
-    return count, use_energy_units * unit, count - use_energy_units
+    units = min(100 // leaves_per_unit, energy_units + max_leaves // leaves_per_unit, max_units or 100)
+    use_energy_units = min(units, energy_units)
+    return units * leaves_per_unit, use_energy_units * unit, (units - use_energy_units) * leaves_per_unit
 
 
 # ---------------------------------------------------------------- 行动力不足框
@@ -354,6 +401,33 @@ def read_energy_dialog(vision: Vision, frame: np.ndarray) -> EnergyDialog | None
         sky_hold=ocr.read_number(frame, _SKY_HOLD),
         buy=buy,
         cancel=cancel,
+    )
+
+
+def read_core_dialog(vision: Vision, frame: np.ndarray) -> CoreDialog | None:
+    """「购买光谱核心」框完全显示时（购买 / 取消按钮的 max_diff 通过）返回其内容。"""
+    if vision.find(frame, "core/title") is None:
+        return None
+    buy, cancel = vision.find(frame, "core/buy"), vision.find(frame, "core/cancel")
+    if buy is None or cancel is None:
+        return None
+    ocr = vision.ocr
+    qty = ocr.read_fraction(frame, CORE_QTY)
+    return CoreDialog(
+        leaf=vision.find(frame, "core/leaf") is not None,
+        skystone=vision.find(frame, "core/skystone") is not None,
+        left_selected=_edge_bright(frame, _CORE_LEFT_EDGE) >= SELECTED_BRIGHT,
+        right_selected=_edge_bright(frame, _CORE_RIGHT_EDGE) >= SELECTED_BRIGHT,
+        leaf_cost=ocr.read_number(frame, _CORE_LEAF_COST),
+        leaf_gain=ocr.read_number(frame, _CORE_LEAF_GAIN),
+        leaf_hold=ocr.read_number(frame, _CORE_LEAF_HOLD),
+        sky_cost=ocr.read_number(frame, _CORE_SKY_COST),
+        sky_gain=ocr.read_number(frame, _CORE_SKY_GAIN),
+        sky_hold=ocr.read_number(frame, _CORE_SKY_HOLD),
+        buy=buy,
+        cancel=cancel,
+        qty=None if qty is None else qty[0],
+        qty_max=None if qty is None else qty[1],
     )
 
 

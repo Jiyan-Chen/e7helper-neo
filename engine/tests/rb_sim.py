@@ -5,7 +5,11 @@
     start：「战斗开始」（行动力够时）；"ok" 扣行动力并开打，"eat" 点击被吞
     auto_start：托管确认框的「确认」；"ok" 按设置扣行动力 / 叶子，托管进入进行中
     claim：托管框的「结算」；"ok" 结算
-    refill：行动力不足框的「购买」；"ok" 按选中的选项扣叶子 / 天空石并加行动力
+    refill：行动力不足框 / 购买光谱核心框的「购买」；"ok" 按选中的选项扣叶子 / 天空石并加行动力 / 核心
+- 讨伐异界（B12a）：tier="异界" 时准备界面是 rb_ow_prep（没有快速战斗，右下角就是「战斗开始」按钮，
+  点到原来切换钮的位置 = DANGER），消耗光谱核心（cores）；核心不够时点「战斗开始」= DANGER（模块应该先点
+  顶栏核心图标打开购买框）；托管设置框 rb_ow_auto_setup 的份数按叶子数，每档 2 片 = 1 次；
+  胜利后是宝珠画面 rb_ow_reward（点一下）→ 战后 rb_ow_after，没有 CLEAR 和结算页。
 - 进行中的托管框里点到「中断」一律进入 DANGER。
 - 截图上的数字是固定的，读数（行动力、天空石、准备界面消耗、设置框、补充框选中项、关卡名、讨伐列表）
   由测试用 monkeypatch 换成模拟器的值（见 test_repeat_battle._patch_reads）。
@@ -27,7 +31,7 @@ HUNT_END = ["阿吉玛纳克", "卡戴斯", "食人魔"]  # 翻到底后可见�
 HUNT_ROWS = [Rect(1301, 336, 180, 36), Rect(1302, 592, 121, 35), Rect(1303, 847, 148, 35)]
 TIERS = ["中级", "上级", "地狱级", "异界"]
 TIER_CARDS = [Rect(962, 187, 278, 115), Rect(962, 322, 278, 115), Rect(962, 457, 278, 115), Rect(962, 592, 278, 115)]
-ONLY_ABYSS = {"阿吉玛纳克", "卡戴斯", "食人魔"}  # 后出的地下城只有「讨伐异界」一张难度卡片（在第一张的位置）
+ONLY_ABYSS = {"食人魔"}  # 只有「讨伐异界」一张难度卡片（在第一张的位置）；其他都有四张（B12a 实测）
 
 BACK_BTN = Rect(28, 18, 38, 44)
 LOBBY_BATTLE = Rect(1485, 388, 60, 34)
@@ -48,11 +52,18 @@ ENERGY_LEFT, ENERGY_RIGHT = Rect(478, 385, 288, 160), Rect(835, 385, 288, 160)
 RESULT_OK = Rect(1356, 790, 208, 75)
 AFTER_RETRY, AFTER_LEAVE = Rect(1228, 790, 336, 75), Rect(32, 790, 207, 72)
 AUTO_ICON = Rect(1382, 14, 54, 50)
+CORE_ICON = Rect(645, 18, 48, 44)  # 顶栏光谱核心图标（含左上的「+」）
+CORE_CANCEL, CORE_BUY = Rect(542, 700, 246, 74), Rect(810, 700, 246, 74)
+CORE_LEFT, CORE_RIGHT = Rect(478, 298, 288, 164), Rect(835, 298, 288, 164)
+CORE_PRICES = {"leaf": 2, "skystone": 80}  # 换 1 个光谱核心
 
 LOBBY = {"none": "rb_lobby_no_auto", "running": "rb_lobby_auto_running", "done": "rb_lobby_auto_done"}
 PREP = {"quick": "rb_prep_quick", "battle": "rb_prep_battle"}
 AUTO_DIALOG = {"running": "rb_auto_running", "done": "rb_auto_done"}
-PREP_SCREENS = set(PREP.values())
+OW_PREP = "rb_ow_prep"
+PREP_SCREENS = {*PREP.values(), OW_PREP}
+SETUP_SCREENS = ("rb_auto_setup", "rb_ow_auto_setup")
+AFTER_SCREENS = ("rb_after", "rb_ow_after")
 
 
 def _hit(r: Rect, x: int, y: int) -> bool:
@@ -64,13 +75,14 @@ class RbSim(GameSim):
                  skystone: int = 19728, auto: str = "none", auto_done_runs: int = 4, no_record: bool = False,
                  start: str = "danger", auto_start: str = "danger", claim: str = "danger", refill: str = "danger",
                  battle_shots: int = 4, drop_energy: int = 0, auto_on: bool = True, checked: bool = False,
-                 hunt: str = "双足飞龙", tier: str = "地狱级", **kw):
+                 hunt: str = "双足飞龙", tier: str = "地狱级", cores: int = 27, **kw):
         if screen == "lobby":
             screen = LOBBY[auto]
         elif screen == "prep":
-            screen = PREP["quick"]
+            screen = OW_PREP if tier == "异界" else PREP["quick"]
         super().__init__(screen, **kw)
         self.energy, self.cost, self.leaves, self.skystone = energy, cost, leaves, skystone
+        self.cores = cores  # 光谱核心（异界每场 1 个）
         self.auto = auto  # none / running / done
         self.auto_done_runs = auto_done_runs
         self.no_record = no_record
@@ -79,16 +91,17 @@ class RbSim(GameSim):
         self.drop_energy = drop_energy  # 每场掉落的行动力
         self.auto_on = auto_on
         self.checked = checked  # 托管设置框「优先使用持有的行动力」
-        self.count = 1  # 托管份数
         self.mode = "quick"
         self.scrolled = False
         self.selected, self.tier = hunt, tier  # 讨伐列表当前选中的地下城、进入的难度
-        self.option = "leaf"  # 行动力不足框选中的选项
+        self.count = self.step  # 托管份数框（叶子数）
+        self.option = "leaf"  # 行动力不足框 / 购买光谱核心框选中的选项
         self.starts = 0
         self.battles = 0
-        self.auto_starts: list[tuple[int, int, int]] = []  # (份数, 行动力, 叶子)
+        self.auto_starts: list[tuple[int, int, int]] = []  # (份数框, 行动力或核心, 叶子)
         self.claims = 0
         self.refills: list[str] = []
+        self.core_taps = 0  # 点顶栏光谱核心图标的次数
         self.toggles = 0
         self.auto_taps = 0
         self.linger = 2
@@ -99,15 +112,42 @@ class RbSim(GameSim):
     # ------------------------------------------------------------ 读数（测试替换识别函数时用）
 
     @property
+    def ow(self) -> bool:
+        """当前关卡是讨伐异界（消耗光谱核心）。"""
+        return self.tier == "异界"
+
+    @property
+    def fuel(self) -> int:
+        return self.cores if self.ow else self.energy
+
+    @fuel.setter
+    def fuel(self, v: int) -> None:
+        if self.ow:
+            self.cores = v
+        else:
+            self.energy = v
+
+    @property
+    def run_cost(self) -> int:
+        """一次消耗：行动力 cost，异界 1 个核心。"""
+        return 1 if self.ow else self.cost
+
+    @property
+    def step(self) -> int:
+        """托管份数框每档几片叶子：普通 1（打 4 次），异界 2（打 1 次）。"""
+        return 2 if self.ow else 1
+
+    @property
     def check_enabled(self) -> bool:
-        return self.energy >= self.cost * 4
+        return self.fuel >= self.run_cost * (1 if self.ow else 4)
 
     def setup_use(self) -> tuple[int, int]:
-        """设置框「将使用」的行动力和叶子（模拟游戏：勾选后先用行动力凑整份）。"""
-        unit = self.cost * 4
-        energy_units = self.energy // unit if self.checked and self.check_enabled else 0
-        e = min(self.count, energy_units)
-        return e * unit, self.count - e
+        """设置框「将使用」的行动力（异界：核心）和叶子（模拟游戏：勾选后先用行动力 / 核心凑整份）。"""
+        unit = self.run_cost * (1 if self.ow else 4)
+        units = self.count // self.step
+        energy_units = self.fuel // unit if self.checked and self.check_enabled else 0
+        e = min(units, energy_units)
+        return e * unit, (units - e) * self.step
 
     def visible_hunts(self) -> list[str]:
         return HUNT_END if self.scrolled else HUNT_TOP
@@ -120,12 +160,12 @@ class RbSim(GameSim):
 
     def screenshot(self) -> np.ndarray:
         img = super().screenshot()
-        if self.screen == "rb_after":
+        if self.screen in AFTER_SCREENS:
             return cv2.add(img, np.full_like(img, 12 * (self.screenshots % 2)))
         if self.screen == "rb_battle":
             self._shots_left -= 1
             if self._shots_left <= 0:
-                self._go("rb_clear")
+                self._go("rb_ow_reward" if self.ow else "rb_clear")
             if self.auto_on:
                 self._angle += 40
                 return self._rotated_icon(img)
@@ -141,12 +181,15 @@ class RbSim(GameSim):
                                                         borderMode=cv2.BORDER_REPLICATE)
         return img
 
+    def _prep_screen(self) -> str:
+        return OW_PREP if self.ow else PREP[self.mode]
+
     def _prep(self) -> None:
-        self._go(PREP[self.mode])
+        self._go(self._prep_screen())
 
     def _close_dialog(self) -> None:
         """托管框关闭要淡出 linger 次截图。"""
-        self.then = (self.linger, PREP[self.mode])
+        self.then = (self.linger, self._prep_screen())
 
     # ------------------------------------------------------------ 输入
 
@@ -178,7 +221,7 @@ class RbSim(GameSim):
                 self._go("rb_battle_menu")
         elif s in PREP_SCREENS:
             self._tap_prep(bx, by)
-        elif s == "rb_auto_setup":
+        elif s in SETUP_SCREENS:
             self._tap_setup(bx, by)
         elif s == "rb_auto_confirm":
             if self.then is not None and _hit(CONFIRM_CANCEL, bx, by):
@@ -192,12 +235,12 @@ class RbSim(GameSim):
                     self._go(DANGER)
                     return
                 use_e, use_l = self.setup_use()
-                self.energy -= use_e
+                self.fuel -= use_e
                 self.leaves -= use_l
                 self.auto_starts.append((self.count, use_e, use_l))
                 self.auto = "running"
-                self.then = (self.linger, PREP[self.mode])  # 确认框淡出
-        elif s in ("rb_auto_running", "rb_auto_done", "rb_auto_claimed", "rb_auto_setup") and self.then is not None:
+                self.then = (self.linger, self._prep_screen())  # 确认框淡出
+        elif s in ("rb_auto_running", "rb_auto_done", "rb_auto_claimed", *SETUP_SCREENS) and self.then is not None:
             self.late_cancels += 1  # 框在淡出，又点了一次
         elif s in ("rb_auto_running", "rb_auto_done", "rb_auto_claimed"):
             if _hit(DIALOG_BTN, bx, by):
@@ -239,16 +282,38 @@ class RbSim(GameSim):
                     self.energy += 60
                 self.refills.append(self.option)
                 self.then = (self.linger, PREP[self.mode])  # 补充框淡出
+        elif s == "rb_ow_core_buy":
+            if self.then is not None:
+                self.late_cancels += _hit(CORE_CANCEL, bx, by)
+            elif _hit(CORE_CANCEL, bx, by):
+                self._prep()
+            elif _hit(CORE_LEFT, bx, by):
+                self.option = "leaf"
+            elif _hit(CORE_RIGHT, bx, by):
+                self.option = "skystone"
+            elif _hit(CORE_BUY, bx, by):
+                if self.refill != "ok":
+                    self._go(DANGER)
+                    return
+                if self.option == "leaf":
+                    self.leaves -= CORE_PRICES["leaf"]
+                else:
+                    self.skystone -= CORE_PRICES["skystone"]
+                self.cores += 1
+                self.refills.append(self.option)
+                self.then = (self.linger, OW_PREP)  # 购买框淡出
         elif s == "rb_battle":
             if _hit(AUTO_ICON, bx, by):
                 self.auto_taps += 1
                 self.auto_on = True
         elif s == "rb_clear":
             self._go("rb_result")
+        elif s == "rb_ow_reward":
+            self._go("rb_ow_after")
         elif s == "rb_result":
             if _hit(RESULT_OK, bx, by):
                 self._go("rb_after")
-        elif s == "rb_after":
+        elif s in AFTER_SCREENS:
             if _hit(AFTER_RETRY, bx, by):
                 self.mode = "quick"  # 回到准备界面时游戏默认是快速战斗
                 self._prep()
@@ -258,6 +323,12 @@ class RbSim(GameSim):
     def _tap_prep(self, bx: int, by: int) -> None:
         if _hit(RECOMMEND, bx, by):
             self._go(DANGER)
+        elif self.ow and _hit(TOGGLE, bx, by):
+            self._go(DANGER)  # 异界没有切换钮，这里是「战斗开始」按钮的右端
+        elif self.ow and _hit(CORE_ICON, bx, by):
+            self.core_taps += 1
+            self.option = "leaf"
+            self._go("rb_ow_core_buy")
         elif _hit(TOGGLE, bx, by):
             self.toggles += 1
             self.mode = "battle" if self.mode == "quick" else "quick"
@@ -265,13 +336,15 @@ class RbSim(GameSim):
         elif _hit(PREP_AUTO, bx, by):
             if self.auto == "none":
                 if not self.no_record:
-                    self._go("rb_auto_setup")
+                    self._go("rb_ow_auto_setup" if self.ow else "rb_auto_setup")
             else:
                 self._go(AUTO_DIALOG[self.auto])
         elif _hit(PREP_START, bx, by):
-            if self.mode == "quick":
+            if self.mode == "quick" and not self.ow:
                 self._go(DANGER)  # 本模块不用快速战斗
-            elif self.energy < self.cost:
+            elif self.ow and self.cores < 1:
+                self._go(DANGER)  # 核心不够时游戏会怎样没见过：模块不该点
+            elif not self.ow and self.energy < self.cost:
                 self.option = "leaf"
                 self._go("rb_energy_low")
             else:
@@ -281,7 +354,7 @@ class RbSim(GameSim):
                 if self.start != "ok":
                     self._go(DANGER)
                     return
-                self.energy -= self.cost
+                self.fuel -= self.run_cost
                 self._shots_left = self.battle_shots
                 self._go("rb_battle_start")
                 self.then = (1, "rb_battle")
@@ -293,18 +366,18 @@ class RbSim(GameSim):
             if self.check_enabled:
                 self.checked = not self.checked
         elif _hit(SETUP_MIN, bx, by):
-            self.count = 1
+            self.count = self.step
         elif _hit(SETUP_MINUS, bx, by):
-            self.count = max(1, self.count - 1)
+            self.count = max(self.step, self.count - self.step)
         elif _hit(SETUP_PLUS, bx, by):
-            self.count = min(100, self.count + 1)
+            self.count = min(100, self.count + self.step)
         elif _hit(SETUP_START, bx, by):
             self._go("rb_auto_confirm")
         elif _hit(CLOSE_AREA, bx, by):
             self._close_dialog()
 
     def _go(self, target: str) -> None:
-        if target == "rb_clear":
+        if target in ("rb_clear", "rb_ow_reward"):
             self.battles += 1
             self.energy += self.drop_energy
         super()._go(target)
@@ -318,7 +391,8 @@ class RbSim(GameSim):
     def back(self) -> None:
         self.backs += 1
         s = self.screen
-        if s in ("rb_auto_setup", "rb_auto_running", "rb_auto_done", "rb_auto_claimed", "rb_energy_low"):
+        if s in (*SETUP_SCREENS, "rb_auto_running", "rb_auto_done", "rb_auto_claimed", "rb_energy_low",
+                 "rb_ow_core_buy"):
             self._prep()
         elif s == "rb_auto_confirm":
             self._go("rb_auto_setup")

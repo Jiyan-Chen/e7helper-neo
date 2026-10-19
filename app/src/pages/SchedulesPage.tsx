@@ -284,7 +284,8 @@ export function ScheduleEditor({
         </Row>
         <h4 className="panel-title mt-2">运行时用的设置</h4>
         {cfg && detail ? (
-          <ConfigForm fields={fields} config={cfg} ui={ui} errors={{}} update={(k, v) => setConfig({ ...cfg, [k]: v })} />
+          <ConfigForm fields={fields} config={cfg} ui={ui} errors={{}}
+            update={(k, v) => setConfig((c) => ({ ...(c ?? cfg), [k]: v }))} />
         ) : (
           <p className="text-muted">加载中…</p>
         )}

@@ -47,6 +47,11 @@ export interface ModuleUI {
   fieldDeps?: Record<string, string>;
   /** 附加选项（布尔字段 → 它所属的主开关）：画在主开关那一行里，只显示名字；主开关关掉时变灰 */
   subFields?: Record<string, string>;
+  /**
+   * 按当前设置锁定的字段 → 锁定值（例如重复刷关选了食人魔，难度只能是异界）。
+   * 锁定的字段显示锁定值、变灰；改了别的字段后锁定值会一起写进设置。
+   */
+  fieldLocks?: (config: Record<string, unknown>) => Record<string, unknown>;
   /** 自己画的字段：画在自动表单里这个字段的位置（例如书签刷取的商品选择） */
   fieldRenderers?: Record<string, ComponentType<FieldRendererProps>>;
   /** 永远不显示的字段（引擎内部参数已经用 SkipJsonSchema 隐藏，这里是额外的） */

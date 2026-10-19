@@ -1,6 +1,6 @@
 # HANDOFF
 
-> 新会话从这里读起。上次更新：2026-10-19（B12 已通过）
+> 新会话从这里读起。上次更新：2026-10-20（B12a 已通过）
 
 ## 当前进度
 - **B01 骨架 + 模块契约 + MuMu 设备层**：✅ 已通过，记录见 [reviews/B01.md](reviews/B01.md)。
@@ -16,7 +16,8 @@
 - **B10a 弹窗补漏：断线自动重进**：✅ 已通过，记录见 [reviews/B10a.md](reviews/B10a.md)。B10 真机验证时发现的「与服务器的连接中断」弹窗，单独立项、单独审核。
 - **B11 自定义流程 + 玩家模板采集**：✅ 已通过，记录见 [reviews/B11.md](reviews/B11.md)。
 - **B12 试用打磨（开发版）**：✅ 已通过，记录见 [reviews/B12.md](reviews/B12.md)。9 条反馈：竞技场并入日常收取、补旗做成附加选项、精简全部说明、「动态」红色 asyncio 报错、书签刷取（固定三种商品 + 没出就停 / 换世界频道）、标题栏做进应用、引擎关闭挂住（改用 Selector 事件循环）、左上角固定头像和应用名、界面过渡动画。
-- 下一块：**B12a 讨伐异界**（B12 新需求 1，单独立项、单独审核），之后 **B12b 日常收取：商店日常购买**（B12 新需求 2）。扩展模块 B13+（第一项英雄数据库）排在它们后面。
+- **B12a 讨伐异界**：✅ 已通过，记录见 [reviews/B12a.md](reviews/B12a.md)。重复刷关加上「异界」难度和 阿吉玛纳克 / 卡戴斯 / 食人魔；异界消耗光谱核心，可用叶子 / 天空石补充；异界胜利后的宝珠画面；「托管最多几份」进表单；GUI 新增 `fieldLocks`（食人魔锁定异界）。全量 `890 passed, 7 skipped`，前端 16 个。
+- 下一块：**B12b 日常收取：商店日常购买**（B12 新需求 2，单独立项、单独审核）。扩展模块 B13+（第一项英雄数据库）排在它后面。
 
 ## 已有能力
 ### 设备（B01）
@@ -34,12 +35,12 @@
 - 模板：`engine/assets/<module_id>/cn/<name>.png` + `.json`。
   - 查找顺序：模块自己的 → `common`。
   - 已有模板：
-    - `common`：`back`、`top/skystone`、`top/gold`、`dialog/cancel`、`dialog/confirm`、`lobby/secret_shop`（带 `tap`）、`lobby/shop`；B05 新增 `lobby/arena`、`top/flag`、`arena/mode_arena`；B06 新增 `lobby/battle`、`title/battle`、`title/prep`、`top/energy`（行动力）、`top/auto_clock`（托管图标表盘）；B03 新增 `title/secret_shop`、`title/shop`、`title/arena`、`title/sanctuary`、`popup/notice`、`popup/network_error`、`popup/network_retry`；B07 新增 `lobby/sanctuary`（带 `tap`）、`lobby/summon`、`top/mail`、`title/mail`、`title/forest`、`title/summon`；B10a 新增 `popup/disconnected`、`popup/tap_close`、`popup/announce_close`、`popup/announce_faq`、`title/start`（游戏标题画面「轻触画面开始」）
+    - `common`：`back`、`top/skystone`、`top/gold`、`dialog/cancel`、`dialog/confirm`、`lobby/secret_shop`（带 `tap`）、`lobby/shop`；B05 新增 `lobby/arena`、`top/flag`、`arena/mode_arena`；B06 新增 `lobby/battle`、`title/battle`、`title/prep`、`top/energy`（行动力）、`top/auto_clock`（托管图标表盘）；B03 新增 `title/secret_shop`、`title/shop`、`title/arena`、`title/sanctuary`、`popup/notice`、`popup/network_error`、`popup/network_retry`；B07 新增 `lobby/sanctuary`（带 `tap`）、`lobby/summon`、`top/mail`、`title/mail`、`title/forest`、`title/summon`；B10a 新增 `popup/disconnected`、`popup/tap_close`、`popup/announce_close`、`popup/announce_faq`、`title/start`（游戏标题画面「轻触画面开始」）；B12a 新增 `top/core`（光谱核心，阈值 0.75）
     - `secret_shop`：`title`、`refresh`、`buy`；B04 新增 `coin`、`dialog/buy_title`、`dialog/buy_ok`、`dialog/refresh_text`、`item/covenant`、`item/mystic`
     - `arena_npc`（B05）：`tab/npc`、`npc/*`、`prep/*`、`battle/*`、`result/*`、`record/*`、`buy/*`，共 21 个
-    - `repeat_battle`（B06）：`menu/hunt`、`hunt/header`、`prep/*`、`auto/*`、`battle/*`、`clear`、`result/*`、`after/*`、`energy/*`，共 27 个
+    - `repeat_battle`（B06）：`menu/hunt`、`hunt/header`、`prep/*`、`auto/*`、`battle/*`、`clear`、`result/*`、`after/*`、`energy/*`，共 27 个；B12a 新增 `core/*`（购买光谱核心框）、`ow_reward`（异界宝珠画面），共 33 个
     - `daily`（B07）：`sanctuary/forest`、`forest/*`、`mail/*`、`summon/*`，共 18 个
-- fixtures：`engine/tests/fixtures/`（B07 后约 137MB）。B07 新增 35 张 `daily_*`（大厅、圣域白天 / 夜晚、精灵之森各状态和奖励框、邮件列表 / 详情框 / 领取后、召唤页、誓约页 21/21 · 11/21 · 1/21 · 用完 · 带光效、召唤动画、十连结果、单抽结果；期望结果在 `tests/test_daily.py`）。B06 新增 36 张 `rb_*`（讨伐导航、准备界面各状态、托管各框、战斗、CLEAR、结算、战后、行动力不足；期望结果在 `tests/test_repeat_battle.py`）。此前的包括 `lobby`、`secret_shop`、`secret_shop_scrolled`、`secret_shop_refresh_confirm`；B05 新增 17 张 `arena_*`（模式选择外的竞技场各界面、战斗中、两种结算、补旗框三种状态）；B04 新增 `secret_shop_relist(_scrolled)`、`secret_shop_buy_confirm`、`secret_shop_sold`、`secret_shop_bought_toast`；B03 新增 `shop`、`arena`、`arena_notice`、`sanctuary`、`sanctuary_help`、`lobby_exit_confirm`、`lobby_network_error`；B10a 新增 `lobby_disconnected`、`summon_disconnected`、`title_announcement`、`title_connecting`、`title_start`、`title_start_forest`（约 5.9MB）。模板的期望结果在 `tests/test_vision_fixtures.py`，场景的期望结果在 `tests/test_scene.py`。
+- fixtures：`engine/tests/fixtures/`（B07 后约 137MB）。B07 新增 35 张 `daily_*`（大厅、圣域白天 / 夜晚、精灵之森各状态和奖励框、邮件列表 / 详情框 / 领取后、召唤页、誓约页 21/21 · 11/21 · 1/21 · 用完 · 带光效、召唤动画、十连结果、单抽结果；期望结果在 `tests/test_daily.py`）。B06 新增 36 张 `rb_*`（讨伐导航、准备界面各状态、托管各框、战斗、CLEAR、结算、战后、行动力不足；期望结果在 `tests/test_repeat_battle.py`）。B12a 新增 15 张（约 14MB）：`rb_ow_*`（异界准备界面 有记录 / 无记录 / 卡戴斯、托管设置框、购买光谱核心框、宝珠画面、战后）、`rb_hunt_list_azimanak` / `_kades`、`rb_auto_setup_110`。此前的包括 `lobby`、`secret_shop`、`secret_shop_scrolled`、`secret_shop_refresh_confirm`；B05 新增 17 张 `arena_*`（模式选择外的竞技场各界面、战斗中、两种结算、补旗框三种状态）；B04 新增 `secret_shop_relist(_scrolled)`、`secret_shop_buy_confirm`、`secret_shop_sold`、`secret_shop_bought_toast`；B03 新增 `shop`、`arena`、`arena_notice`、`sanctuary`、`sanctuary_help`、`lobby_exit_confirm`、`lobby_network_error`；B10a 新增 `lobby_disconnected`、`summon_disconnected`、`title_announcement`、`title_connecting`、`title_start`、`title_start_forest`（约 5.9MB）。模板的期望结果在 `tests/test_vision_fixtures.py`，场景的期望结果在 `tests/test_scene.py`。
 - CLI：
   - `capture <module> <name>`：弹窗框选，或用 `-f 文件 -r x,y,w,h` 指定
   - `match <module> [names] [-f] [-a]`
@@ -82,18 +83,20 @@
   - 两个选项的购买框：点购买前核对**哪个选项被选中**（边框亮度），不能只看按钮；
   - 离线测试用 `tests/arena_sim.py` + `tests/test_daily_arena.py`（战斗、结算、自动图标旋转都能模拟）。
 
-### 重复刷关 `repeat_battle`（B06，详见 architecture.md「已有模块」和 reviews/B06.md）
+### 重复刷关 `repeat_battle`（B06，B12a 加讨伐异界；详见 architecture.md「已有模块」、reviews/B06.md 和 reviews/B12a.md）
 - 游戏的「重复战斗」已重做成**托管战斗**：准备界面设份数（1 份 = 4 次，行动力或叶子付费），后台按最快通关记录自动打，完成后在托管框「结算」。无记录的关卡开不了。
 - `python -m uv run e7helper run repeat_battle`：默认 **dry-run**（导航到 讨伐双足飞龙 地狱级，打开托管设置框核对后关闭，切普通战斗后停下）
-- 实跑：`-c '{"dry_run": false, "manual_runs": N}'`。表单字段：`hunt`（飞龙 / 魔像 / 报丧妖）、`tier`（中级 / 上级 / 地狱级）、`start_here`、`auto_battle`、`auto_leaves`、`manual`、`manual_runs`、`refill_leaf` / `max_leaf_refills`、`refill_skystone` / `max_skystone_refills`、`dry_run`；内部字段 `auto_max_units`（托管最多几份，控制实跑规模）、`auto_prefer_energy`、`skystone_keep` 等
+- 实跑：`-c '{"dry_run": false, "manual_runs": N}'`。表单字段：`hunt`（飞龙 / 魔像 / 报丧妖 / 阿吉玛纳克 / 卡戴斯 / 食人魔）、`tier`（中级 / 上级 / 地狱级 / 异界；食人魔只有异界，GUI 锁定）、`start_here`、`auto_battle`、`auto_max_units`（「托管最多几份」，B12a 进表单）、`auto_leaves`、`manual`、`manual_runs`、`refill_leaf` / `max_leaf_refills`、`refill_skystone` / `max_skystone_refills`（B12a 起叫「用生命之叶补充 / 用天空石补充」，行动力和光谱核心通用）、`dry_run`；内部字段 `auto_prefer_energy`、`skystone_keep` 等
 - 托管和手动是两个独立开关；只开托管时处理一次就退出（周期性结算重开由 B08 定时调度反复启动模块，用户确认）
+- **讨伐异界**（B12a）：消耗**光谱核心**（顶栏行动力左边的红色图标，只在讨伐列表 / 准备界面显示，`page.read_core`）。准备界面没有快速战斗；托管 1 次 = 1 核心或 2 叶子（份数框按叶子数，+1 加 2）；补充点顶栏核心图标打开「购买光谱核心」框（叶子 2 换 1、天空石 80 换 1、数量保持 1）；胜利后是宝珠画面「请轻触屏幕领取奖励。」（`rb_ow_reward`）→ 战后，没有 CLEAR 和结算页。实测一场约 133 秒（食人魔）
+- 统计新增 `cores_spent`（GUI「花费光谱核心」）；`history.jsonl` 每行有 `currency`
 - 统计：`%LOCALAPPDATA%\e7helper\modules\repeat_battle\history.jsonl`、`stats.json`
 - 实测：手动一场约 2 分钟（地狱级，自动战斗）；托管 1 份约 7 分钟
 - 可以复用的做法：
   - 点了弹窗的确认 / 购买 / 关闭后，**等框自己淡出**（`_wait_popup_gone`），不要马上 `wait_scene`；
   - 位置会变的列表（讨伐列表、难度卡片）用 OCR `read` 找整行文字再点；
   - 状态图标的红点要按图标亮度归一化，并用多帧排除转动的光效（`auto_state` + `dots_match`）；
-  - 离线测试用 `tests/rb_sim.py`（战后界面一直在动、弹窗淡出、点到「推荐配置」= DANGER）。
+  - 离线测试用 `tests/rb_sim.py`（战后界面一直在动、弹窗淡出、点到「推荐配置」= DANGER；B12a 加异界：`tier="异界"` 时用 `rb_ow_*` 画面，点原切换钮位置 / 核心不够还点战斗开始 = DANGER）。
 
 ### 日常收取 `daily`（B07，详见 architecture.md「已有模块」和 reviews/B07.md）
 - `python -m uv run e7helper run daily`：默认 **dry-run**（三项都进去识别，不点领取 / 照料 / 召唤 / 收信）
@@ -153,6 +156,7 @@
 - **B12 起**：
   - 没有系统标题栏（`decorations: false`）：顶栏就是标题栏（`data-tauri-drag-region`，拖动、双击最大化），左上固定索尔缇娅头像 +「第七史诗助手」，右上 `WindowControls`（最小化 / 最大化 / 关闭，只在 Tauri 里显示）；启动画面顶上有 `WindowDragStrip`；权限在 `src-tauri/capabilities/default.json`。
   - `ModuleUI` 新增 `subFields`（附加选项画在主开关那一行里）、`fieldRenderers`（模块自己画某个字段，例如书签刷取的 `ItemPicker`）。
+  - B12a：`ModuleUI.fieldLocks(config)` 按当前设置锁定字段（显示锁定值、变灰，和设置不一致时自动写入）；计划编辑里的设置改成函数式更新。
   - 过渡动画：`index.css` 里的 `--ease-*` / `--dur-*` 和 `anim-page` / `anim-dialog` / `anim-overlay` / `anim-menu` / `anim-slide-right` / `toast`；页面区按路径加 key（流程编辑器的路径算一页）。系统「减少动画」时全部关掉。
   - 说明文字只写功能做什么（用户意见），不写运行逻辑和安全规则。
 
@@ -222,20 +226,21 @@
   - 神秘商店改名「书签刷取」：商品固定三种（誓约书签 / 神秘奖牌 / 友情点数），选中高亮、不能增删；设置只留刷新次数 / 连续没出就停 / 连续没出就换世界频道；换频道 = 当前频道号 +1；
   - 标题栏做进应用（自己画窗口按钮），左上固定头像 + 应用名；界面加过渡动画；
   - 讨伐异界和后三个地下城单独立项 B12a；日常收取的商店日常购买单独立项 B12b；都在 B12 之后做。
+- B12a（用户选择，2026-10-20 审核通过）：
+  - 光谱核心允许用叶子 / 天空石补充；实现上沿用原来两个补充开关并改成通用名字（我的决定，审核没有异议）；
+  - 异界能托管、用代币付费，手动流程同普通难度（实测胜利后是宝珠画面，已处理）；
+  - 只有食人魔只有异界（用户纠正），GUI 选食人魔时难度锁定成异界，引擎收到别的难度直接停止并提示；
+  - 「托管最多几份」放进表单（默认 0 = 不限，持有多少就全部拿来开托管）。
 
-## 下一块（B12a 讨伐异界）要做
-用户意见（2026-10-19）：重复刷关「讨伐还有下面三个没做，然后异界难度也没做」；单独立项、像 B10a 那样单独审核。
-- 现状：`repeat_battle` 只支持 双足飞龙 / 魔像 / 报丧妖 × 中级 / 上级 / 地狱级；讨伐列表下面的「讨伐阿吉玛纳克 / 卡戴斯 / 食人魔」只有「讨伐异界」难度；选到异界时模块直接停止（`__init__.py`「消耗异界代币，暂不支持」）。异界消耗异界专用代币，不是行动力（B06 记录）。
-1. 开工：ROADMAP 把 B12a 标进行中，建 `docs/reviews/B12a.md`。
-2. **先和用户确认**：异界代币叫什么、在哪看数量、怎么补充（要不要支持补充，用什么补）；托管能不能开异界、份数怎么算；手动刷异界是否和普通难度一样（战斗开始 → CLEAR → 结算 → 重新进行）；表单怎么加（`Hunt` 加三个、`Tier` 加异界，只有异界的地下城选别的难度时怎么提示）。
-3. **真机先看**（征得同意，只导航和截图）：讨伐列表底部、三个地下城的难度卡片、异界的准备界面（代币读数、托管框）、代币不够时的框；采 fixture 进 `tests/fixtures/rb_*`。
-4. 代码：`config.py` 的枚举、`page.py` 的读数、`__init__.py` 去掉「暂不支持」并按代币核对消耗；`tests/rb_sim.py` 加异界；离线测试覆盖导航、代币核对、代币不够、托管。
-5. 实跑一小轮会花异界代币，要用户同意。
+## 下一块（B12b 日常收取：商店日常购买）要做
+用户意见：「日常收取要把商店里日常的东西都买了」。单独立项、单独审核。
+1. 开工：ROADMAP 把 B12b 标进行中，建 `docs/reviews/B12b.md`。
+2. **先和用户确认**：买哪些（商店哪几个页签、哪些商品）、用什么货币、刷新规则（每天 / 每周）、要不要开关和预算。
+3. **真机先看**（征得同意，只导航和截图，不点购买）：大厅「商店」各页签、商品列表、购买框、买过之后的样子；采 fixture。
+4. 代码：作为日常收取的一项（`modules/daily/`，按天记账，当天买过不再进去）；购买框注册成模块弹窗（自动关闭点取消），并加进 `custom_flow/guard.py` 的守卫和禁点按钮；按货币读数差确认；`tests/daily_sim.py` 加商店；离线测试。
+5. 实跑会花货币，要用户同意。
 
-## 再下一块（B12b 日常收取：商店日常购买）要做（B12a 通过后）
-用户意见：「日常收取要把商店里日常的东西都买了」。开工时先和用户确认买哪些（商店哪几个页签、哪些商品）、用什么货币、刷新规则（每天 / 每周）、要不要开关和预算；然后真机导航截图、采 fixture、写离线测试，作为日常收取的一项（按天记账，当天买过不再进去），实跑前问用户。
-
-## 之后（B13 英雄数据库）要做（B12a / B12b 之后再开始）
+## 之后（B13 英雄数据库）要做（B12b 之后再开始）
 ROADMAP「B13+ 扩展模块」：英雄数据库（core/data）→ RTA BP 助手（assistant）→ 装备扫描 → GVG 作业查询 → 兑换码 → 资源统计，每个单独立项和审核。B13 先做英雄数据库，它是后面 RTA BP 助手的基础。
 1. **先和用户确认**：
    - 数据来源（官方指南站 / epic7db / Fribbels 的 `herodata.json` 等，B10 找图标时用过）、更新方式（随包内置 + 联网更新？）、许可和版权；
@@ -324,4 +329,11 @@ ROADMAP「B13+ 扩展模块」：英雄数据库（core/data）→ RTA BP 助手
 - **测试 Tauri 窗口按钮**（B12）：PrintWindow 截窗口；往窗口里 `Chrome_RenderWidgetHostHWND` 子窗口 PostMessage 鼠标消息能点到网页（不动用户的鼠标），双击用 `WM_LBUTTONDBLCLK`。做法见 reviews/B12.md 反馈 6。点「关闭」会结束 `pnpm tauri dev`。
 - **浏览器面板隐藏时是后台页**：CSS 动画和计时会变慢，radix 对话框要等关闭动画播完才卸载，看起来像「关不掉」；量动画要在可见窗口里看。
 - **浏览器面板里改 hash 会被当成导航**，`javascript_tool` 的脚本会被打断：要测换页就先在页面里装 `animationstart` 之类的监听，再用点击触发，下一次调用读结果。
-- **我自己起的临时引擎用完要确认退出**：B12 时有三个临时引擎关不掉（原因见上面 Proactor 那条），留着会占端口、占内存。
+- **我自己起的临时引擎用完要确认退出**：B12 时有三个临时引擎关不掉（原因见上面 Proactor 那条），留着会占端口、占内存。B12a 用 `POST /api/shutdown` + `/api/health` 确认退出。
+- **异界胜利后没有 CLEAR**（B12a）：宝珠画面「请轻触屏幕领取奖励。」点一下直接到战后。不同玩法的胜利画面可能都不一样，新玩法实跑前先录一遍。
+- **托管设置框右上的数字整组右对齐**（B12a）：位数一变位置就变，固定区域会截掉第一位（110 读成 10）。这类「图标 + 数字」并排的读数用整行 OCR 取数字。
+- **光谱核心图标有光效动画**（B12a）：不同时间截图差别大，只能用图标中心的小模板，1280×720 下 0.82 分，阈值 0.75。
+- **讨伐列表底边会截掉一半名字**（B12a）：OCR 照样认出（高约 18），但点不准；`find_hunt` 要求高 ≥ 26。
+- **异界准备界面右下角就是「战斗开始」**：普通难度切换快速 / 普通战斗的钮在那个位置，异界没有这个钮，别按固定坐标点。
+- **录屏存 JPEG 当不了按钮 fixture**：有 `max_diff` 的按钮模板颜色校验过不了。要做 fixture 的画面用 PNG 截。
+- **worktree 里没有 `.venv` 和 `node_modules`**：先 `python -m uv sync`（设 `UV_DEFAULT_INDEX`）；`pnpm typecheck` 会自动装依赖。
