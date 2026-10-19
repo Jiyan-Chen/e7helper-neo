@@ -35,3 +35,20 @@ def debug_dir() -> Path:
     path = data_dir() / "debug"
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def flows_dir() -> Path:
+    """玩家自定义流程（B11）：<数据目录>/flows/<id>.json。"""
+    path = data_dir() / "flows"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def user_templates_dir() -> Path:
+    """玩家采集的模板（B11）：<数据目录>/flows/templates/，只给自定义流程用。
+
+    打包版的安装目录可能没有写权限（Program Files），所以玩家模板一律放数据目录，不写 assets。
+    """
+    path = flows_dir() / "templates"
+    path.mkdir(parents=True, exist_ok=True)
+    return path

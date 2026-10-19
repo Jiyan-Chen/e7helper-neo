@@ -16,6 +16,8 @@ interface EngineStore {
   logs: LogRecord[];
   /** 本次连接以来最新的事件时间（unix 秒），给需要「刚刚发生」的组件用 */
   lastEventAt: number;
+  /** 自定义流程正在执行的那一步（B11，custom_flow.step 事件） */
+  flowStep: { flow: string; path: string; id: string } | null;
 }
 
 export const useEngine = create<EngineStore>(() => ({
@@ -25,6 +27,7 @@ export const useEngine = create<EngineStore>(() => ({
   scene: null,
   logs: [],
   lastEventAt: 0,
+  flowStep: null,
 }));
 
 let socket: EngineSocket | null = null;
@@ -68,6 +71,10 @@ function onEvent(e: WsEvent) {
       const d = e.data as { module: string; status: string };
       refreshStatus();
       if (d.status !== "running") {
+        if (d.module === "custom_flow") {
+          useEngine.setState({ flowStep: null });
+          void queryClient.invalidateQueries({ queryKey: qk.flows });
+        }
         void queryClient.invalidateQueries({ queryKey: ["history"] });
         void queryClient.invalidateQueries({ queryKey: qk.timers(d.module) });
         void queryClient.invalidateQueries({ queryKey: qk.schedules });
@@ -87,6 +94,9 @@ function onEvent(e: WsEvent) {
       break;
     case "assistant":
       refreshStatus();
+      break;
+    case "custom_flow.step":
+      useEngine.setState({ flowStep: e.data as EngineStore["flowStep"] });
       break;
   }
 }

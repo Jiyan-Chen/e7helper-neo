@@ -154,6 +154,7 @@ export interface JsonSchema {
   allOf?: JsonSchema[];
   $ref?: string;
   $defs?: Record<string, JsonSchema>;
+  "x-enum-labels"?: Record<string, string>;
 }
 
 // ---------------------------------------------------------------- WebSocket

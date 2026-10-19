@@ -37,7 +37,7 @@ from e7helper.modules.base import AssistantModule, ModuleContext, TaskModule
 
 from .controller import AbortSignal, Controller
 from .device import ReadOnlyDevice, SharedDevice
-from .errors import RuntimeBusy, TaskAborted, TaskStatus
+from .errors import RuntimeBusy, TaskAborted, TaskFailed, TaskStatus
 from .humanize import Humanize
 from .stuck import StuckConfig, StuckDetector
 
@@ -225,7 +225,7 @@ class Runtime:
             if self._task is not None and self._task.running:
                 raise RuntimeBusy(f"设备上已有任务在运行：{self._task.module_id}")
             signal = AbortSignal()
-            vision = Vision.for_module(cls.id)
+            vision = cls.make_vision()
             logger = logging.getLogger(f"module.{cls.id}")
             controller = self.make_controller(vision, signal, logger)
             ctx = self._context(cls.id, self.device, signal, controller, vision)
@@ -280,6 +280,9 @@ class Runtime:
             status = (handle.signal.reason or TaskStatus.STOPPED) if handle.signal.aborted else TaskStatus.SUCCEEDED
         except TaskAborted as e:
             status = e.status
+            error = str(e)
+        except TaskFailed as e:
+            status = TaskStatus.FAILED
             error = str(e)
         except Exception as e:
             status = TaskStatus.FAILED
@@ -355,7 +358,7 @@ class Runtime:
                 raise RuntimeError("Runtime 已关闭")
             if cls.id in self._assistants:
                 raise RuntimeBusy(f"助手 {cls.id} 已经在运行")
-            vision = Vision.for_module(cls.id)
+            vision = cls.make_vision()
             ctx = self._context(cls.id, ReadOnlyDevice(self.device.inner, self.device.lock), None, None, vision)
             module = cls(ctx, config)
             handle = AssistantHandle(self, module)

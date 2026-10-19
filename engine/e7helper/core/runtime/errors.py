@@ -37,6 +37,13 @@ class TaskStuck(TaskAborted):
     status = TaskStatus.STUCK
 
 
+class TaskFailed(Exception):
+    """模块主动判定的失败（B11）：预期内的情况（找不到模板、被安全规则拦下……），只记消息、不带调用栈。
+
+    普通异常，状态记为 failed，照样保存调试信息。
+    """
+
+
 class RuntimeBusy(RuntimeError):
     """设备上已经有任务在跑（TaskModule 互斥），或设备已被另一个 Runtime 占用。"""
 

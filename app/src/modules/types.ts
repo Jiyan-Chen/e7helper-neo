@@ -30,6 +30,8 @@ export interface ModuleUI {
   menuLabel?: string;
   /** 只在开发版显示（示例模块） */
   devOnly?: boolean;
+  /** 不在左侧菜单里单独出现（自定义流程的入口是「我的流程」页） */
+  menuHidden?: boolean;
   /** 运行按钮上的字（默认「开始」） */
   runLabel?: string;
   fieldIcons?: Record<string, LucideIcon>;

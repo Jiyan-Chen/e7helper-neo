@@ -1,6 +1,6 @@
 # HANDOFF
 
-> 新会话从这里读起。上次更新：2026-10-19（B10、B10a 已通过并合入 main）
+> 新会话从这里读起。上次更新：2026-10-19（B11 已通过）
 
 ## 当前进度
 - **B01 骨架 + 模块契约 + MuMu 设备层**：✅ 已通过，记录见 [reviews/B01.md](reviews/B01.md)。
@@ -14,7 +14,8 @@
 - **B09 GUI（Tauri 2 + React，游戏风）**：✅ 已通过，记录见 [reviews/B09.md](reviews/B09.md)。
 - **B10 打包发布（PyInstaller onedir + NSIS）**：✅ 已通过，记录见 [reviews/B10.md](reviews/B10.md)。
 - **B10a 弹窗补漏：断线自动重进**：✅ 已通过，记录见 [reviews/B10a.md](reviews/B10a.md)。B10 真机验证时发现的「与服务器的连接中断」弹窗，单独立项、单独审核。
-- 下一块：**B11 自定义流程 + 玩家模板采集**（B10 用户意见新增；原 B11+ 顺延为 B12+）。
+- **B11 自定义流程 + 玩家模板采集**：✅ 已通过，记录见 [reviews/B11.md](reviews/B11.md)。
+- 下一块：**B12 英雄数据库（core/data）**，ROADMAP「B12+ 扩展模块」的第一项（之后依次是 RTA BP 助手、装备扫描、GVG 作业查询、兑换码、资源统计，每个单独立项）。
 
 ## 已有能力
 ### 设备（B01）
@@ -152,6 +153,17 @@
 - 图标：「雪之国的索尔缇娅」头像（官方 `c2111_s.png`，112px）+ 金色头像框，`src-tauri/icons/source/make_icon.py` 合成，`pnpm tauri icon` 生成各尺寸。
 - 实测：安装版在精简环境（PATH 只有 System32 / Windows，全新数据目录）里 2.4–2.7 秒拉起引擎；连 MuMu（IPC）正常；关闭后 1–1.5 秒引擎退出、api.json 删除。
 
+### 自定义流程 + 玩家模板（B11，详见 architecture.md「已有模块 / custom_flow」「自定义流程和玩家模板接口」和 reviews/B11.md）
+- 流程定义 / 存储：`e7helper/core/flows/`（`Flow`、12 种步骤、`FlowStore`）；流程 `<数据目录>/flows/<id>.json`，玩家模板 `<数据目录>/flows/templates/`（不写安装目录）。
+- 结构是**嵌套积木**：如果（那么 / 否则）、重复（N 次 / 直到 / 当…时），条件 = 模板（任一）出现 / 不出现或在某个内置界面，最多等 X 秒。步骤编号：「如果」先编「那么」再接着编「否则」（2.1、2.2 | 2.3）。
+- 执行：一个通用模块 `custom_flow`（config `{"flow": "<id>"}`），经 `POST /api/tasks` 运行、能进计划；`config_schema` 给 `enum` + `x-enum-labels`，计划编辑里是下拉框。每步发 `custom_flow.step` 事件。
+- 安全（用户确认）：只自动处理断线重进、网络重试和守卫弹窗（确认框 / 各模块的购买框，**一律点取消**）；点击落在已知「确认 / 购买」按钮上直接拦下停止；流程有最多运行时间（默认 10 分钟）和最多点击次数（默认 200）；遮罩兜底的返回键在流程里不生效。
+- 引擎新增的通用能力：`Module.make_vision()`（模块自定义识别器）、`TaskFailed`（预期内的失败，只记消息不带调用栈）、`ctl.dismiss_popups(only=...)`。
+- API：`/api/flows`（CRUD、复制、被计划使用时删除要 `force`）、`/api/user-templates`（列表含只读的 common、图片、保存并回验 `quality`、删除保护、在画面上测试）；冻结画面和开发版采集共用 `/api/capture/frames`。
+- GUI：菜单「我的流程」「我的模板」（正式版也有）；编辑器 `/flows/:id`（拖动排序、现场采集模板、坐标点选、「在当前画面上找」、未保存提醒）；开发版的采集页改叫「内置模板采集」。前端步骤树工具在 `src/lib/flow.ts`（有 vitest）。
+- 测试：`tests/test_custom_flow.py`（41 个，GameSim 离线）、`tests/test_flows_api.py`（9 个）、`app/src/lib/flow.test.ts`（8 个）。全量 `780 passed, 7 skipped`；前端 16 个。
+- 实测（真机，正式版）：采「圣域入口」模板 1.00；大厅 → 圣域 → 返回 10.6 秒，1 次点击。
+
 ### 模块与 CLI（B01，B03 / B08 更新）
 - 模块：继承 `TaskModule` / `AssistantModule`，放到 `e7helper/modules/<id>/` 就会被自动发现。参考 `modules/hello/`。
 - CLI：`doctor`、`bench`、`screenshot`、`tap`、`modules`、`run <id> [-c JSON] [-t 超时]`（经 runtime）、`scene [-f 图片] [--dismiss] [--watch]`、`capture`（新增 `--tap`）、`match`、`ocr`、`serve`（B08）。
@@ -188,21 +200,21 @@
   - 版本号 0.1.0；不做自动更新；安装包不签名；
   - 打包版真机验证只看连接、实时画面、当前画面识别（用户同意的范围）。
   - 用户意见：缺「玩家自己采集模板、自己设定流程运行」的功能 → 新开 B11，流程做到「步骤 + 条件分支」，模板采集开放玩家版（存用户数据目录，不改内置模块模板）。
+- B11：
+  - 流程用嵌套积木（不用「跳到第 N 步」）；GUI 是「我的流程」页 + 一个通用模块 `custom_flow`（不是每个流程一个模块）；遇到确认框一律点取消、禁止点确认（均为用户选择）；
+  - 编辑器界面由我决定：左步骤树 + 右属性面板 + 底部保存 / 运行，没做原型；
+  - 流程可以只读引用 `common` 内置模板（不含 `popup/*`），其他内置模块的模板不开放；上限：单步 300 秒、循环 999 轮、嵌套 6 层、300 步（用户没有异议）。
 
-## 下一块（B11 自定义流程 + 玩家模板采集）要做
-ROADMAP：玩家在正式版里采集模板，用「步骤 + 条件分支」编排自己的流程，像模块一样运行、急停、进计划。验收：采一个模板、建一个不消耗资源的流程，在正式版里跑通；离线测试覆盖分支和循环。
+## 下一块（B12 英雄数据库）要做
+ROADMAP「B12+ 扩展模块」：英雄数据库（core/data）→ RTA BP 助手（assistant）→ 装备扫描 → GVG 作业查询 → 兑换码 → 资源统计，每个单独立项和审核。B12 先做英雄数据库，它是后面 RTA BP 助手的基础。
 1. **先和用户确认**：
-   - 步骤类型：等待模板出现（超时）、点击模板、点击坐标、滑动、等待 N 秒、返回键、如果出现模板 A 就…否则…、循环（到某模板出现 / N 次）；每步「找不到时：跳过 / 停止」；
-   - 流程存哪里、什么格式（建议 `<数据目录>/flows/<id>.json` + 模板在 `<数据目录>/flows/templates/`）；流程在 GUI 里是一个模块（例如 `custom_flow`，config 里选流程）还是每个流程各算一个模块；
-   - 编辑器的样子（游戏风，参考 B09 原型）；流程能否用内置模板（`common` 等）；
-   - 安全：用户流程会实跑点击，要不要加「最多运行时间 / 最多点击次数」、遇到内置的有消耗确认框（`confirm` 弹窗规则一律点取消）时怎么处理。
-2. **引擎**：
-   - 玩家模板存用户数据目录，`TemplateStore` 增加这一层查找；**不能写进安装目录**（Program Files 没有写权限，B10 已知问题 5）；
-   - `api/capture.py` 现在只在开发版用、写 `engine/assets`：玩家版要有自己的保存位置，内置模块的模板不让改；
-   - 流程执行器：一个 TaskModule，走 `self.ctl`（坐标 1600×900 基准、急停、卡死检测、调试截图都复用 B03）；流程定义用 pydantic 校验，离线测试用 `tests/game_sim.py` 式的模拟器。
-3. **GUI**：正式版显示「模板采集（玩家版）」和「我的流程」页；开发版的采集页保留。
-4. 做完要重新打包验证（`packaging/build.py` + `pnpm bundle`），按 B10 的方法在本机模拟干净环境里跑一次。
-5. 真机验证先征得用户同意，只用不消耗资源的流程（例如：大厅 → 点「圣域」→ 等标题 → 返回键），绝不点任何消耗资源的按钮。
+   - 数据来源（官方指南站 / epic7db / Fribbels 的 `herodata.json` 等，B10 找图标时用过）、更新方式（随包内置 + 联网更新？）、许可和版权；
+   - 存哪些字段（中文名 / 英文名 / 编号 `c2111` 这类 id / 属性 / 职业 / 星级 / 头像 / 技能 / 套装推荐…），国服中文名怎么对上；
+   - 存储位置和格式（随包放 `engine/assets/data/`？用户数据目录放更新后的版本？sqlite 还是 json）；
+   - GUI 要不要有「英雄图鉴」页，还是只作为 RTA BP 助手的底层数据；
+   - 头像要不要用于识别（BP 界面认英雄），要不要现在就做识别。
+2. 放在 `core/data`（architecture.md 顶部的分层图里预留的位置），不依赖设备；接口要能被助手模块（只读帧）使用。
+3. 不操作游戏的部分优先做；要读游戏界面时先征得用户同意，只截图、不点击。
 
 ## 坑
 - **断线后游戏回到标题画面**（B10a）：用户在手机上登录同一账号就能把模拟器挤下线，用来复现很方便。自动重进约 55 秒，只点屏幕、不输入账号；重进后游戏停在大厅，任务之前所在的界面没了，在别的界面里等待的任务会超时失败（只有 `tap_until` 导航能接上）。不要做「重进后整个任务重跑」，会重置天空石等预算计数。每天首次登录的签到 / 奖励画面还没登记。
@@ -265,4 +277,11 @@ ROADMAP：玩家在正式版里采集模板，用「步骤 + 条件分支」编�
 - `tauri build` 会把资源也复制到 `target/release/engine/`，所以不安装也能用 `target/release/e7helper.exe` 验证 release 行为。
 - NSIS `installMode: both` 用 `Highest` 权限：管理员账户运行安装程序总会弹 UAC，安装 / 卸载测试要用户来点。
 - 截 Tauri 窗口、发 WM_CLOSE 的脚本做法见 reviews/B10.md「验证」（PrintWindow + PW_RENDERFULLCONTENT）。
+- **浏览器面板的截图常常慢一拍**（B11）：刚点完就截，看到的是上一个状态。要确认界面状态用 `get_page_text` / `javascript_tool` 读 DOM。
+- **浏览器面板截图的缩放横竖可能不一样**（视口 1440×880 截成 800×600 时 x 0.556、y 0.682）：按截图坐标拖框前先用 DOM 读一次实际结果再修正。
+- **模拟鼠标拖不动 HTML5 原生拖放**：要测拖放用脚本派发 `dragstart` / `dragover` / `drop`（`new DataTransfer()`），见 reviews/B11.md。
+- **React 合成事件会穿过 Portal 冒泡**：弹出菜单（radix Popover / Dialog）里的点击会触发外层元素的 onClick。外层「点空白取消选择」要判断 `e.target === e.currentTarget`。
+- **`python -I` 会忽略 `PYTHONIOENCODING`**：在 Git Bash 里用 venv 的 python 跑带中文输出的脚本时加 `-X utf8`，否则是 GBK 乱码。
+- 不碰真机测 GUI：可以写一个用 `tests/game_sim.py` 当设备的临时引擎（`Engine(device_factory=...)` + `create_app` + uvicorn），浏览器面板连它就能完整跑流程（做法见 reviews/B11.md「GUI」）。
+- **测试会对所有模块调 `setup()`**（`test_scene.test_relogin_popups_with_all_module_popups`，用假对象）：新模块的 setup 如果要读配置或会报错，要先做完弹窗注册。
 

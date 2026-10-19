@@ -15,4 +15,7 @@ export const qk = {
   history: (module?: string) => ["history", module ?? "*"] as const,
   schedules: ["schedules"] as const,
   instances: ["instances"] as const,
+  flows: ["flows"] as const,
+  flow: (id: string) => ["flows", id] as const,
+  userTemplates: ["user-templates"] as const,
 };

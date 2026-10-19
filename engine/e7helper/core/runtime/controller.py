@@ -13,7 +13,7 @@ import logging
 import random
 import threading
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Collection, Iterable
 from typing import TypeVar
 
 import numpy as np
@@ -168,18 +168,24 @@ class Controller:
 
     # ------------------------------------------------------------ 弹窗 / 场景
 
-    def dismiss_popups(self, max_rounds: int = 6, state: SceneState | None = None) -> list[str]:
+    def dismiss_popups(self, max_rounds: int = 6, state: SceneState | None = None, *,
+                       only: Collection[str] | None = None) -> list[str]:
         """关闭当前所有可自动关闭的弹窗，返回关掉的弹窗名。
 
         遇到 auto=False 的弹窗，或关了 max_rounds 次仍有弹窗时抛 PopupError。
+        only（B11 自定义流程用）：只关闭这些弹窗；遇到别的弹窗或遮罩时直接返回，不按返回键兜底。
         """
         closed: list[str] = []
         for _ in range(max_rounds):
             state = state or self.detect()
-            if state.popup == OBSCURED:
-                state = self._confirm_obscured()
-            if state.clear:
-                return closed
+            if only is not None:
+                if state.popup is None or state.popup not in only:
+                    return closed
+            else:
+                if state.popup == OBSCURED:
+                    state = self._confirm_obscured()
+                if state.clear:
+                    return closed
             popup = self.scenes.popup(state.popup)
             if not popup.auto:
                 raise PopupError(popup.name, f"弹窗 {popup.name} 不能自动关闭，需要任务处理")
@@ -191,6 +197,10 @@ class Controller:
             self.sleep(POPUP_SETTLE)
             state = None
         state = self.detect()
+        if only is not None:
+            if state.popup in only:
+                raise PopupError(state.popup, f"连续关闭 {max_rounds} 次后仍有弹窗：{state.popup}（已关闭 {closed}）")
+            return closed
         if state.popup == OBSCURED:
             state = self._confirm_obscured()
         if not state.clear:

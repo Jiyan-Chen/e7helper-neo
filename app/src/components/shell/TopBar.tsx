@@ -14,7 +14,9 @@ export const PAGE_TITLES: Record<string, string> = {
   "/stats": "统计",
   "/logs": "日志",
   "/settings": "设置",
-  "/capture": "模板采集",
+  "/capture": "内置模板采集",
+  "/flows": "我的流程",
+  "/templates": "我的模板",
 };
 
 /** 顶栏：标题在左，右边像游戏的资源栏一样列出模拟器、当前画面、下一个计划，最右是急停。 */
@@ -29,7 +31,7 @@ export function TopBar() {
   const moduleId = pathname.startsWith("/m/") ? pathname.slice(3) : null;
   const title = moduleId
     ? moduleUI(moduleId).menuLabel ?? modules?.find((m) => m.id === moduleId)?.name ?? moduleId
-    : PAGE_TITLES[pathname] ?? "";
+    : PAGE_TITLES[pathname] ?? (pathname.startsWith("/flows/") ? "编辑流程" : "");
   const device = status?.device;
   const next = status?.scheduler.next;
   const nextName = next ? moduleUI(next.module).menuLabel ?? modules?.find((m) => m.id === next.module)?.name : null;

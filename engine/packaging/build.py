@@ -28,7 +28,7 @@ REPO = ENGINE.parent
 APP = REPO / "app"
 DIST = ENGINE / "dist" / "e7engine"
 EXE = DIST / "e7engine.exe"
-EXPECTED_MODULES = {"arena_npc", "daily", "hello", "repeat_battle", "secret_shop"}
+EXPECTED_MODULES = {"arena_npc", "custom_flow", "daily", "hello", "repeat_battle", "secret_shop"}
 
 
 def versions() -> dict[str, str]:
@@ -125,8 +125,14 @@ def _smoke_serve(env: dict[str, str], data: Path) -> None:
             sys.exit("serve 60 秒内没有就绪")
         print(f"[ok] serve 就绪：{time.time() - started:.1f} 秒")
 
-        def call(path: str, method: str = "GET"):
-            req = urllib.request.Request(url + path, method=method, headers={"Authorization": "Bearer smoke-token"})
+        def call(path: str, method: str = "GET", body=None):
+            headers = {"Authorization": "Bearer smoke-token"}
+            if isinstance(body, bytes):
+                headers["Content-Type"] = "application/octet-stream"
+            elif body is not None:
+                headers["Content-Type"] = "application/json"
+                body = json.dumps(body).encode("utf-8")
+            req = urllib.request.Request(url + path, data=body, method=method, headers=headers)
             with urllib.request.urlopen(req, timeout=10) as r:
                 return r.status, json.loads(r.read() or b"null")
 
@@ -137,6 +143,20 @@ def _smoke_serve(env: dict[str, str], data: Path) -> None:
         _, detail = call("/api/modules/daily")
         assert "properties" in detail["config_schema"], detail
         print("[ok] REST：modules / status / config_schema")
+
+        # B11：玩家模板存数据目录（不是安装目录），流程能建、能列出
+        lobby = (ENGINE / "tests" / "fixtures" / "lobby.png").read_bytes()
+        _, frame = call("/api/capture/frames/upload", "POST", lobby)
+        _, tpl = call("/api/user-templates", "POST", {"frame": frame["id"], "name": "圣域入口", "box": [44, 241, 53, 34]})
+        assert tpl["quality"] == "good", tpl
+        assert (data / "flows" / "templates" / "圣域入口.png").is_file(), "玩家模板没有存进数据目录"
+        assert not any(DIST.rglob("圣域入口.*")), "玩家模板写进了安装目录"
+        flow = {"name": "冒烟", "steps": [{"type": "tap_template", "template": "圣域入口"}, {"type": "back"}]}
+        code, saved = call("/api/flows", "POST", flow)
+        assert code == 201 and saved["missing"] == [], saved
+        _, flows = call("/api/flows")
+        assert [f["name"] for f in flows] == ["冒烟"], flows
+        print("[ok] 自定义流程：玩家模板存进数据目录，流程可以新建 / 列出")
 
         asyncio.run(_smoke_ws(url))
         print("[ok] WebSocket：/ws hello、/ws/frames 未连接状态")

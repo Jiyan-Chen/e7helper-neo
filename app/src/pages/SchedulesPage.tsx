@@ -187,20 +187,22 @@ const TRIGGER_OPTIONS: { value: TriggerType; label: string }[] = [
   { value: "module", label: "按游戏时间（由功能决定）" },
 ];
 
-function ScheduleEditor({
-  schedule, preset, onClose, onSaved, moduleOptions,
+export function ScheduleEditor({
+  schedule, preset, initial, onClose, onSaved, moduleOptions,
 }: {
   schedule: Schedule | null;
   preset?: { module: string; preset: SchedulePreset };
+  /** 新建时预先填好的功能、名字和设置（「我的流程」的「加入计划」） */
+  initial?: { module: string; name: string; config: Record<string, unknown> };
   onClose: () => void;
   onSaved: () => void;
   moduleOptions: { value: string; label: string }[];
 }) {
-  const [moduleId, setModuleId] = useState(schedule?.module ?? preset?.module ?? moduleOptions[0]?.value ?? "");
-  const [name, setName] = useState(schedule?.name ?? preset?.preset.name ?? "");
+  const [moduleId, setModuleId] = useState(schedule?.module ?? preset?.module ?? initial?.module ?? moduleOptions[0]?.value ?? "");
+  const [name, setName] = useState(schedule?.name ?? preset?.preset.name ?? initial?.name ?? "");
   const [trigger, setTrigger] = useState<Trigger>(schedule?.trigger ?? preset?.preset.trigger ?? { type: "interval", minutes: 30 });
   const [onBusy, setOnBusy] = useState<ScheduleSpec["on_busy"]>(schedule?.on_busy ?? "queue");
-  const [config, setConfig] = useState<Record<string, unknown> | null>(schedule?.config ?? null);
+  const [config, setConfig] = useState<Record<string, unknown> | null>(schedule?.config ?? initial?.config ?? null);
   const [saving, setSaving] = useState(false);
   const { data: detail } = useModuleDetail(moduleId);
   const fields = useMemo(() => (detail ? fieldsOf(detail.config_schema) : []), [detail]);

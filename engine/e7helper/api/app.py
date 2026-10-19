@@ -27,7 +27,8 @@ from e7helper import __version__
 from e7helper.modules import Module, ModuleRegistryError
 
 from .auth import LOCAL_HOSTS, AuthConfig, HostCheckMiddleware, require_token
-from .capture import build_capture_router
+from .capture import FrameCache, build_capture_router
+from .flows import build_flows_router
 from .engine import ApiError, Engine
 from .scheduler import Scheduler, ScheduleSpec
 from .ws import Hub, build_ws_router, encode_jpeg
@@ -149,7 +150,9 @@ def create_app(
                 "auth": token is not None}
 
     app.include_router(_core_router(services), prefix="/api", dependencies=[Depends(require_token)])
-    app.include_router(build_capture_router(engine), prefix="/api", dependencies=[Depends(require_token)])
+    frames = FrameCache()
+    app.include_router(build_capture_router(engine, frames), prefix="/api", dependencies=[Depends(require_token)])
+    app.include_router(build_flows_router(engine, services.scheduler, frames), prefix="/api", dependencies=[Depends(require_token)])
     _mount_module_routes(app, engine)
     app.include_router(build_ws_router(services))
     return app

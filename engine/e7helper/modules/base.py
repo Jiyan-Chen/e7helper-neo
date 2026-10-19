@@ -100,6 +100,13 @@ class Module(ABC):
         return None
 
     @classmethod
+    def make_vision(cls) -> Vision:
+        """模块的识别器（B11）：默认按 本模块 → common 查找模板。自定义流程改成只查玩家模板。"""
+        from e7helper.core.vision import Vision
+
+        return Vision.for_module(cls.id)
+
+    @classmethod
     def timers(cls, data_dir: Path) -> list[ModuleTimer]:
         """可选（B08）：模块的计时，例如下一次每日重置、精灵之森下次可领。只读文件，不碰设备。"""
         return []

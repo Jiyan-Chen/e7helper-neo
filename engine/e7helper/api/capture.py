@@ -6,6 +6,7 @@
 3. `POST /match` 在冻结的帧上测试模板，`POST /ocr` 测试 OCR。
 
 冻结的帧只在内存里保留最近 FRAME_LIMIT 张。模板写进源码目录，所以只适合开发环境（GUI 只在开发版显示这一页）。
+玩家版采集（B11）在 api/flows.py，模板存数据目录，冻结画面和这里共用（`POST /frames`）。
 """
 
 from __future__ import annotations
@@ -118,9 +119,20 @@ class OcrBody(BaseModel):
     mode: Literal["read", "line", "number"] = "read"
 
 
-def build_capture_router(engine: Engine) -> APIRouter:
+def verify_template(frame: np.ndarray, tpl, box: Rect) -> dict:
+    """保存后回验：原位置分数 + 其他位置的最高分（越低说明区分度越好）。"""
+    own = best_match(frame, tpl, region=box.expand(4).clip())
+    others = [h for h in find_all(frame, tpl, threshold=-1.0, max_count=5) if h.rect.iou(box) < 0.5]
+    return {
+        "own": _match_dict(own, tpl) if own else None,
+        "other": _match_dict(others[0], tpl) if others else None,
+    }
+
+
+def build_capture_router(engine: Engine, frames: FrameCache | None = None) -> APIRouter:
+    """frames：冻结的画面，和玩家版模板采集（api/flows.py）共用。"""
     r = APIRouter(prefix="/capture", tags=["模板采集（开发）"])
-    frames = FrameCache()
+    frames = frames or FrameCache()
 
     def _reload_runtime_templates() -> None:
         """保存 / 删除模板后清掉运行时识别器的模板缓存。"""
@@ -197,18 +209,12 @@ def build_capture_router(engine: Engine) -> APIRouter:
         except FileExistsError as e:
             raise ApiError(409, "exists", f"模板已存在：{body.name}（勾选覆盖后再保存）") from e
         _reload_runtime_templates()
-        # 回验：原位置分数 + 检索区域内其他位置的最高分（越低说明区分度越好）
-        own = best_match(frame, tpl, region=box.expand(4).clip())
-        others = [h for h in find_all(frame, tpl, threshold=-1.0, max_count=5) if h.rect.iou(box) < 0.5]
         return {
             "name": tpl.name,
             "path": str(tpl.path),
             "size": list(tpl.size),
             "meta": tpl.meta.model_dump(mode="json"),
-            "verify": {
-                "own": _match_dict(own, tpl) if own else None,
-                "other": _match_dict(others[0], tpl) if others else None,
-            },
+            "verify": verify_template(frame, tpl, box),
         }
 
     @r.delete("/templates/{module}/{name:path}", status_code=204, response_class=Response, summary="删除模板")

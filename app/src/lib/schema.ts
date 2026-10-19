@@ -12,6 +12,8 @@ export interface Field {
   nullable: boolean;
   default: unknown;
   enumValues?: string[];
+  /** 枚举值的显示名（schema 的 x-enum-labels，例如自定义流程的流程名） */
+  enumLabels?: Record<string, string>;
   minimum?: number;
   maximum?: number;
   /** 数组元素 / 对象的子字段 */
@@ -84,7 +86,10 @@ export function fieldsOf(schema: JsonSchema, root: JsonSchema = schema): Field[]
       maximum: s.maximum ?? (s.exclusiveMaximum !== undefined ? s.exclusiveMaximum - (kind === "integer" ? 1 : 0) : undefined),
       schema: s,
     };
-    if (kind === "enum") field.enumValues = (s.enum ?? []).map(String);
+    if (kind === "enum") {
+      field.enumValues = (s.enum ?? []).map(String);
+      if (s["x-enum-labels"]) field.enumLabels = s["x-enum-labels"];
+    }
     if (kind === "array" && s.items) {
       const item = resolveRef(s.items, root);
       if (item.properties) field.children = fieldsOf(item, root);

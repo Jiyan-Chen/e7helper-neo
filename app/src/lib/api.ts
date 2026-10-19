@@ -4,6 +4,25 @@ import type {
   DeviceInfo, Instances, LogRecord, ModuleDetail, ModuleInfo, ModuleStats, ModuleTimer, Schedule,
   ScheduleSpec, SchedulesSnapshot, SceneInfo, Status, TaskRecord,
 } from "./types";
+import type { Flow, FlowSummary, UserTemplate } from "./flow";
+
+export interface UserTemplateSaveBody {
+  frame: string;
+  name: string;
+  box: Rect4;
+  tap?: Rect4 | null;
+  moving: boolean;
+  dim_check: boolean;
+  threshold: number;
+  note?: string;
+  overwrite?: boolean;
+}
+
+export interface UserTemplateSaved extends UserTemplate {
+  verify: { own: CaptureHit | null; other: CaptureHit | null };
+  /** good = 认得清；ambiguous = 画面上还有很像的地方；weak = 原位置都认不出 */
+  quality: "good" | "ambiguous" | "weak";
+}
 
 export class ApiError extends Error {
   constructor(public status: number, public code: string, message: string, public detail?: unknown) {
@@ -98,6 +117,23 @@ export class Api {
   captureOcr = (frame: string, rect: Rect4 | null, mode: "read" | "line" | "number") =>
     this.request<{ results?: { text: string; score: number; rect: Rect4 }[]; number?: number | null; ms: number }>(
       "POST", "/api/capture/ocr", { frame, rect, mode });
+
+  // 自定义流程 + 玩家模板（B11）
+  flows = () => this.get<FlowSummary[]>("/api/flows");
+  flow = (id: string) => this.get<Flow>(`/api/flows/${encodeURIComponent(id)}`);
+  createFlow = (flow: Flow) => this.request<Flow>("POST", "/api/flows", flow);
+  saveFlow = (id: string, flow: Flow) => this.request<Flow>("PUT", `/api/flows/${encodeURIComponent(id)}`, flow);
+  copyFlow = (id: string) => this.request<Flow>("POST", `/api/flows/${encodeURIComponent(id)}/copy`);
+  deleteFlow = (id: string, force = false) =>
+    this.request<void>("DELETE", `/api/flows/${encodeURIComponent(id)}${force ? "?force=true" : ""}`);
+  userTemplates = () => this.get<{ mine: UserTemplate[]; common: UserTemplate[] }>("/api/user-templates");
+  userTemplateUrl = (ref: string, v = 0) =>
+    `${this.url}/api/user-templates/image${this.tokenQuery()}&ref=${encodeURIComponent(ref)}&v=${v}`;
+  saveUserTemplate = (body: UserTemplateSaveBody) => this.request<UserTemplateSaved>("POST", "/api/user-templates", body);
+  deleteUserTemplate = (name: string, force = false) =>
+    this.request<void>("DELETE", `/api/user-templates/${encodeURIComponent(name)}${force ? "?force=true" : ""}`);
+  testTemplates = (templates: string[], frame?: string) =>
+    this.request<{ frame: string | null; results: (CaptureHit & { ref: string })[] }>("POST", "/api/user-templates/test", { templates, frame });
 
   private tokenQuery() {
     return this.token ? `?token=${encodeURIComponent(this.token)}` : "?";

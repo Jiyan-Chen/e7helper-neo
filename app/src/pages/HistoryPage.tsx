@@ -4,6 +4,8 @@ import { STATUS_COLOR } from "@/components/module/RecentRuns";
 import { api } from "@/lib/api";
 import { isDev } from "@/lib/env";
 import { useModules } from "@/lib/hooks";
+import { FLOW_MODULE } from "@/lib/flow";
+import { useFlowNames } from "@/lib/flowHooks";
 import { friendlyError, moduleName, sourceLabel, statusLabel } from "@/lib/labels";
 import { qk } from "@/lib/query";
 import { isDryRun } from "@/lib/run";
@@ -17,6 +19,7 @@ export function HistoryPage() {
   const { data: modules } = useModules();
   const { data, isLoading } = useQuery({ queryKey: qk.history(filter), queryFn: () => api().history(100, filter) });
   const list = visibleModules(modules ?? []);
+  const flowNames = useFlowNames();
 
   return (
     <div className="h-full overflow-auto px-[22px] py-4">
@@ -36,7 +39,9 @@ export function HistoryPage() {
           return (
             <div key={r.id} className="grid grid-cols-[130px_110px_50px_1fr] items-baseline gap-3 border-t border-white/6 py-2 text-sm first:border-t-0">
               <span className="text-muted">{dayTime(r.started)}</span>
-              <span className="font-semibold">{moduleName(r.module)}</span>
+              <span className="truncate font-semibold" title={r.module === FLOW_MODULE ? "自定义流程" : undefined}>
+                {r.module === FLOW_MODULE ? `流程「${flowNames[String(r.config.flow)] ?? "已删除"}」` : moduleName(r.module)}
+              </span>
               <span className="text-muted">{sourceLabel(r.source)}</span>
               <span>
                 <span className={STATUS_COLOR[r.status]}>{statusLabel(r.status)}</span>

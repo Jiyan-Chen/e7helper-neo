@@ -15,6 +15,7 @@
 - title_start / title_start_forest：标题画面「轻触画面开始」（两种视频背景）
 """
 
+import contextlib
 import pytest
 from game_sim import load_fixture
 
@@ -108,7 +109,11 @@ def test_relogin_popups_with_all_module_popups():
         controller = _Ctl()
 
     for module_id, cls in discover().items():
-        cls.setup(type("M", (), {"ctx": _Ctx(), "ctl": _Ctl(), "id": module_id})())
+        fake = type("M", (), {"ctx": _Ctx(), "ctl": _Ctl(), "id": module_id, "config": cls.config_model(),
+                              "store_factory": getattr(cls, "store_factory", None)})()
+        # custom_flow 没选流程时 setup 会报错，但守卫弹窗在那之前已经注册
+        with contextlib.suppress(ValueError):
+            cls.setup(fake)
     assert len(det.popups) > len(default_detector().popups)
     for fixture, popup in RELOGIN_FIXTURES.items():
         assert det.detect(load_fixture(fixture)).popup == popup, fixture

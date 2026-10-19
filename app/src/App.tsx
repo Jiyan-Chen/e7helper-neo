@@ -11,13 +11,16 @@ import { isDev } from "@/lib/env";
 import { useModules } from "@/lib/hooks";
 import { setModuleNames } from "@/lib/labels";
 import { useEngine } from "@/lib/store";
-import { moduleUI, visibleModules } from "@/modules/registry";
+import { menuModules, moduleUI } from "@/modules/registry";
 import { CapturePage } from "@/pages/CapturePage";
+import { FlowEditorPage } from "@/pages/FlowEditorPage";
+import { FlowsPage } from "@/pages/FlowsPage";
 import { HistoryPage } from "@/pages/HistoryPage";
 import { LogsPage } from "@/pages/LogsPage";
 import { SchedulesPage } from "@/pages/SchedulesPage";
 import { SettingsPage } from "@/pages/SettingsPage";
 import { StatsPage } from "@/pages/StatsPage";
+import { TemplatesPage } from "@/pages/TemplatesPage";
 
 /** 空闲时每 10 秒识别一次当前画面（有任务时场景由任务的事件推送）。 */
 function useIdleScene() {
@@ -43,6 +46,9 @@ function useIdleScene() {
   }, [connected, running]);
 }
 
+/** 需要宽画面的页面（模板采集、流程编辑器），不显示右侧栏。 */
+const isWidePage = (path: string) => path === "/capture" || path === "/templates" || path.startsWith("/flows/");
+
 function Shell() {
   const { data: modules } = useModules();
   const { pathname } = useLocation();
@@ -59,8 +65,8 @@ function Shell() {
         <main className="min-h-0 min-w-0">
           <Outlet />
         </main>
-        {/* 模板采集页需要宽的画面，不显示右侧栏 */}
-        {pathname !== "/capture" && <LivePanel />}
+        {/* 模板采集页、流程编辑器需要宽的画面，不显示右侧栏 */}
+        {!isWidePage(pathname) && <LivePanel />}
       </div>
     </div>
   );
@@ -68,13 +74,14 @@ function Shell() {
 
 function ModuleRoute() {
   const { id = "" } = useParams();
+  if (moduleUI(id).menuHidden) return <Navigate to="/flows" replace />;
   return <ModulePage key={id} moduleId={id} />;
 }
 
 function Home() {
   const { data: modules } = useModules();
   if (!modules) return null;
-  const first = visibleModules(modules)[0];
+  const first = menuModules(modules)[0];
   return first ? <Navigate to={`/m/${first.id}`} replace /> : <Navigate to="/settings" replace />;
 }
 
@@ -90,6 +97,9 @@ const router = createHashRouter([
       { path: "stats", element: <StatsPage /> },
       { path: "logs", element: <LogsPage /> },
       { path: "settings", element: <SettingsPage /> },
+      { path: "flows", element: <FlowsPage /> },
+      { path: "flows/:id", element: <FlowEditorPage /> },
+      { path: "templates", element: <TemplatesPage /> },
       ...(isDev ? [{ path: "capture", element: <CapturePage /> }] : []),
       { path: "*", element: <Navigate to="/" replace /> },
     ],

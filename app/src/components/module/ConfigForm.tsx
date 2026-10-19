@@ -85,7 +85,7 @@ function Control({
     case "enum":
       return (
         <Select value={String(value ?? field.default ?? "")} onChange={onChange} label={field.label} disabled={disabled}
-          options={(field.enumValues ?? []).map((v) => ({ value: v, label: v }))} />
+          options={(field.enumValues ?? []).map((v) => ({ value: v, label: field.enumLabels?.[v] ?? v }))} />
       );
     case "integer":
     case "number":
