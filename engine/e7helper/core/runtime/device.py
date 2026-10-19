@@ -44,6 +44,10 @@ class SharedDevice(Device):
         with self.lock:
             self.inner.back()
 
+    def input_text(self, text: str) -> None:
+        with self.lock:
+            self.inner.input_text(text)
+
     def close(self) -> None:
         pass
 
@@ -60,3 +64,6 @@ class ReadOnlyDevice(SharedDevice):
 
     def back(self) -> None:
         raise DeviceError("助手模块不能操作游戏（back）")
+
+    def input_text(self, text: str) -> None:
+        raise DeviceError("助手模块不能操作游戏（input_text）")

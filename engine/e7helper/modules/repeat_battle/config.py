@@ -12,19 +12,18 @@ from pydantic import BaseModel, Field
 from pydantic.json_schema import SkipJsonSchema
 
 
+# 讨伐列表里的地下城（值是名字「讨伐」之后的部分，列表顺序）。
+# 列表里还有 阿吉玛纳克 / 卡戴斯 / 食人魔，但它们只有「讨伐异界」难度，暂不支持（见 Tier）。
+# 用注释不用 docstring：pydantic 会把枚举的 docstring 当成字段说明显示在 GUI 表单里。
 class Hunt(StrEnum):
-    """讨伐列表里的地下城（值是名字「讨伐」之后的部分，列表顺序）。
-
-    列表里还有 阿吉玛纳克 / 卡戴斯 / 食人魔，但它们只有「讨伐异界」难度，暂不支持（见 Tier）。
-    """
 
     WYVERN = "双足飞龙"
     GOLEM = "魔像"
     BANSHEE = "报丧妖"
 
 
+# 难度。「讨伐异界」消耗的是异界专用代币而不是行动力，补充方式也不同，暂不支持（B06 用户确认）。
 class Tier(StrEnum):
-    """难度。「讨伐异界」消耗的是异界专用代币而不是行动力，补充方式也不同，暂不支持（B06 用户确认）。"""
 
     MID = "中级"
     HIGH = "上级"
@@ -32,22 +31,23 @@ class Tier(StrEnum):
 
 
 class RepeatBattleConfig(BaseModel):
-    hunt: Hunt = Field(Hunt.WYVERN, description="讨伐目标", title="讨伐目标")
-    tier: Tier = Field(Tier.HELL, description="难度", title="难度")
+    hunt: Hunt = Field(Hunt.WYVERN, title="讨伐目标")
+    tier: Tier = Field(Tier.HELL, title="难度")
     start_here: bool = Field(
-        False, description="从当前的准备界面开始，不导航（用于普通关卡等；托管也重开这一关）", title="从当前准备界面开始",
+        False, description="刷你已经打开的这一关（不用选讨伐）", title="从当前准备界面开始",
     )
-    auto_battle: bool = Field(True, description="托管战斗：结算已完成的托管，并在这一关重开", title="托管战斗")
+    auto_battle: bool = Field(True, description="结算完成的托管，并重开这一关", title="托管战斗")
     auto_leaves: int = Field(
-        0, ge=0, le=100, description="重开托管最多用几片生命之叶（1 片打 4 次）；0 表示只用持有的行动力", title="托管最多用几片叶子",
+        0, ge=0, le=100, description="0 表示只用行动力", title="托管最多用几片叶子",
     )
-    manual: bool = Field(True, description="手动刷关：在准备界面反复点「战斗开始」", title="手动刷关")
-    manual_runs: int = Field(0, ge=0, description="手动最多打几场，0 表示打到行动力不够", title="手动最多打几场")
-    refill_leaf: bool = Field(False, description="行动力不够时用生命之叶补（1 片换 80）", title="用生命之叶补行动力")
-    max_leaf_refills: int = Field(1, ge=0, le=50, description="本次运行最多用叶子补几次", title="叶子最多补几次")
-    refill_skystone: bool = Field(False, description="行动力不够时用天空石补（30 换 60；叶子优先）", title="用天空石补行动力")
-    max_skystone_refills: int = Field(1, ge=0, le=20, description="本次运行最多用天空石补几次", title="天空石最多补几次")
-    dry_run: bool = Field(True, description="只导航和识别，不点「结算」「开始」「战斗开始」「购买」", title="演练")
+    manual: bool = Field(True, description="反复打这一关", title="手动刷关")
+    manual_runs: int = Field(0, ge=0, description="0 表示打到行动力用完", title="手动最多打几场")
+    # 行动力不够时补充：生命之叶 1 片换 80，天空石 30 换 60，叶子优先；托管 1 片叶子打 4 次
+    refill_leaf: bool = Field(False, title="用生命之叶补行动力")
+    max_leaf_refills: int = Field(1, ge=0, le=50, title="叶子最多补几次")
+    refill_skystone: bool = Field(False, title="用天空石补行动力")
+    max_skystone_refills: int = Field(1, ge=0, le=20, title="天空石最多补几次")
+    dry_run: bool = Field(True, description="不真的结算、开战和补充行动力", title="演练")
 
     # ---- 内部接口（不显示在表单里）
     auto_prefer_energy: SkipJsonSchema[bool] = Field(True, description="托管时勾选「优先使用持有的行动力」")

@@ -10,6 +10,10 @@
     "network"：先出现网络异常弹窗，点重试后扣费并完成
     "double"：扣两次费（模拟重试导致请求重复）
 - 天空石/金币不画在截图上，测试用 resources() 替换模块的读数函数
+- 聊天（B12 换世界频道）：列表右上的聊天图标 → 聊天面板（chat_tab="guild" 时停在骑士团页签）→ ⇆ →
+  「变更频道」框 → 点输入框 → input_text → 点框里的「输入」→ 频道变了；返回键关掉整个面板回到列表。
+  截图是实机的：频道只有 69 和 70 两个（69 → 70 → 69）。type_text=False 时打字没进输入框。
+  点到底部发消息的输入框 / 「输入」进入 DANGER。
 """
 
 from __future__ import annotations
@@ -30,6 +34,19 @@ BUY_ROW1 = Rect(1330, 172, 225, 66)  # 列表顶部第一行的购买按钮
 REFRESH_CANCEL, REFRESH_OK = Rect(565, 545, 200, 60), Rect(833, 545, 200, 60)
 BUY_CANCEL, BUY_OK = Rect(480, 600, 245, 72), Rect(750, 600, 375, 72)
 NETWORK_RETRY = Rect(748, 538, 104, 32)
+CHAT_ICON = Rect(1452, 16, 54, 52)
+CHAT_TAB_CHANNEL = Rect(910, 78, 185, 50)
+CHAT_SWITCH = Rect(1356, 12, 62, 54)
+CHAT_FIELD = Rect(948, 203, 326, 50)
+CHAT_OK = Rect(1296, 198, 182, 58)
+CHAT_SEND = Rect(966, 810, 620, 70)  # 底部发消息的输入框和「输入」
+# (聊天状态, 频道) -> 截图
+CHAT_SCREENS = {
+    ("panel", 69): "shop_chat_channel", ("panel", 70): "shop_chat_switched",
+    ("change", 69): "shop_chat_change", ("change", 70): "shop_chat_change70",
+    ("focus", 69): "shop_chat_change_focus", ("focus", 70): "shop_chat_change70",
+}
+TYPED_SCREENS = {"70": "shop_chat_typed", "69": "shop_chat_typed69"}
 BUY_PRICE = 360_000  # 灿烂精髓长袍
 
 
@@ -39,7 +56,8 @@ def _hit(r: Rect, x: int, y: int) -> bool:
 
 class ShopSim(GameSim):
     def __init__(self, screen: str = "lobby", first_list: str = "B", confirm: str = "danger",
-                 skystone: int = 1000, gold: int = 10_000_000, refresh_cost: int = 3, **kw):
+                 skystone: int = 1000, gold: int = 10_000_000, refresh_cost: int = 3, chat_tab: str = "channel",
+                 type_text: bool = True, **kw):
         super().__init__(screen, **kw)
         self.list = first_list
         self.scrolled = False
@@ -49,6 +67,12 @@ class ShopSim(GameSim):
         self.refresh_cost = refresh_cost
         self.confirms = 0  # 点「确认」的次数
         self.pending: str | None = None  # 网络异常时挂起的操作
+        self.chat_tab = chat_tab
+        self.type_text = type_text
+        self.chat: str | None = None  # None / panel / change / focus / typed
+        self.channel = 69
+        self.typed = ""
+        self.channel_history: list[int] = []  # 换过去的频道
         if screen == "shop":
             self._show_list()
 
@@ -61,6 +85,37 @@ class ShopSim(GameSim):
     @property
     def in_list(self) -> bool:
         return self.screen in LISTS["A"] + LISTS["B"]
+
+    def _show_chat(self) -> None:
+        if self.chat == "panel" and self.chat_tab == "guild":
+            self._go("shop_chat_guild")
+        elif self.chat == "typed":
+            self._go(TYPED_SCREENS[self.typed])
+        else:
+            self._go(CHAT_SCREENS[(self.chat, self.channel)])
+
+    def _tap_chat(self, bx: int, by: int) -> None:
+        if _hit(CHAT_SEND, bx, by):
+            self._go(DANGER)
+        elif self.chat == "panel":
+            if self.chat_tab == "guild":
+                if _hit(CHAT_TAB_CHANNEL, bx, by):
+                    self.chat_tab = "channel"
+            elif _hit(CHAT_SWITCH, bx, by):
+                self.chat = "change"
+        elif self.chat == "change" and _hit(CHAT_FIELD, bx, by):
+            self.chat = "focus"
+        elif self.chat == "typed" and _hit(CHAT_OK, bx, by):
+            self.channel = int(self.typed)
+            self.channel_history.append(self.channel)
+            self.chat, self.typed = "panel", ""
+        if self.screen != DANGER:
+            self._show_chat()
+
+    def input_text(self, text: str) -> None:
+        if self.chat == "focus" and self.type_text:
+            self.chat, self.typed = "typed", text
+            self._show_chat()
 
     def _complete(self, action: str) -> None:
         times = 2 if self.confirm == "double" else 1
@@ -92,10 +147,15 @@ class ShopSim(GameSim):
             return
         bx, by = Scaler(*self.size).to_base(x, y)
         s = self.screen
-        if s == "lobby" and _hit(ENTRY, bx, by):
+        if self.chat is not None:
+            self._tap_chat(bx, by)
+        elif s == "lobby" and _hit(ENTRY, bx, by):
             self._show_list()
         elif self.in_list:
-            if _hit(REFRESH_BTN, bx, by):
+            if _hit(CHAT_ICON, bx, by):
+                self.chat = "panel"
+                self._show_chat()
+            elif _hit(REFRESH_BTN, bx, by):
                 self._go(REFRESH_CONFIRM)
             elif _hit(BUY_ROW1, bx, by) and s == "secret_shop_relist":
                 self._go(BUY_CONFIRM)
@@ -121,7 +181,10 @@ class ShopSim(GameSim):
 
     def back(self) -> None:
         self.backs += 1
-        if self.in_list:
+        if self.chat is not None:  # 一次关掉整个聊天面板
+            self.chat, self.typed = None, ""
+            self._show_list()
+        elif self.in_list:
             self._go("lobby")
         elif self.screen in (REFRESH_CONFIRM, BUY_CONFIRM):
             self._show_list()

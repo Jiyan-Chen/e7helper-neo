@@ -19,11 +19,11 @@
 ## 设备层 `e7helper.device`
 | 文件 | 职责 |
 |---|---|
-| `base.py` | `Device` 抽象：`name` / `resolution` / `screenshot()` / `tap()` / `swipe()` / `back()`（B03，Android 返回键，默认不支持）/ `close()` |
+| `base.py` | `Device` 抽象：`name` / `resolution` / `screenshot()` / `tap()` / `swipe()` / `back()`（B03，Android 返回键，默认不支持）/ `input_text()`（B12，往获得焦点的输入框打字，默认不支持）/ `close()` |
 | `mumu_manager.py` | `find_install()` 按 参数 → `E7_MUMU_ROOT` → 注册表 → 常见路径 的顺序查找安装目录；兼容 `nx_main\` 与 `shell\` 两种结构。`MuMuManager` 封装 `info` / `launch` / `shutdown` / `app launch` |
 | `nemu_ipc.py` | `external_renderer_ipc.dll` 的 ctypes 封装：截图（RGBA 且上下颠倒，转成 BGR）、touch down/up/swipe |
 | `adb.py` | 后备通道，直接调用 MuMu 自带的 adb.exe：`exec-out screencap -p`、`input tap/swipe`、`pm list packages` |
-| `mumu_device.py` | `MuMuDevice` 组合 IPC 与 adb；`Backend.AUTO` 优先 IPC，失败时回退 adb；`back()` 走 adb `input keyevent 4`；`connect(index)` 是统一入口 |
+| `mumu_device.py` | `MuMuDevice` 组合 IPC 与 adb；`Backend.AUTO` 优先 IPC，失败时回退 adb；`back()` 走 adb `input keyevent 4`；`input_text()` 走 adb `input text`（只收字母和数字）；`connect(index)` 是统一入口 |
 
 坐标为设备原生像素。与 1600×900 基准的换算用 `core.geometry.Scaler`；B02 起由 vision 层统一处理。
 
@@ -156,7 +156,7 @@ python -m uv run e7helper serve [--port 47800] [--index N] [--no-connect] [--pau
 | `ws.py` | `/ws` 控制 + 事件频道，`/ws/frames` 帧频道 |
 | `app.py` | `create_app(engine, token=...)`：核心路由、模块子路由挂载、CORS、lifespan（启动时后台自动连接设备、启动调度器；退出时急停任务、关设备） |
 
-- **启动**：`serve` 先绑定端口（`--port 0` 随机），把 `{pid, url, port, token}` 写进 `<数据目录>/api.json`（正常退出时删除），再启动 uvicorn。默认只监听 127.0.0.1。
+- **启动**：`serve` 先绑定端口（`--port 0` 随机），把 `{pid, url, port, token}` 写进 `<数据目录>/api.json`（正常退出时删除），再启动 uvicorn。默认只监听 127.0.0.1。uvicorn 配置在 `cli.server_config()`：事件循环用 **Selector**（Windows 默认的 Proactor 在客户端断开太快时会关掉监听 socket、关服务时卡住，B12 反馈 7），关服务最多等 5 秒。
 - **鉴权**：除 `GET /api/health`、`/docs`、`/openapi.json` 外都要 token。Host 头必须是 localhost / 127.0.0.1 / ::1（或 `--allow-host` 指定的），防 DNS rebinding。WebSocket 不受 CORS 限制，所以 token 是必须的。
 - **错误格式**：`{"error": {"code": "...", "message": "...", "detail": ...}}`。常见：404 `unknown_module` / `unknown_schedule`，409 `busy`（有任务在跑 / 不能断开），422 `invalid_config`（`detail` 是 pydantic 的错误列表），503 `no_device`。请求体本身的校验错误是 FastAPI 默认的 422 格式。
 
@@ -255,14 +255,14 @@ pnpm typecheck
 | 目录 | 职责 |
 |---|---|
 | `src/lib/` | `api.ts`（REST）、`ws.ts`（/ws，断线重连）、`frames.ts`（/ws/frames → object URL）、`store.ts`（zustand：状态、场景、日志；事件到来时让 react-query 失效）、`time.ts`（三种时间格式统一转 Date）、`schema.ts`（JSON Schema → 字段）、`labels.ts`（场景名、状态、日志的中文化） |
-| `src/components/shell/` | 启动画面、顶栏（模拟器、当前画面、下个计划、停止）、左侧菜单、右侧「实时画面 + 动态」（可收起）、背景 |
+| `src/components/shell/` | 启动画面、顶栏（左边固定是索尔缇娅头像 + 「第七史诗助手」；右边模拟器、当前画面、下个计划、停止、窗口按钮）、左侧菜单、右侧「实时画面 + 动态」（可收起）、背景。窗口没有系统标题栏（`decorations: false`，B12）：顶栏就是标题栏（`data-tauri-drag-region`：拖动、双击最大化），`WindowControls` 画最小化 / 最大化 / 关闭（只在 Tauri 里显示）；启动画面顶上有一条 `WindowDragStrip` |
 | `src/components/module/` | 通用模块页：说明、计时胶囊、（开发版）演练条、自动表单、最近运行、底部行动条 |
 | `src/pages/` | 计划、运行记录、统计、日志、设置、模板采集（开发版，菜单里叫「内置模板采集」）；B11：`FlowsPage`（我的流程）、`FlowEditorPage`（编辑流程）、`TemplatesPage`（我的模板） |
 | `src/components/flow/` | B11：步骤树（嵌套积木、拖动排序）、属性面板、模板选择 / 现场采集、坐标点选、冻结画面画布 |
 | `src/lib/flow.ts` | B11：流程的数据形状和步骤树操作（按 id 定位、插入 / 移动 / 复制、编号、中文描述、本地检查、校验错误定位） |
 | `src/modules/<id>/index.tsx` | 模块的界面扩展，见下 |
 
-**模块界面扩展**：在 `src/modules/<id>/index.tsx` 默认导出 `ModuleUI`（`src/modules/types.ts`），`import.meta.glob` 自动收集、按 module id 挂载；没有的模块用通用页。可以提供：图标和菜单顺序、菜单短名、运行按钮文字、字段图标、字段依赖（控制项关掉时变灰）、只在开发版显示的字段、统计项中文名（统计页按它显示）、推荐计划（计划页一键添加）、`RunExtra`（运行条左侧控件）、`Header`、`onConfigSaved`。
+**模块界面扩展**：在 `src/modules/<id>/index.tsx` 默认导出 `ModuleUI`（`src/modules/types.ts`），`import.meta.glob` 自动收集、按 module id 挂载；没有的模块用通用页。可以提供：图标和菜单顺序、菜单短名、运行按钮文字、字段图标、字段依赖（控制项关掉时变灰）、附加选项 `subFields`（画在主开关那一行里，B12）、自己画的字段 `fieldRenderers`（例如书签刷取的商品选择，B12）、只在开发版显示的字段、统计项中文名（统计页按它显示）、推荐计划（计划页一键添加）、`RunExtra`（运行条左侧控件）、`Header`、`onConfigSaved`。
 - 例：`daily` 的「持续收菜」= `RunExtra`，开关一条 `module` 触发的计划；`onConfigSaved` 把新设置同步进这条计划的配置快照。
 - 例：`repeat_battle` 的推荐计划「托管自动结算」= 每 30 分钟、`manual: false`。
 
@@ -304,32 +304,23 @@ pnpm bundle                                                       # = tauri buil
 - 安装包没有签名，安装时 SmartScreen 会提示「未知发布者」。不做自动更新。
 
 ## 已有模块
-### `secret_shop` 刷神秘商店（B04）
+### `secret_shop` 书签刷取（B04，B12 改版）
 | 文件 | 职责 |
 |---|---|
-| `__init__.py` | `SecretShopModule`：进店 → 每页扫描顶部/底部 → 买目标 → 刷新 → 循环；`setup()` 注册弹窗 `shop_refresh` / `shop_buy`（自动关闭时都点取消） |
+| `__init__.py` | `SecretShopModule`（菜单名「书签刷取」）：进店 → 每页扫描顶部/底部 → 买选中的商品 → 没出就计数（够数就停止 / 换世界频道）→ 刷新 → 循环；`setup()` 注册弹窗 `shop_refresh` / `shop_buy`（自动关闭时都点取消）和聊天的 `shop_chat` / `shop_chat_change`（返回键关闭） |
 | `page.py` | 纯函数识别：`scan_items`（以「购买」按钮为锚点读名字/价格/金币图标/物品图标）、`read_resources`（先定位顶栏图标再读数）、`read_refresh_cost`、`read_buy_dialog`；决策 `decide` |
-| `config.py` | `SecretShopConfig`（预算、保底、金币下限、最多刷新、连续失败、`dry_run` 默认开启、`probe_dialogs`）、`Target(name, price, icon)` |
-| `stats.py` | `data_dir/history.jsonl`（每次运行一行）、`stats.json`（实跑累计） |
+| `chat.py` | 换世界频道（B12）：`ChannelSwitcher.switch()`：聊天图标 → 停在骑士团页签就先点「频道」→ 读标题「频道#N」→ ⇆ → 「变更频道」框 → 点输入框 → `ctl.input_text(N+1)` → 核对输入框里的数字 → 点框里的「输入」→ 标题变成 N+1 → 返回键关掉聊天。9999 之后回到 1；底部发消息的输入框绝不碰 |
+| `config.py` | `SecretShopConfig`：表单 `items`（三种固定商品，`CATALOG`：誓约书签 / 神秘奖牌 / 友情点数）、`max_refreshes`、`stop_after_misses`、`channel_after_misses`、`dry_run`；开发版 `refresh_cost` / `max_failures` / `probe_dialogs`；内部 `targets`（直接指定，测试用）、`skystone_budget`（默认不限）、`skystone_keep`、`gold_floor`、`probe_channel`（演练时换过去再换回来）。`_migrate_b12` 去掉 B12 之前保存的旧默认值 |
+| `stats.py` | `data_dir/history.jsonl`（每次运行一行，含 `max_misses`、`channel_switches`）、`stats.json`（实跑累计，含换频道次数） |
+
+- 「没出」= 这一页（进店时的列表 + 每次刷新后）没有任何选中的商品，买没买到都不算没出；出了就清零。连续 N 页没出就停止（不再刷新）；连续页数是 M 的倍数时换一次频道。
+- 换频道失败（界面没出现、数字没输进去、标题没变）只记一次失败，关掉聊天接着刷。
 
 写有消耗操作的任务可以参考它的做法：
 - **按资源读数差确认**，不按点击次数计。读数差为 0 不计数，算失败；为其他值立即停止（任务记为失败）。
 - 有消耗的确认框注册成本模块的弹窗，`Dismiss` 点取消；只有任务自己在核对内容后点确认。
 - 顶栏数字连续两帧一致才采用（数字有滚动动画）。
 - 离线测试用 `tests/shop_sim.py` 这类模拟器：点到确认默认进入 DANGER，按需模拟扣费、吞点击、网络重试、重复扣费。
-
-### `arena_npc` 竞技场 NPC（B05）
-| 文件 | 职责 |
-|---|---|
-| `__init__.py` | `ArenaNpcModule`：大厅 → 模式选择 → NPC对战页 → 选第一行 → 挑战 → 准备界面（优先快速对战，当天次数用完切普通战斗）→ 结算点确认 → 循环；旗帜用完且开了补旗时，点顶栏「+」用友情点数补一次。`setup()` 注册场景 `arena_main` / `arena_npc` / `arena_prep` / `arena_battle` / `arena_result` 和弹窗 `arena_record`（点击关闭）/ `arena_buy_flags`（点取消） |
-| `page.py` | 纯函数识别：`read_flags`（顶栏旗帜）、`read_prep`（模式 + 快速对战剩余次数）、`is_victory`、`read_buy_dialog`（哪个选项被选中、消耗、持有）、`auto_icon`（自动战斗图标区域，用于判断是否在转） |
-| `config.py` | `ArenaNpcConfig`：表单只有 `buy_flags`（默认关）、`dry_run`（默认开）；其余字段用 `SkipJsonSchema` 隐藏，只供引擎/CLI 使用 |
-| `stats.py` | `data_dir/history.jsonl`、`stats.json`（场次、胜场、消耗旗帜、补旗次数、最近一次补旗时间） |
-
-- 一场 = 看到结算 + 旗帜读数减少 1；补旗 = 旗帜读数增加 5。读数差异常立即停止（任务记为失败）。
-- 自动战斗：图标静止约 0.6 秒才认为没开（开启后图标一直旋转），点完再观察，不会误关。
-- 普通战斗中不按返回键（会打开暂停菜单）：只有网络异常立即重试，其他弹窗持续 10 秒才交给内置规则。
-- 内置场景 `arena` 从 B05 起只认模式选择界面（加了 `common/arena/mode_arena`）；竞技场里其他界面的标题也是「竞技场」，由本模块注册的场景区分。CLI `scene` 只加载内置场景，在这些界面上显示「未知」。
 
 ### `repeat_battle` 重复刷关：托管战斗 + 手动刷关（B06）
 | 文件 | 职责 |
@@ -344,17 +335,32 @@ pnpm bundle                                                       # = tauri buil
 - 一场按战后「持有行动力」的减少量核对：讨伐会掉落行动力，只检查「不超过一场的消耗」。
 - 进行中的托管框只点底部空白关闭，绝不点「中断」。
 
-### `daily` 日常收取：邮件 / 精灵之森 / 誓约免费召唤（B07）
+### `daily` 日常收取：邮件 / 精灵之森 / 誓约免费召唤 / 竞技场（B07，竞技场 B12 并入）
 | 文件 | 职责 |
 |---|---|
-| `__init__.py` | `DailyModule`：按 邮件 → 精灵之森 → 誓约召唤 的顺序做（各有开关），每项前后回到大厅；一项失败不影响其他项（任务最后记为失败），核对异常（`DailyAnomaly`）立即停止整个任务。`setup()` 注册场景 `daily_mail` / `daily_forest` / `daily_covenant` / `daily_summon` / `daily_summon_anim` / `daily_summon_hero` / `daily_summon_results` 和弹窗 `daily_forest_reward`（点击关闭）/ `daily_mail_detail`（自动关闭时点「点击关闭」，不收信） |
+| `__init__.py` | `DailyModule`：按 邮件 → 精灵之森 → 誓约召唤 → 竞技场 的顺序做（各有开关），每项前后回到大厅；一项失败不影响其他项（任务最后记为失败），核对异常（`DailyAnomaly`）立即停止整个任务。`setup()` 注册场景 `daily_mail` / `daily_forest` / `daily_covenant` / `daily_summon` / `daily_summon_anim` / `daily_summon_hero` / `daily_summon_results` 和弹窗 `daily_forest_reward`（点击关闭）/ `daily_mail_detail`（自动关闭时点「点击关闭」，不收信） |
 | `page.py` | 纯函数识别：邮件行（「领取」锚点 + 剩余时间 OCR）、邮件数、邮件详情框；精灵之森三张卡和照料；誓约召唤的免费按钮、剩余免费气泡、顶栏货币区域 |
-| `ledger.py` | 按天记账 `ledger.json`：游戏日（北京时间 3 点 = UTC 19:00 切换）、当天做完的项、精灵之森下次时间 |
-| `config.py` / `stats.py` | `DailyConfig`（表单只有三个开关和 `dry_run`）；`history.jsonl`、`stats.json` |
+| `ledger.py` | 按天记账 `ledger.json`：游戏日（北京时间 3 点 = UTC 19:00 切换）、当天做完的项（`covenant`、`arena_buy`）、精灵之森下次时间 |
+| `config.py` / `stats.py` | `DailyConfig`（表单是四项开关、`arena_buy_flags` 和 `dry_run`）；`history.jsonl`、`stats.json`（含竞技场场次 / 胜场 / 旗帜 / 补旗） |
+| `errors.py` | 各项共用的 `StopItem` / `ItemFailed` / `DailyAnomaly` |
 
-- 账本只用来省导航：誓约召唤当天用完就不进去；精灵之森按界面上最短的倒计时决定下次进入时间。能不能领、领没领到都以画面为准。
+- 账本只用来省导航：誓约召唤当天用完就不进去；竞技场当天补过旗就不再打开补旗框；精灵之森按界面上最短的倒计时决定下次进入时间。能不能领、领没领到都以画面为准。
 - 「有没有花东西」的核对：召唤前后对比**顶栏货币区域的画面**，比逐个 OCR 读数可靠，不受图标和数字宽度影响。前后各取两帧（间隔 0.6 秒），两两比较都变了的像素 ≤ 60 才算没变：背景立绘的星星光效会飘进这块区域（单帧最多约 80 个像素，只出现一帧）；数字真的变化时是 5000+。其他有多种货币的界面也可以这样核对。
 - 「点击关闭」在多个弹窗里都有（竞技场战斗记录、托管结算完毕、精灵之森奖励），模块弹窗要加背景场景的标题来区分。
+
+#### 竞技场（`arena.py` / `arena_page.py`；B05 的 `arena_npc` 模块，B12 按用户意见并入日常收取）
+| 文件 | 职责 |
+|---|---|
+| `arena.py` | `Arena`（不是模块，借用日常收取的 ctl / vision / 统计 / 账本）：大厅 → 模式选择 → NPC对战页 → 选第一行 → 挑战 → 准备界面（优先快速对战，当天次数用完切普通战斗）→ 结算点确认 → 循环；旗帜用完且开了补旗时，点顶栏「+」用友情点数补一次（成功后账本记 `arena_buy`，当天不再打开补旗框）。`register()` 注册场景 `arena_main` / `arena_npc` / `arena_prep` / `arena_battle` / `arena_result` 和弹窗 `arena_record`（点击关闭）/ `arena_buy_flags`（点取消）。`StopArena` 是 `StopItem`，`ArenaAnomaly` 是 `DailyAnomaly` |
+| `arena_page.py` | 纯函数识别：`read_flags`（顶栏旗帜）、`read_prep`（模式 + 快速对战剩余次数）、`is_victory`、`read_buy_dialog`（哪个选项被选中、消耗、持有）、`auto_icon`（自动战斗图标区域，用于判断是否在转） |
+
+- 模板在 `assets/daily/cn/arena/`（`arena/tab/npc`、`arena/buy/ok` 等）；流程守卫引用 `daily:arena/buy/*`。
+- 配置：表单 `arena`（默认开）、`arena_buy_flags`（默认关）；内部 `arena_max_battles`、`arena_prefer_quick`、`arena_friendship_keep`、`arena_battle_timeout`、`arena_probe_dialogs`。
+- 一场 = 看到结算 + 旗帜读数减少 1；补旗 = 旗帜读数增加 5。读数差异常立即停止整个任务（任务记为失败）。
+- 自动战斗：图标静止约 0.6 秒才认为没开（开启后图标一直旋转），点完再观察，不会误关。
+- 普通战斗中不按返回键（会打开暂停菜单）：只有网络异常立即重试，其他弹窗持续 10 秒才交给内置规则。
+- 内置场景 `arena` 从 B05 起只认模式选择界面（加了 `common/arena/mode_arena`）；竞技场里其他界面的标题也是「竞技场」，由日常收取注册的场景区分。CLI `scene` 只加载内置场景，在这些界面上显示「未知」。
+- 回大厅：结算点「确认」，其余界面点返回（准备界面 → NPC 页 → 模式选择 → 大厅）。
 
 ### `custom_flow` 自定义流程（B11）
 玩家在「我的流程」里编排的流程：步骤 + 条件分支 + 循环（嵌套积木，用户选择）。流程定义和存储在 `core/flows`（不依赖模块），执行器是这个模块。

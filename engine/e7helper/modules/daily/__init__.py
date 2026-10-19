@@ -1,7 +1,7 @@
-"""日常收取：邮件（只领快过期的）、精灵之森（领取 + 照料）、誓约召唤的免费次数。
+"""日常收取：邮件（只领快过期的）、精灵之森（领取 + 照料）、誓约召唤的免费次数、竞技场 NPC。
 
-三项各有开关，按 邮件 → 精灵之森 → 誓约召唤 的顺序做，每项做完回到大厅。从大厅开始（也能从这几项的界面开始）。
-流程和核对规则详见 docs/reviews/B07.md。
+四项各有开关，按 邮件 → 精灵之森 → 誓约召唤 → 竞技场 的顺序做，每项做完回到大厅。从大厅开始（也能从这几项的界面开始）。
+流程和核对规则详见 docs/reviews/B07.md；竞技场（B05 的 `arena_npc` 模块，B12 并入）见 arena.py 和 docs/reviews/B05.md。
 
 安全规则：
 - 只有画面核对通过才计数：邮件 = 底部邮件数减少 1；精灵之森 = 卡片从「领取奖励」变回倒计时；
@@ -11,7 +11,7 @@
 - 邮件只领剩余时间小于 mail_max_hours（默认 24 小时）的，逐封点「领取」，绝不点「全部领取」；
   列表必须是按剩余时间排序（左下角显示「剩余时间」），否则不领。有些邮件点领取后会弹出详情框，
   框里的剩余时间和那一行一致才点「收信」。
-- dry_run（默认开启）只导航和识别，不点领取、照料、召唤。
+- dry_run（默认开启）只导航和识别，不点领取、照料、召唤、开始战斗、购买。
 - 按天记账（ledger.json）只用来省导航：誓约召唤当天用完就不再进去；精灵之森按倒计时决定下次什么时候进去。
 """
 
@@ -27,9 +27,11 @@ from e7helper.core.runtime.stuck import thumb_diff, thumbnail
 from e7helper.core.scene import Dismiss, Popup, Scene
 from e7helper.modules.base import ModuleTimer, TaskModule
 
+from . import arena as arena_mod
 from . import ledger as ledger_mod
 from . import page, stats
 from .config import DailyConfig
+from .errors import DailyAnomaly, ItemFailed, StopItem
 from .ledger import Ledger
 from .page import Card, Covenant
 
@@ -45,7 +47,7 @@ RESULTS = "daily_summon_results"  # 召唤结果（左下「返回」）
 POPUP_FOREST = "daily_forest_reward"  # 精灵之森领取后的奖励框（「点击关闭」）
 POPUP_MAIL = "daily_mail_detail"  # 有些邮件点「领取」后先弹出详情框，要再点「收信」
 POPUP_NETWORK = "network"
-KNOWN = (LOBBY, SANCTUARY, MAIL, FOREST, SUMMON, COVENANT, RESULTS)
+KNOWN = (LOBBY, SANCTUARY, MAIL, FOREST, SUMMON, COVENANT, RESULTS) + arena_mod.SCENES
 
 POLL = 0.15
 STILL_DIFF = 2.0  # 弹窗 / 结果页完全显示：连续两帧缩略图差小于这个值
@@ -60,22 +62,10 @@ MOVING_DIFF = 3.0
 RESULTS_RETRY = 2.0  # 召唤结果的「返回」入场动画期间点了可能被吞
 
 
-class StopItem(Exception):
-    """这一项正常结束（做完了 / 没有可做的 / dry-run），继续下一项。"""
-
-
-class ItemFailed(Exception):
-    """这一项没做成（点了没反应、认不出界面），放弃这一项，继续下一项；任务最后记为失败。"""
-
-
-class DailyAnomaly(RuntimeError):
-    """核对不通过（可能花了资源），立即停止整个任务，任务记为失败。"""
-
-
 class DailyModule(TaskModule):
     id = "daily"
     name = "日常收取"
-    description = "领取快过期的邮件、精灵之森的产出和照料、誓约召唤的免费次数"
+    description = "每天要做的事一键做完：邮件、精灵之森、誓约免费召唤、竞技场"
     config_model = DailyConfig
 
     def setup(self) -> None:
@@ -99,6 +89,7 @@ class DailyModule(TaskModule):
                            note="邮件详情（自动关闭时点「点击关闭」，不收信）"), replace=True, first=True)
         sc.add_popup(Popup(POPUP_FOREST, ("title/forest", q + "forest/close"), Dismiss.tap(q + "forest/close"),
                            note="精灵之森领取奖励（点击关闭）"), replace=True, first=True)
+        arena_mod.register(sc, q)
 
     # ------------------------------------------------------------ 计时与调度（B08）
 
@@ -159,9 +150,10 @@ class DailyModule(TaskModule):
                 ("mail", "邮件", self._mail, cfg.mail),
                 ("forest", "精灵之森", self._forest, cfg.forest),
                 ("covenant", "誓约召唤", self._covenant, cfg.covenant),
+                ("arena", "竞技场", self._arena, cfg.arena),
             ) if on
         ]
-        mode = "dry-run（不点领取、照料、召唤）" if cfg.dry_run else "实跑"
+        mode = "dry-run（不点领取、照料、召唤、开始战斗、购买）" if cfg.dry_run else "实跑"
         self.log.info("日常收取：%s；%s；游戏日 %s", mode, "、".join(label for _, label, _ in items) or "什么都没开",
                       self.ledger.day)
         failed: list[str] = []
@@ -209,6 +201,8 @@ class DailyModule(TaskModule):
                 ctl.tap_template("summon/skip" if ctl.exists("summon/skip") else "summon/next")
             elif state.is_(RESULTS):
                 ctl.tap_until("summon/back", (COVENANT, SUMMON), retry_after=RESULTS_RETRY)
+            elif state.is_(arena_mod.RESULT):
+                ctl.tap_until("arena/result/ok", arena_mod.NPC, retry_after=arena_mod.RESULT_RETRY)
             else:
                 ctl.tap_until("back", tuple(s for s in KNOWN if s != state.scene))
         raise ItemFailed(f"回不到大厅，当前：{ctl.last_state}")
@@ -503,6 +497,11 @@ class DailyModule(TaskModule):
             if now - t0 >= SUMMON_TIMEOUT:
                 raise DailyAnomaly(f"召唤 {SUMMON_TIMEOUT:.0f} 秒没有出结果，当前：{state}")
             ctl.sleep(POLL)
+
+    # ------------------------------------------------------------ 竞技场
+
+    def _arena(self) -> None:
+        arena_mod.Arena(self).run()
 
     # ------------------------------------------------------------ 通用
 

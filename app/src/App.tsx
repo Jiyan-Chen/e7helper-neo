@@ -58,12 +58,15 @@ function Shell() {
   }, [modules]);
 
   return (
-    <div className="grid h-full min-w-[1100px] grid-rows-[60px_minmax(0,1fr)]">
+    <div className="anim-fade grid h-full min-w-[1100px] grid-rows-[60px_minmax(0,1fr)]">
       <TopBar />
       <div className="grid min-h-0 grid-cols-[200px_minmax(0,1fr)_auto]">
         <SideMenu />
         <main className="min-h-0 min-w-0">
-          <Outlet />
+          {/* 换页时淡入（B12）。流程编辑器新建后会从 /flows/new 跳到 /flows/<id>，算同一页，不重新挂载 */}
+          <div key={pathname.startsWith("/flows/") ? "/flows/edit" : pathname} className="anim-page h-full">
+            <Outlet />
+          </div>
         </main>
         {/* 模板采集页、流程编辑器需要宽的画面，不显示右侧栏 */}
         {!isWidePage(pathname) && <LivePanel />}

@@ -113,6 +113,14 @@ class MuMuDevice(Device):
             raise DeviceError("返回键需要 adb，但 adb 不可用")
         self.adb.keyevent(KEYCODE_BACK)
 
+    def input_text(self, text: str) -> None:
+        # 只用来输入频道号之类的数字；adb `input text` 不支持中文，空格等字符要转义，这里直接拒绝
+        if not text.isascii() or not text.isalnum():
+            raise DeviceError(f"只支持输入字母和数字：{text!r}")
+        if self.adb is None:
+            raise DeviceError("输入文字需要 adb，但 adb 不可用")
+        self.adb.shell("input", "text", text)
+
     def close(self) -> None:
         if self.ipc:
             self.ipc.close()

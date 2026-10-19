@@ -162,7 +162,7 @@ export function FlowEditorPage() {
           <input className="field h-10 w-full" maxLength={500} value={draft.description} placeholder="这个流程做什么（可选）"
             onChange={(e) => edit((f) => ({ ...f, description: e.target.value }))} aria-label="说明" />
         </label>
-        <div className="flex items-center gap-3 rounded-[10px] border border-white/8 bg-black/25 px-3 py-1.5 text-sm" title="到了上限流程就停下，防止流程出错时一直点">
+        <div className="flex items-center gap-3 rounded-[10px] border border-white/8 bg-black/25 px-3 py-1.5 text-sm" title="流程最多运行多久、点多少次">
           <ShieldCheck className="size-4 text-gold" />
           最多
           <Num value={draft.limits.max_minutes} min={0.5} max={120} suffix="分钟" onChange={(v) => edit((f) => ({ ...f, limits: { ...f.limits, max_minutes: v } }))} />
@@ -216,15 +216,7 @@ function Overview({ steps }: { steps: Step[] }) {
       <ul className="list-disc pl-5 text-muted">
         <li>点左边的「添加步骤」加一步，点一步在这里改它。</li>
         <li>拖动步骤左边的 <span className="text-ink">⋮⋮</span> 调整顺序，也可以拖进「如果」「重复」里面。</li>
-        <li>「如果」「重复」的条件可以用「在当前画面上找」先试一下（只截图，不点击）。</li>
         <li>现在一共 <span className="num text-ink">{countSteps(steps)}</span> 步。</li>
-      </ul>
-      <h3 className="panel-title mt-2"><ShieldCheck className="size-4" />安全规则</h3>
-      <ul className="list-disc pl-5 text-muted">
-        <li>遇到「取消 / 确认」框、购买框，<span className="text-ink">一律点取消</span>；点击落在「确认 / 购买」按钮上会直接停止流程。</li>
-        <li>断线会自动重进游戏，网络异常会自动重试。</li>
-        <li>每次等待都有时间上限，每个循环都有次数上限；整个流程有最多运行时间和点击次数。</li>
-        <li>不要采集、点击会花资源的按钮（购买、召唤、刷新）。</li>
       </ul>
     </div>
   );

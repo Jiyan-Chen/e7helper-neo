@@ -51,7 +51,7 @@ export function TemplatesPage() {
 
   return (
     <div className="flex h-full flex-col gap-4 overflow-auto px-[22px] py-4">
-      <p className="text-muted">模板就是一小块截图，流程靠它认出画面上的按钮和界面。这里采集的模板只给「我的流程」用，不会影响助手的内置功能。</p>
+      <p className="text-muted">模板是一小块截图，流程靠它认出画面上的按钮和界面。</p>
       <TemplateCapture onSaved={() => refresh()} />
       <section className="panel px-4 py-3.5">
         <h3 className="panel-title mb-3">我的模板（{mine.length}）</h3>

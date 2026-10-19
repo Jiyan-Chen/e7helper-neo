@@ -1,6 +1,6 @@
 // 按 config_schema 自动生成的设置表单。每个字段一行（仿邮件列表），控件在右侧。
 import { Plus, Settings2, Trash2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { Check } from "@/components/ui/Check";
 import { Select } from "@/components/ui/Select";
 import { isDev } from "@/lib/env";
@@ -18,26 +18,53 @@ export function ConfigForm({
   errors: FieldErrors;
   ui: ModuleUI;
 }) {
-  const shown = fields.filter(
+  const visible = fields.filter(
     (f) => f.key !== "dry_run" && !ui.hiddenFields?.includes(f.key) && (isDev || !ui.devFields?.includes(f.key)),
   );
+  // 附加选项画在主开关那一行里，不单独成行
+  const shown = visible.filter((f) => !ui.subFields?.[f.key]);
   if (shown.length === 0) return <p className="py-2 text-sm text-muted">这个功能没有需要设置的选项。</p>;
   return (
     <div className="flex flex-col gap-2">
       {shown.map((f) => {
         const dep = ui.fieldDeps?.[f.key];
         const off = dep !== undefined && config[dep] === false;
+        const subs = visible.filter((s) => ui.subFields?.[s.key] === f.key);
+        const Custom = ui.fieldRenderers?.[f.key];
+        if (Custom) return <Custom key={f.key} field={f} value={config[f.key]} onChange={(v) => update(f.key, v)} />;
         return (
           <FieldRow key={f.key} field={f} value={config[f.key]} onChange={(v) => update(f.key, v)} error={errors[f.key]}
-            disabled={off} ui={ui} devOnly={!!ui.devFields?.includes(f.key)} />
+            disabled={off} ui={ui} devOnly={!!ui.devFields?.includes(f.key)}>
+            {subs.map((s) => (
+              <SubOption key={s.key} field={s} value={config[s.key]} onChange={(v) => update(s.key, v)}
+                disabled={off || config[f.key] === false} />
+            ))}
+          </FieldRow>
         );
       })}
     </div>
   );
 }
 
+/** 附加选项（只支持布尔）：主开关说明下面的一个小勾选框，只写名字，不写说明。 */
+function SubOption({
+  field, value, onChange, disabled,
+}: {
+  field: Field;
+  value: unknown;
+  onChange: (v: unknown) => void;
+  disabled: boolean;
+}) {
+  return (
+    <label className={cn("mt-2 flex w-fit items-center gap-2 text-sm", disabled ? "opacity-45" : "cursor-pointer")}>
+      <Check checked={value === true} onChange={onChange} label={field.label} disabled={disabled} className="size-[22px] [&>svg]:size-4" />
+      {field.label}
+    </label>
+  );
+}
+
 function FieldRow({
-  field, value, onChange, error, disabled, ui, devOnly,
+  field, value, onChange, error, disabled, ui, devOnly, children,
 }: {
   field: Field;
   value: unknown;
@@ -46,6 +73,7 @@ function FieldRow({
   disabled: boolean;
   ui: ModuleUI;
   devOnly: boolean;
+  children?: ReactNode;
 }) {
   const Icon = ui.fieldIcons?.[field.key] ?? Settings2;
   if (field.kind === "array" && field.children) {
@@ -63,6 +91,7 @@ function FieldRow({
         </div>
         {field.description && field.description !== field.label && <div className="text-xs text-muted">{field.description}</div>}
         {error && <div className="text-xs text-bad">{error}</div>}
+        {children}
       </div>
       <span className="w-px self-stretch bg-white/10" />
       <Control field={field} value={value} onChange={onChange} disabled={disabled} error={error} />
@@ -140,7 +169,7 @@ function NumberInput({
   );
 }
 
-/** 对象数组（例如神秘商店的目标商品）：表格，每行一项。 */
+/** 对象数组：表格，每行一项。 */
 function ArrayField({
   field, value, onChange, ui, error,
 }: {

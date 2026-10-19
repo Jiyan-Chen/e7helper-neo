@@ -3,6 +3,7 @@ import { type ReactNode, useCallback, useEffect, useRef, useState } from "react"
 import { Ornament } from "@/components/ui/Ornament";
 import { resolveConnection } from "@/lib/connection";
 import { startEngine } from "@/lib/store";
+import { WindowDragStrip } from "./WindowControls";
 
 /** 启动画面：等引擎连上（Tauri 可能要先拉起引擎，几秒到几十秒）。 */
 export function ConnectGate({ children }: { children: ReactNode }) {
@@ -30,7 +31,8 @@ export function ConnectGate({ children }: { children: ReactNode }) {
 
   if (state === "ready") return <>{children}</>;
   return (
-    <div className="grid h-full place-items-center">
+    <div className="relative grid h-full place-items-center">
+      <WindowDragStrip />
       <div className="panel flex w-[440px] flex-col items-center gap-4 px-8 py-7 text-center">
         <div className="text-2xl font-bold tracking-wide">第七史诗助手</div>
         <Ornament className="w-full" />

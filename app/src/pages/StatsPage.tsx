@@ -12,7 +12,7 @@ export function StatsPage() {
   const list = visibleModules(modules ?? []).filter((m) => moduleUI(m.id).statLabels);
   return (
     <div className="h-full overflow-auto px-[22px] py-4">
-      <p className="mb-3 text-muted">各功能累计做了多少事。演练不计入。</p>
+      <p className="mb-3 text-muted">各功能累计做了多少事。</p>
       <div className="grid grid-cols-2 gap-3.5 max-[1180px]:grid-cols-1">
         {list.map((m) => <StatCard key={m.id} module={m} />)}
       </div>

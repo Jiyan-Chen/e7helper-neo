@@ -1,4 +1,4 @@
-"""竞技场 NPC 界面的识别：旗帜读数、准备界面模式、结算、补旗框、自动战斗图标。
+"""日常收取 · 竞技场 NPC 界面的识别：旗帜读数、准备界面模式、结算、补旗框、自动战斗图标。
 
 全部是纯函数（输入 Vision + 帧），不点击，方便用 fixtures 离线测试。坐标一律是 1600x900 基准（实测 B05）。
 """
@@ -73,11 +73,11 @@ def read_flags(vision: Vision, frame: np.ndarray) -> int | None:
 
 def read_prep(vision: Vision, frame: np.ndarray) -> Prep | None:
     """准备界面当前的模式。按钮模板设了 max_diff，加载/淡入时不命中，返回 None。"""
-    quick = vision.find(frame, "prep/quick")
+    quick = vision.find(frame, "arena/prep/quick")
     if quick is not None:
         frac = vision.ocr.read_fraction(frame, QUICK_LEFT)
         return Prep(PrepMode.QUICK, quick, None if frac is None else frac[0])
-    start = vision.find(frame, "prep/start")
+    start = vision.find(frame, "arena/prep/start")
     if start is not None:
         return Prep(PrepMode.BATTLE, start, None)
     return None
@@ -85,7 +85,7 @@ def read_prep(vision: Vision, frame: np.ndarray) -> Prep | None:
 
 def is_victory(vision: Vision, frame: np.ndarray) -> bool:
     """结算界面是胜利（快速对战是「Victory」，普通战斗是「VICTORY」）。没见过失败界面，认不出就当不是胜利。"""
-    return vision.find(frame, "result/victory_quick") is not None or vision.find(frame, "result/victory") is not None
+    return vision.find(frame, "arena/result/victory_quick") is not None or vision.find(frame, "arena/result/victory") is not None
 
 
 def _edge_bright(frame: np.ndarray, rect: Rect) -> float:
@@ -97,14 +97,14 @@ def _edge_bright(frame: np.ndarray, rect: Rect) -> float:
 
 def read_buy_dialog(vision: Vision, frame: np.ndarray) -> BuyDialog | None:
     """补旗框完全显示时（购买/取消按钮的 max_diff 通过）返回其内容。"""
-    if vision.find(frame, "buy/title") is None:
+    if vision.find(frame, "arena/buy/title") is None:
         return None
-    ok, cancel = vision.find(frame, "buy/ok"), vision.find(frame, "buy/cancel")
+    ok, cancel = vision.find(frame, "arena/buy/ok"), vision.find(frame, "arena/buy/cancel")
     if ok is None or cancel is None:
         return None
     ocr = vision.ocr
     return BuyDialog(
-        friendship=vision.find(frame, "buy/friendship") is not None,
+        friendship=vision.find(frame, "arena/buy/friendship") is not None,
         left_selected=_edge_bright(frame, _LEFT_EDGE) >= SELECTED_BRIGHT,
         right_selected=_edge_bright(frame, _RIGHT_EDGE) >= SELECTED_BRIGHT,
         cost=ocr.read_number(frame, BUY_COST),
@@ -120,7 +120,7 @@ def auto_icon(vision: Vision, frame: np.ndarray) -> np.ndarray | None:
 
     未开启时图标静止；开启后一直旋转，模板多数帧认不出。是否开启由调用方比较连续几帧判断。
     """
-    m = vision.find(frame, "battle/auto")
+    m = vision.find(frame, "arena/battle/auto")
     if m is None:
         return None
     r = Scaler(frame.shape[1], frame.shape[0]).rect_to_device(m.rect)

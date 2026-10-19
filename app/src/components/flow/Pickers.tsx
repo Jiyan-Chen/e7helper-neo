@@ -79,7 +79,7 @@ export function TemplatePicker({
         }} />
       ) : (
         <>
-          {tab === "common" && <p className="mb-2 text-xs text-muted">游戏里通用的界面元素（返回键、大厅入口、界面标题），由助手维护，不能修改。</p>}
+          {tab === "common" && <p className="mb-2 text-xs text-muted">游戏里通用的按钮和界面标题。</p>}
           {shown.length === 0 && (
             <p className="py-6 text-center text-muted">{tab === "mine" ? "还没有自己的模板，点「采集新模板」截一张图框一个。" : "没有匹配的模板。"}</p>
           )}
@@ -142,7 +142,6 @@ export function PointPicker({
     >
       <div className="mb-2 flex items-center gap-2">
         <FrameButtons freeze={() => void freeze()} upload={(f) => void upload(f)} busy={busy} />
-        <span className="text-xs text-muted">坐标按 1600×900 记录，模拟器分辨率不同时自动换算。</span>
       </div>
       <FrameCanvas src={src} mode={mode === "point" ? "point" : "line"} overlays={overlays}
         onPoint={setP}

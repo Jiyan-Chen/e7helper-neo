@@ -35,7 +35,7 @@ export function LivePanel() {
 
   if (collapsed) {
     return (
-      <aside className="flex w-11 flex-col items-center gap-3 border-l border-white/8 bg-[#0a1020]/50 pt-3">
+      <aside className="anim-fade flex w-11 flex-col items-center gap-3 border-l border-white/8 bg-[#0a1020]/50 pt-3">
         <button type="button" className="grid size-8 cursor-pointer place-items-center rounded-md text-muted hover:bg-white/8 hover:text-ink"
           onClick={toggle} aria-label="展开画面和动态" title="展开画面和动态">
           <PanelRightOpen className="size-5" />
@@ -45,7 +45,7 @@ export function LivePanel() {
   }
 
   return (
-    <aside className="flex w-[380px] min-h-0 flex-col gap-3 py-4 pr-4">
+    <aside className="anim-slide-right flex w-[380px] min-h-0 flex-col gap-3 py-4 pr-4">
       <div className="relative overflow-hidden rounded-xl border-[1.5px] border-gold-line shadow-[0_0_0_3px_rgba(0,0,0,.35)]">
         {frame ? (
           <img src={frame} alt="当前游戏画面" className="block aspect-video w-full object-cover" />

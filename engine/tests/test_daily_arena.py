@@ -1,4 +1,5 @@
-"""B05 竞技场 NPC：界面识别、补旗框核对、自动战斗判定、整个流程（用 fixtures + ArenaSim 离线模拟）。"""
+"""日常收取 · 竞技场（B05 的 arena_npc，B12 并入 daily）：界面识别、补旗框核对、自动战斗判定、
+整个流程（用 fixtures + ArenaSim 离线模拟，日常收取只开竞技场这一项）。"""
 
 import dataclasses
 import json
@@ -15,9 +16,11 @@ from game_sim import load_fixture
 from e7helper.core.runtime import Humanize, Runtime, TaskStatus
 from e7helper.core.scene import default_detector
 from e7helper.core.vision import Vision
-from e7helper.modules.arena_npc import AUTO_DIFF, ArenaNpcConfig, ArenaNpcModule, page
-from e7helper.modules.arena_npc.page import BuyDialog, PrepMode
 from e7helper.modules.base import ModuleContext
+from e7helper.modules.daily import DailyConfig, DailyModule
+from e7helper.modules.daily import arena_page as page
+from e7helper.modules.daily.arena import AUTO_DIFF, Arena
+from e7helper.modules.daily.arena_page import BuyDialog, PrepMode
 
 
 @pytest.fixture(autouse=True)
@@ -27,7 +30,7 @@ def _data_dir(tmp_path, monkeypatch):
 
 @pytest.fixture(scope="module")
 def vision():
-    return Vision.for_module("arena_npc")
+    return Vision.for_module("daily")
 
 
 @pytest.fixture(scope="module")
@@ -36,7 +39,7 @@ def detector(vision):
     det = default_detector(vision)
     ctx = ModuleContext(None, logging.getLogger("test"), Path("."), Path("."), vision=vision,
                         controller=SimpleNamespace(scenes=det))
-    ArenaNpcModule(ctx)
+    DailyModule(ctx)
     return det
 
 
@@ -145,7 +148,7 @@ def test_read_buy_dialog_used_today(vision):
     """今天补过后：友情点数不可选，游戏自动选中天空石，购买按钮仍然亮着——必须拒绝。"""
     d = page.read_buy_dialog(vision, _frame("arena_buy_flags_used"))
     assert not d.friendship and d.right_selected and not d.left_selected
-    reason = ArenaNpcModule._check_dialog(SimpleNamespace(config=ArenaNpcConfig()), d)
+    reason = Arena._check_dialog(SimpleNamespace(cfg=DailyConfig()), d)
     assert reason and "今天" in reason
 
 
@@ -188,8 +191,8 @@ def _dialog(**kw):
     ({"hold": 599}, 500, False),
 ])
 def test_check_dialog(kw, keep, ok):
-    mod = SimpleNamespace(config=ArenaNpcConfig(friendship_keep=keep))
-    assert (ArenaNpcModule._check_dialog(mod, _dialog(**kw)) is None) is ok
+    item = SimpleNamespace(cfg=DailyConfig(arena_friendship_keep=keep))
+    assert (Arena._check_dialog(item, _dialog(**kw)) is None) is ok
 
 
 # ---------------------------------------------------------------- 自动战斗图标
@@ -208,25 +211,18 @@ def test_auto_icon_still_vs_rotating(vision):
     # 实机录屏（B05）：开启后模板偶尔在某些角度命中，相邻两帧的差 20 以上；关闭时 0.3–0.7
 
 
-# ---------------------------------------------------------------- 配置
-
-
-def test_config_schema_only_user_fields():
-    props = ArenaNpcModule.config_schema()["properties"]
-    assert set(props) == {"buy_flags", "dry_run"}
-    cfg = ArenaNpcConfig()
-    assert cfg.dry_run and not cfg.buy_flags and cfg.prefer_quick and cfg.max_flag_buys == 1
-    assert ArenaNpcConfig(max_battles=2).max_battles == 2  # 内部字段仍然可以传
-
-
 # ---------------------------------------------------------------- 流程（ArenaSim）
+
+
+ENTER = ["lobby", "arena", "arena_defense_record", "arena_pvp", "arena_npc"]  # 大厅 → NPC 页（首次进入有战斗记录）
+LEAVE = ["arena", "lobby"]  # NPC 页 → 返回 → 模式选择 → 返回 → 大厅
 
 
 @pytest.fixture(autouse=True)
 def _fast_waits(monkeypatch):
     """模拟器的画面是静止的，等待时间缩短不影响流程，只为让测试快一些。"""
     import e7helper.core.runtime.controller as controller
-    import e7helper.modules.arena_npc as arena
+    import e7helper.modules.daily.arena as arena
 
     monkeypatch.setattr(controller, "SETTLE_TIME", 0.1)
     monkeypatch.setattr(controller, "POPUP_SETTLE", 0.1)
@@ -236,11 +232,16 @@ def _fast_waits(monkeypatch):
     monkeypatch.setattr(arena, "VICTORY_WAIT", 0.3)
 
 
+def _config(**cfg):
+    """日常收取只开竞技场这一项。"""
+    return DailyConfig(**{"mail": False, "forest": False, "covenant": False, **cfg})
+
+
 def _run(sim, tmp_path, monkeypatch, *, timeout=120, **cfg):
     """旗帜数和快速对战剩余次数取模拟器的值（截图上画的是固定数字）。"""
-    import e7helper.modules.arena_npc as arena
+    import e7helper.modules.daily.arena as arena
 
-    monkeypatch.setattr(ArenaNpcModule, "_read_flags", lambda self, frame: sim.flags)
+    monkeypatch.setattr(Arena, "_read_flags", lambda self, frame: sim.flags)
     orig = page.read_prep
 
     def read_prep(vision, frame):
@@ -252,30 +253,38 @@ def _run(sim, tmp_path, monkeypatch, *, timeout=120, **cfg):
     monkeypatch.setattr(arena.page, "read_prep", read_prep)
     with Runtime(sim, scenes=default_detector(), humanize=Humanize.off(), debug_root=tmp_path / "debug",
                  seed=1) as rt:
-        return rt.run_task(ArenaNpcModule, ArenaNpcConfig(**cfg), timeout=timeout)
+        return rt.run_task(DailyModule, _config(**cfg), timeout=timeout)
+
+
+def _data(tmp_path):
+    return tmp_path / "data" / "modules" / "daily"
 
 
 def _history(tmp_path):
-    path = tmp_path / "data" / "modules" / "arena_npc" / "history.jsonl"
+    path = _data(tmp_path) / "history.jsonl"
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
 
 
 def _totals(tmp_path):
-    path = tmp_path / "data" / "modules" / "arena_npc" / "stats.json"
+    path = _data(tmp_path) / "stats.json"
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
 
 
+def _ledger_done(tmp_path):
+    path = _data(tmp_path) / "ledger.json"
+    return json.loads(path.read_text(encoding="utf-8"))["done"] if path.exists() else {}
+
+
 def test_dry_run_from_lobby_stops_at_prep(tmp_path, monkeypatch):
-    """dry-run（默认）：大厅 → 模式选择 → 关战斗记录 → NPC页 → 选第一行 → 挑战 → 准备界面 → 返回；不点开始。"""
+    """dry-run（默认）：大厅 → 模式选择 → 关战斗记录 → NPC页 → 选第一行 → 挑战 → 准备界面 → 返回大厅；不点开始。"""
     sim = ArenaSim("lobby")
     result = _run(sim, tmp_path, monkeypatch)
     assert result.status is TaskStatus.SUCCEEDED, result.error
     assert DANGER not in sim.history and sim.starts == 0 and sim.buys == 0
-    assert sim.history == ["lobby", "arena", "arena_defense_record", "arena_pvp", "arena_npc", "arena_npc_selected",
-                           "arena_prep_quick", "arena_npc_selected"]
+    assert sim.history == ENTER + ["arena_npc_selected", "arena_prep_quick", "arena_npc_selected"] + LEAVE
     run = _history(tmp_path)[-1]
     assert run["dry_run"] and run["battles"] == [] and run["flags_start"] == 5
-    assert "快速对战" in run["would"][0] and "dry-run" in run["stop_reason"]
+    assert "快速对战" in run["would"][0] and "dry-run" in run["items"]["arena"]
     assert _totals(tmp_path) is None  # dry-run 不计入累计
 
 
@@ -283,11 +292,11 @@ def test_dry_run_reads_real_numbers(tmp_path):
     """不替换读数：真的 OCR 顶栏旗帜和快速对战剩余次数。"""
     sim = ArenaSim("arena_npc")
     with Runtime(sim, scenes=default_detector(), humanize=Humanize.off(), debug_root=tmp_path / "debug") as rt:
-        result = rt.run_task(ArenaNpcModule, ArenaNpcConfig(), timeout=60)
+        result = rt.run_task(DailyModule, _config(), timeout=60)
     assert result.status is TaskStatus.SUCCEEDED, result.error
     run = _history(tmp_path)[-1]
     assert run["flags_start"] == 5 and "剩余 10" in run["would"][0]
-    assert sim.starts == 0
+    assert sim.starts == 0 and sim.screen == "lobby"
 
 
 def test_dry_run_quick_exhausted_switches_to_battle(tmp_path, monkeypatch):
@@ -306,26 +315,28 @@ def test_dry_run_switches_back_to_quick(tmp_path, monkeypatch):
 
 
 def test_dry_run_no_flags_does_not_open_buy_dialog(tmp_path, monkeypatch):
-    sim = ArenaSim("arena_npc", flags=0)
-    result = _run(sim, tmp_path, monkeypatch, buy_flags=True)
+    sim = ArenaSim("lobby", flags=0)
+    result = _run(sim, tmp_path, monkeypatch, arena_buy_flags=True)
     assert result.status is TaskStatus.SUCCEEDED, result.error
-    assert "arena_buy_flags" not in sim.history and sim.taps == []
+    assert sim.history == ENTER + LEAVE
     assert _history(tmp_path)[-1]["would"] == ["用友情点数补旗"]
 
 
 def test_dry_run_probe_buy_dialog_only_cancels(tmp_path, monkeypatch):
-    sim = ArenaSim("arena_npc", flags=0)
-    result = _run(sim, tmp_path, monkeypatch, buy_flags=True, probe_dialogs=True)
+    sim = ArenaSim("lobby", flags=0)
+    result = _run(sim, tmp_path, monkeypatch, arena_buy_flags=True, arena_probe_dialogs=True)
     assert result.status is TaskStatus.SUCCEEDED, result.error
-    assert sim.history[-2:] == ["arena_buy_flags", "arena_npc"] and sim.buys == 0
+    assert sim.history == ENTER + ["arena_buy_flags", "arena_npc"] + LEAVE and sim.buys == 0
     assert "100 友情点数补 5 面旗帜" in _history(tmp_path)[-1]["would"][0]
+    assert _ledger_done(tmp_path) == {}
 
 
 def test_no_flags_without_buy_stops(tmp_path, monkeypatch):
-    sim = ArenaSim("arena_npc", flags=0, start="ok")
+    sim = ArenaSim("lobby", flags=0, start="ok")
     result = _run(sim, tmp_path, monkeypatch, dry_run=False)
     assert result.status is TaskStatus.SUCCEEDED, result.error
-    assert sim.taps == [] and _history(tmp_path)[-1]["stop_reason"] == "旗帜用完"
+    assert sim.history == ENTER + LEAVE
+    assert _history(tmp_path)[-1]["items"]["arena"] == "旗帜用完（打了 0 场）"
 
 
 def test_live_quick_battles_until_flags_run_out(tmp_path, monkeypatch):
@@ -333,9 +344,10 @@ def test_live_quick_battles_until_flags_run_out(tmp_path, monkeypatch):
     result = _run(sim, tmp_path, monkeypatch, dry_run=False)
     assert result.status is TaskStatus.SUCCEEDED, result.error
     assert sim.starts == 3 and sim.flags == 0 and sim.quick_left == 7 and sim.auto_taps == 0
+    assert sim.screen == "lobby"
     run = _history(tmp_path)[-1]
     assert [b["mode"] for b in run["battles"]] == ["quick"] * 3 and all(b["victory"] for b in run["battles"])
-    assert run["flags_spent"] == 3 and run["flags_end"] == 0 and run["stop_reason"] == "旗帜用完"
+    assert run["flags_spent"] == 3 and run["flags_end"] == 0 and run["items"]["arena"] == "旗帜用完（打了 3 场）"
     assert _totals(tmp_path)["battles"] == 3 and _totals(tmp_path)["wins"] == 3
 
 
@@ -352,59 +364,75 @@ def test_live_quick_then_battle_with_auto(tmp_path, monkeypatch):
 
 def test_live_buy_flags_once(tmp_path, monkeypatch):
     sim = ArenaSim("arena_npc", flags=1, start="ok", buy="ok")
-    result = _run(sim, tmp_path, monkeypatch, dry_run=False, buy_flags=True)
+    result = _run(sim, tmp_path, monkeypatch, dry_run=False, arena_buy_flags=True)
     assert result.status is TaskStatus.SUCCEEDED, result.error
     assert sim.buys == 1 and sim.starts == 6 and sim.flags == 0
     run = _history(tmp_path)[-1]
     assert run["flag_buys"] == 1 and run["friendship_spent"] == 100 and len(run["battles"]) == 6
-    assert "本次已补旗 1 次" in run["stop_reason"]
+    assert "本次已补旗 1 次" in run["items"]["arena"]
     assert _totals(tmp_path)["last_flag_buy"] is not None
+    assert "arena_buy" in _ledger_done(tmp_path)
+
+
+def test_bought_today_ledger_skips_buy_dialog(tmp_path, monkeypatch):
+    """账本记了今天补过旗：旗帜用完就结束，不再打开补旗框。"""
+    sim = ArenaSim("arena_npc", flags=1, start="ok", buy="ok")
+    _run(sim, tmp_path, monkeypatch, dry_run=False, arena_buy_flags=True)
+    sim = ArenaSim("arena_npc", flags=1, start="ok", buy="ok")
+    result = _run(sim, tmp_path, monkeypatch, dry_run=False, arena_buy_flags=True)
+    assert result.status is TaskStatus.SUCCEEDED, result.error
+    assert sim.buys == 0 and sim.starts == 1 and "arena_buy_flags" not in sim.history
+    assert "今天已经补过旗" in _history(tmp_path)[-1]["items"]["arena"]
 
 
 def test_live_buy_not_applied_stops(tmp_path, monkeypatch):
     sim = ArenaSim("arena_npc", flags=0, buy="eat")
-    result = _run(sim, tmp_path, monkeypatch, dry_run=False, buy_flags=True)
+    result = _run(sim, tmp_path, monkeypatch, dry_run=False, arena_buy_flags=True)
     assert result.status is TaskStatus.SUCCEEDED, result.error
-    assert sim.buys == 1 and "没有增加" in _history(tmp_path)[-1]["stop_reason"]
+    assert sim.buys == 1 and "没有增加" in _history(tmp_path)[-1]["items"]["arena"]
 
 
 def test_live_wrong_selection_never_buys(tmp_path, monkeypatch):
-    """补旗框选中的是天空石：点左边选项后仍不对，就点取消并停止，从不点购买。"""
-    import e7helper.modules.arena_npc as arena
+    """补旗框选中的是天空石：点左边选项后仍不对，就点取消并结束，从不点购买。"""
+    import e7helper.modules.daily.arena as arena
 
     sim = ArenaSim("arena_npc", flags=0, buy="danger")
     orig = page.read_buy_dialog
     monkeypatch.setattr(arena.page, "read_buy_dialog",
                         lambda v, f: (d := orig(v, f)) and dataclasses.replace(d, left_selected=False,
                                                                                right_selected=True))
-    result = _run(sim, tmp_path, monkeypatch, dry_run=False, buy_flags=True)
+    result = _run(sim, tmp_path, monkeypatch, dry_run=False, arena_buy_flags=True)
     assert result.status is TaskStatus.SUCCEEDED, result.error
-    assert sim.buys == 0 and DANGER not in sim.history and sim.screen == "arena_npc"
-    assert "选中的是天空石" in _history(tmp_path)[-1]["stop_reason"]
+    assert sim.buys == 0 and DANGER not in sim.history and sim.screen == "lobby"
+    assert "选中的是天空石" in _history(tmp_path)[-1]["items"]["arena"]
+    assert _ledger_done(tmp_path) == {}  # 友情点数选项可用，只是没选中：不记「今天补过」
 
 
 def test_live_bought_today_never_buys(tmp_path, monkeypatch):
-    """今天已补过：补旗框里选中的是天空石，点取消并停止，从不点购买。"""
+    """今天已补过：补旗框里选中的是天空石，点取消并结束，从不点购买；账本记下今天不用再看。"""
     sim = ArenaSim("arena_npc", flags=0, buy="danger", bought_today=True)
-    result = _run(sim, tmp_path, monkeypatch, dry_run=False, buy_flags=True)
+    result = _run(sim, tmp_path, monkeypatch, dry_run=False, arena_buy_flags=True)
     assert result.status is TaskStatus.SUCCEEDED, result.error
-    assert sim.buys == 0 and DANGER not in sim.history and sim.screen == "arena_npc"
-    assert "今天可能已经补过" in _history(tmp_path)[-1]["stop_reason"]
+    assert sim.buys == 0 and DANGER not in sim.history and sim.screen == "lobby"
+    assert "今天可能已经补过" in _history(tmp_path)[-1]["items"]["arena"]
+    assert "arena_buy" in _ledger_done(tmp_path)
 
 
 def test_live_max_battles(tmp_path, monkeypatch):
     sim = ArenaSim("arena_npc", flags=5, start="ok")
-    result = _run(sim, tmp_path, monkeypatch, dry_run=False, max_battles=2)
+    result = _run(sim, tmp_path, monkeypatch, dry_run=False, arena_max_battles=2)
     assert result.status is TaskStatus.SUCCEEDED, result.error
     assert sim.starts == 2 and sim.flags == 3
 
 
 def test_live_swallowed_start_is_not_counted(tmp_path, monkeypatch):
+    """点开始连续被吞 3 次：这一项算失败（任务失败），没有计场次，回到大厅。"""
     sim = ArenaSim("arena_npc", flags=3, start="eat")
     result = _run(sim, tmp_path, monkeypatch, dry_run=False)
-    assert result.status is TaskStatus.SUCCEEDED, result.error
+    assert result.status is TaskStatus.FAILED and "竞技场" in result.error
     run = _history(tmp_path)[-1]
-    assert sim.starts == 3 and run["battles"] == [] and run["failures"] == 3 and "连续失败 3 次" in run["stop_reason"]
+    assert sim.starts == 3 and run["battles"] == [] and run["failures"] == 3
+    assert "连续失败 3 次" in run["items"]["arena"] and sim.screen == "lobby"
 
 
 def test_live_double_flag_spend_is_anomaly(tmp_path, monkeypatch):
@@ -429,11 +457,34 @@ def test_live_manual_battle_gets_auto(tmp_path, monkeypatch):
 
 
 def test_start_from_prep_and_result(tmp_path, monkeypatch):
+    """从竞技场里的任一界面开始：先回到大厅，再按日常收取的顺序进竞技场。"""
     for screen in ("arena_prep_quick", "arena_quick_victory", "arena_pvp", "arena"):
         sim = ArenaSim(screen, record_popup=False)
         result = _run(sim, tmp_path, monkeypatch)
         assert result.status is TaskStatus.SUCCEEDED, (screen, result.error)
-        assert sim.starts == 0 and "arena_npc_selected" in sim.history, screen
+        assert sim.starts == 0 and "arena_npc_selected" in sim.history and sim.screen == "lobby", screen
+
+
+def test_arena_runs_after_other_items(tmp_path, monkeypatch):
+    """四项都开：竞技场排在最后（ArenaSim 没有邮件 / 圣域 / 召唤界面，前三项换成只记顺序）。"""
+    from e7helper.modules.daily import StopItem
+
+    order = []
+
+    def fake(key):
+        def run(self):
+            order.append(key)
+            raise StopItem("跳过")
+        return run
+
+    for key in ("mail", "forest", "covenant"):
+        monkeypatch.setattr(DailyModule, f"_{key}", fake(key))
+    sim = ArenaSim("lobby", flags=1, start="ok")
+    result = _run(sim, tmp_path, monkeypatch, dry_run=False, mail=True, forest=True, covenant=True)
+    assert result.status is TaskStatus.SUCCEEDED, result.error
+    run = _history(tmp_path)[-1]
+    assert order == ["mail", "forest", "covenant"] and list(run["items"]) == ["mail", "forest", "covenant", "arena"]
+    assert run["items"]["arena"] == "旗帜用完（打了 1 场）" and sim.starts == 1
 
 
 def test_rotated_icon_helper_changes_pixels():

@@ -1,5 +1,6 @@
 import type { LucideIcon } from "lucide-react";
 import type { ComponentType } from "react";
+import type { Field } from "@/lib/schema";
 import type { ModuleDetail, Trigger } from "@/lib/types";
 
 /** 「计划」页里给玩家的一键添加（例如重复刷关的托管自动结算）。 */
@@ -9,6 +10,13 @@ export interface SchedulePreset {
   trigger: Trigger;
   /** 覆盖到模块当前设置上的字段 */
   config?: Record<string, unknown>;
+}
+
+/** 自己画的字段（代替自动表单里的那一行）。 */
+export interface FieldRendererProps {
+  field: Field;
+  value: unknown;
+  onChange: (v: unknown) => void;
 }
 
 export interface ModuleExtraProps {
@@ -37,6 +45,10 @@ export interface ModuleUI {
   fieldIcons?: Record<string, LucideIcon>;
   /** 字段 → 控制它的布尔字段：控制项关掉时这个字段变灰 */
   fieldDeps?: Record<string, string>;
+  /** 附加选项（布尔字段 → 它所属的主开关）：画在主开关那一行里，只显示名字；主开关关掉时变灰 */
+  subFields?: Record<string, string>;
+  /** 自己画的字段：画在自动表单里这个字段的位置（例如书签刷取的商品选择） */
+  fieldRenderers?: Record<string, ComponentType<FieldRendererProps>>;
   /** 永远不显示的字段（引擎内部参数已经用 SkipJsonSchema 隐藏，这里是额外的） */
   hiddenFields?: string[];
   /** 只在开发版显示的字段 */

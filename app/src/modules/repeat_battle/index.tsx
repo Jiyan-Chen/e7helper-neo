@@ -40,7 +40,7 @@ const ui: ModuleUI = {
   presets: [
     {
       name: "托管自动结算",
-      description: "每 30 分钟检查一次托管：完成了就结算并在同一关重开，不手动刷",
+      description: "每 30 分钟结算并重开托管",
       trigger: { type: "interval", minutes: 30 },
       config: { manual: false, auto_battle: true },
     },

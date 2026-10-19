@@ -31,13 +31,13 @@ log = logging.getLogger(__name__)
 
 
 class CustomFlowConfig(BaseModel):
-    flow: str = Field("", title="流程", description="要运行的流程（在「我的流程」里编辑）")
+    flow: str = Field("", title="流程", description="要运行的流程")
 
 
 class CustomFlow(TaskModule):
     id = "custom_flow"
     name = "自定义流程"
-    description = "运行你在「我的流程」里编排的步骤：点击、等待、条件分支、循环"
+    description = "运行你在「我的流程」里编排的操作"
     config_model = CustomFlowConfig
     store_factory: ClassVar = FlowStore  # 测试里换成临时目录
 

@@ -28,7 +28,7 @@ REPO = ENGINE.parent
 APP = REPO / "app"
 DIST = ENGINE / "dist" / "e7engine"
 EXE = DIST / "e7engine.exe"
-EXPECTED_MODULES = {"arena_npc", "custom_flow", "daily", "hello", "repeat_battle", "secret_shop"}
+EXPECTED_MODULES = {"custom_flow", "daily", "hello", "repeat_battle", "secret_shop"}
 
 
 def versions() -> dict[str, str]:

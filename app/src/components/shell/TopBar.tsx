@@ -1,5 +1,6 @@
 import { CalendarClock, MapPin, Square } from "lucide-react";
-import { Link, useLocation } from "react-router";
+import { Link } from "react-router";
+import solitaria from "@/assets/solitaria.png";
 import { toast } from "@/components/ui/Toast";
 import { api, errorMessage } from "@/lib/api";
 import { useModules, useNow } from "@/lib/hooks";
@@ -7,31 +8,17 @@ import { sceneLabel } from "@/lib/labels";
 import { useEngine } from "@/lib/store";
 import { dayTime, formatDuration, secondsUntil } from "@/lib/time";
 import { moduleUI } from "@/modules/registry";
+import { WindowControls } from "./WindowControls";
 
-export const PAGE_TITLES: Record<string, string> = {
-  "/schedules": "计划",
-  "/history": "运行记录",
-  "/stats": "统计",
-  "/logs": "日志",
-  "/settings": "设置",
-  "/capture": "内置模板采集",
-  "/flows": "我的流程",
-  "/templates": "我的模板",
-};
-
-/** 顶栏：标题在左，右边像游戏的资源栏一样列出模拟器、当前画面、下一个计划，最右是急停。 */
+/** 顶栏：左边固定是索尔缇娅头像 + 应用名（B12 用户意见），右边像游戏的资源栏一样列出模拟器、当前画面、下一个计划、急停，最右是窗口按钮。
+ *  顶栏同时是窗口的标题栏（B12）：空白处按住拖动，双击最大化 / 还原。 */
 export function TopBar() {
-  const { pathname } = useLocation();
   const { data: modules } = useModules();
   const status = useEngine((s) => s.status);
   const scene = useEngine((s) => s.scene);
   const socket = useEngine((s) => s.socket);
   const now = useNow();
 
-  const moduleId = pathname.startsWith("/m/") ? pathname.slice(3) : null;
-  const title = moduleId
-    ? moduleUI(moduleId).menuLabel ?? modules?.find((m) => m.id === moduleId)?.name ?? moduleId
-    : PAGE_TITLES[pathname] ?? (pathname.startsWith("/flows/") ? "编辑流程" : "");
   const device = status?.device;
   const next = status?.scheduler.next;
   const nextName = next ? moduleUI(next.module).menuLabel ?? modules?.find((m) => m.id === next.module)?.name : null;
@@ -47,9 +34,13 @@ export function TopBar() {
   };
 
   return (
-    <header className="flex h-[60px] items-center gap-6 border-b border-white/8 bg-[#080c18]/55 pr-4 pl-5 backdrop-blur-[4px]">
-      <h1 className="text-[22px] font-bold tracking-wide">{title}</h1>
-      <span className="flex-1" />
+    <header data-tauri-drag-region
+      className="flex h-[60px] items-center gap-6 border-b border-white/8 bg-[#080c18]/55 pl-5 backdrop-blur-[4px] select-none">
+      <div data-tauri-drag-region className="flex items-center gap-2.5">
+        <img src={solitaria} alt="" draggable={false} className="pointer-events-none size-10" />
+        <h1 className="pointer-events-none text-[20px] font-bold tracking-wide">第七史诗助手</h1>
+      </div>
+      <span data-tauri-drag-region className="flex-1 self-stretch" />
 
       {socket !== "open" ? (
         <span className="flex items-center gap-2 text-sm text-warn">
@@ -87,6 +78,8 @@ export function TopBar() {
         <Square className="size-3.5 fill-current" />
         停止
       </button>
+
+      <WindowControls className="-ml-2 border-l border-white/8" />
     </header>
   );
 }

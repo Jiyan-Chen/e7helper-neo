@@ -6,7 +6,10 @@ interface ToastItem {
   id: number;
   kind: "ok" | "error";
   text: string;
+  leaving?: boolean; // 正在淡出（B12：不直接消失）
 }
+
+const LEAVE_MS = 200; // 和 index.css 的 --dur 一致
 
 const useToasts = create<{ items: ToastItem[] }>(() => ({ items: [] }));
 let seq = 0;
@@ -15,7 +18,10 @@ let seq = 0;
 export function toast(text: string, kind: "ok" | "error" = "ok") {
   const id = ++seq;
   useToasts.setState((s) => ({ items: [...s.items.slice(-2), { id, kind, text }] }));
-  setTimeout(() => useToasts.setState((s) => ({ items: s.items.filter((t) => t.id !== id) })), kind === "error" ? 6000 : 2500);
+  setTimeout(() => {
+    useToasts.setState((s) => ({ items: s.items.map((t) => (t.id === id ? { ...t, leaving: true } : t)) }));
+    setTimeout(() => useToasts.setState((s) => ({ items: s.items.filter((t) => t.id !== id) })), LEAVE_MS);
+  }, kind === "error" ? 6000 : 2500);
 }
 
 export function Toaster() {
@@ -26,7 +32,8 @@ export function Toaster() {
         <div
           key={t.id}
           className={cn(
-            "flex items-center gap-2 rounded-full border px-5 py-2 text-sm shadow-lg backdrop-blur",
+            "toast flex items-center gap-2 rounded-full border px-5 py-2 text-sm shadow-lg backdrop-blur",
+            t.leaving && "leaving",
             t.kind === "ok" ? "border-ok/40 bg-[#14301a]/90 text-[#d8f1cb]" : "border-bad/50 bg-[#3a1610]/92 text-[#ffd2c8]",
           )}
         >

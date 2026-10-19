@@ -262,17 +262,21 @@ def test_ledger_corrupt_file(tmp_path):
 
 
 def test_config_schema_only_switches():
-    assert set(DailyConfig.model_json_schema()["properties"]) == {"mail", "forest", "covenant", "dry_run"}
-    assert DailyConfig().dry_run
+    assert set(DailyConfig.model_json_schema()["properties"]) == {"mail", "forest", "covenant", "arena",
+                                                                  "arena_buy_flags", "dry_run"}
+    cfg = DailyConfig()
+    assert cfg.dry_run and cfg.arena and not cfg.arena_buy_flags and cfg.arena_prefer_quick
+    assert DailyConfig(arena_max_battles=2).arena_max_battles == 2  # 内部字段仍然可以传
 
 
 # ---------------------------------------------------------------- 流程
 
 
 def _run(sim, tmp_path, *, timeout=300, **cfg):
+    """DailySim 不模拟竞技场：竞技场这一项默认关掉（竞技场的流程测试在 test_daily_arena.py）。"""
     with Runtime(sim, scenes=default_detector(), humanize=Humanize.off(), debug_root=tmp_path / "debug",
                  seed=1) as rt:
-        return rt.run_task(DailyModule, DailyConfig(**cfg), timeout=timeout)
+        return rt.run_task(DailyModule, DailyConfig(**{"arena": False, **cfg}), timeout=timeout)
 
 
 def _data(tmp_path):
@@ -324,8 +328,9 @@ def test_real_run_all(tmp_path):
     assert [m["count_after"] for m in run["mails"]] == [10]
     assert run["forest_claims"] == ["企鹅巢穴", "精灵之泉"]
     assert [(s["times"], s["left_after"]) for s in run["summons"]] == [(10, 11)]
-    assert _totals(tmp_path) | {"updated": None} == {"runs": 1, "mails": 1, "forest_claims": 2, "cares": 0,
-                                                     "summons": 10, "updated": None}
+    totals = _totals(tmp_path)
+    assert {k: totals[k] for k in ("runs", "mails", "forest_claims", "cares", "summons", "battles")} == {
+        "runs": 1, "mails": 1, "forest_claims": 2, "cares": 0, "summons": 10, "battles": 0}
     # 领完后精灵之森都在倒计时：按最短的倒计时记下次时间（企鹅巢穴 8:41:54）
     nxt = datetime.fromisoformat(_ledger(tmp_path)["forest_next"])
     assert timedelta(hours=8, minutes=40) < nxt - datetime.now(UTC) < timedelta(hours=8, minutes=43)

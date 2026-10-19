@@ -27,6 +27,13 @@
   --panel: rgba(20, 26, 42, 0.8);
   --panel-hi: rgba(44, 50, 64, 0.72);
   --edge: rgba(255, 255, 255, 0.08);
+
+  /* 过渡动画（B12 用户意见：使用体验更平滑）。系统开了「减少动画」时下面的规则全部关掉 */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
+  --dur-fast: 120ms;
+  --dur: 200ms;
+  --dur-slow: 280ms;
 }
 
 html,
@@ -93,6 +100,7 @@ body {
     border-radius: 12px;
     background: var(--panel-hi);
     border: 1px solid rgba(255, 255, 255, 0.06);
+    transition: border-color var(--dur), background-color var(--dur);
   }
 
   /* 古铜描边的圆形图标 */
@@ -123,13 +131,18 @@ body {
     white-space: nowrap;
     cursor: pointer;
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.26), 0 2px 0 rgba(0, 0, 0, 0.4);
-    transition: filter 0.12s;
+    transition:
+      filter var(--dur-fast),
+      translate var(--dur-fast) var(--ease-out),
+      box-shadow var(--dur-fast);
   }
   .btn:hover:not(:disabled) {
     filter: brightness(1.1);
   }
   .btn:active:not(:disabled) {
     filter: brightness(0.92);
+    translate: 0 1px;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2), 0 1px 0 rgba(0, 0, 0, 0.4);
   }
   .btn:disabled {
     filter: grayscale(0.6) brightness(0.6);
@@ -242,14 +255,25 @@ body {
     font-weight: 700;
     color: #e6e8ec;
     text-decoration: none;
+    isolation: isolate;
+    transition: background-color var(--dur), color var(--dur);
   }
   .menu-item:hover {
     background: rgba(255, 255, 255, 0.04);
   }
-  .menu-item.active {
+  .menu-item::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
     background: linear-gradient(90deg, rgba(47, 134, 232, 0.55), rgba(47, 134, 232, 0.08) 85%);
+    opacity: 0;
+    transition: opacity var(--dur-slow) var(--ease-out);
   }
-  .menu-item.active::after {
+  .menu-item.active::before {
+    opacity: 1;
+  }
+  .menu-item::after {
     content: "";
     position: absolute;
     right: 0;
@@ -258,6 +282,11 @@ body {
     width: 3px;
     background: var(--color-glow);
     box-shadow: 0 0 10px var(--color-glow);
+    scale: 1 0;
+    transition: scale var(--dur-slow) var(--ease-out);
+  }
+  .menu-item.active::after {
+    scale: 1 1;
   }
   .menu-item.minor {
     height: 44px;
@@ -278,6 +307,7 @@ body {
     font-size: 12px;
     color: var(--color-muted);
     cursor: pointer;
+    transition: color var(--dur), border-color var(--dur), background-color var(--dur);
   }
   .tab.active {
     background: linear-gradient(90deg, rgba(47, 134, 232, 0.7), rgba(47, 134, 232, 0.35));
@@ -296,6 +326,7 @@ body {
     font: inherit;
     outline: none;
     user-select: text;
+    transition: border-color var(--dur), box-shadow var(--dur);
   }
   .field:focus {
     border-color: var(--color-gold);
@@ -304,6 +335,98 @@ body {
   .field[aria-invalid="true"] {
     border-color: var(--color-bad);
   }
+}
+
+/* ---------------------------------------------------------------- 过渡动画 */
+@keyframes e7-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes e7-fade-out {
+  to {
+    opacity: 0;
+  }
+}
+@keyframes e7-rise-in {
+  from {
+    opacity: 0;
+    translate: 0 6px;
+  }
+}
+/* 对话框用 scale（它的居中用了 translate，不能动 translate） */
+@keyframes e7-pop-in {
+  from {
+    opacity: 0;
+    scale: 0.96;
+  }
+}
+@keyframes e7-pop-out {
+  to {
+    opacity: 0;
+    scale: 0.97;
+  }
+}
+@keyframes e7-drop-in {
+  from {
+    opacity: 0;
+    scale: 0.98;
+    translate: 0 -4px;
+  }
+}
+@keyframes e7-slide-in-right {
+  from {
+    opacity: 0;
+    translate: 16px 0;
+  }
+}
+@keyframes e7-toast-in {
+  from {
+    opacity: 0;
+    translate: 0 12px;
+    scale: 0.96;
+  }
+}
+
+/* 切换页面 */
+.anim-page {
+  animation: e7-rise-in var(--dur-slow) var(--ease-out) both;
+}
+/* 整块淡入（启动画面 → 主界面） */
+.anim-fade {
+  animation: e7-fade-in var(--dur-slow) var(--ease-out) both;
+}
+/* radix 的 data-state：关闭时等动画播完再卸载 */
+.anim-overlay[data-state="open"] {
+  animation: e7-fade-in var(--dur) var(--ease-out);
+}
+.anim-overlay[data-state="closed"] {
+  animation: e7-fade-out var(--dur-fast) var(--ease-in) forwards;
+}
+.anim-dialog[data-state="open"] {
+  animation: e7-pop-in var(--dur) var(--ease-out);
+}
+.anim-dialog[data-state="closed"] {
+  animation: e7-pop-out var(--dur-fast) var(--ease-in) forwards;
+}
+.anim-menu[data-state="open"] {
+  animation: e7-drop-in var(--dur-fast) var(--ease-out);
+}
+.anim-menu[data-state="closed"] {
+  animation: e7-fade-out var(--dur-fast) var(--ease-in) forwards;
+}
+.anim-slide-right {
+  animation: e7-slide-in-right var(--dur-slow) var(--ease-out) both;
+}
+.toast {
+  animation: e7-toast-in var(--dur) var(--ease-out) both;
+  transition:
+    opacity var(--dur) var(--ease-in),
+    translate var(--dur) var(--ease-in);
+}
+.toast.leaving {
+  opacity: 0;
+  translate: 0 6px;
 }
 
 @media (prefers-reduced-motion: reduce) {

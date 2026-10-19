@@ -149,7 +149,7 @@ export function TemplateCapture({ onSaved, compact }: { onSaved?: (t: UserTempla
             <span className="mr-1 inline-block size-2 rounded-full bg-glow" />框出要认的东西
           </button>
           <button type="button" className={cn("tab", tool === "tap" && "active")} onClick={() => setTool("tap")}
-            title="能点的地方和要认的东西不一样时才需要（例如认的是文字，要点的是上面的图标）">
+            title="要点的位置和认的东西不一样时才需要">
             <span className="mr-1 inline-block size-2 rounded-full bg-ok" />框能点的地方（可选）
           </button>
           {tap && <button type="button" className="text-xs text-faint hover:text-ink" onClick={() => setTap(null)}>清除点击区域</button>}
@@ -158,8 +158,7 @@ export function TemplateCapture({ onSaved, compact }: { onSaved?: (t: UserTempla
           onRect={(r) => (tool === "box" ? setBox(r) : setTap(r))}
           empty={<>先点「截取游戏画面」，把游戏停在你要认的界面上。<br />然后在图上拖一个框。</>} />
         <ul className="list-disc pl-5 text-xs leading-6 text-muted">
-          <li>框要<b className="text-ink">小而有特点</b>：按钮上的字、图标。不要框会变的数字、人物动画、背景。</li>
-          <li><b className="text-warn">不要采集购买、召唤、刷新等会花资源的按钮。</b>流程遇到确认框一律点「取消」，碰到「确认 / 购买」按钮会直接停下。</li>
+          <li>框要<b className="text-ink">小而有特点</b>：按钮上的字、图标。</li>
         </ul>
       </div>
       <div className={cn("flex flex-none flex-col", compact ? "" : "w-[300px]")}>

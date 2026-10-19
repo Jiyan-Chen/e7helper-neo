@@ -212,7 +212,7 @@ function AddStep({ addr, index, empty }: { addr: ListAddr; index: number; empty:
       </Popover.Trigger>
       <Popover.Portal>
         <Popover.Content side="right" align="start" sideOffset={6} collisionPadding={12}
-          className="z-50 w-[520px] rounded-xl border border-gold-line/60 bg-[#151b2b] p-3 shadow-xl">
+          className="anim-menu z-50 w-[520px] rounded-xl border border-gold-line/60 bg-[#151b2b] p-3 shadow-xl">
           <div className="grid grid-cols-3 gap-3">
             {STEP_GROUPS.map((g) => (
               <div key={g.title} className="flex flex-col gap-1">

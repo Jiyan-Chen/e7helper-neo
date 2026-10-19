@@ -1,4 +1,6 @@
-"""刷神秘商店：扫描列表买目标商品（默认誓约书签 / 神秘奖牌），然后消耗天空石刷新，循环。
+"""书签刷取（刷神秘商店）：扫描列表买选中的商品（誓约书签 / 神秘奖牌 / 友情点数），然后消耗天空石刷新，循环。
+
+B12：连续几页没出选中的商品就停止，或者换一个世界频道（`chat.py`，用户的玄学）。
 
 安全规则（详见 docs/reviews/B04.md）：
 - 只有扣费确认后才计数：按顶栏天空石/金币的读数差计，不按点击次数。
@@ -24,7 +26,8 @@ from e7helper.core.runtime.stuck import thumb_diff, thumbnail
 from e7helper.core.scene import Dismiss, Popup, SceneState
 from e7helper.modules.base import TaskModule
 
-from . import page, stats
+from . import chat, page, stats
+from .chat import ChannelError, ChannelSwitcher
 from .config import SecretShopConfig, Target
 from .page import Resources, ShopItem
 
@@ -64,8 +67,8 @@ def _list_thumb(frame: np.ndarray) -> np.ndarray:
 
 class SecretShopModule(TaskModule):
     id = "secret_shop"
-    name = "刷神秘商店"
-    description = "在秘密商店购买目标商品（誓约书签、神秘奖牌），消耗天空石刷新，按预算和次数自动停止"
+    name = "书签刷取"
+    description = "刷新秘密商店，买誓约书签、神秘奖牌和友情点数"
     config_model = SecretShopConfig
 
     def setup(self) -> None:
@@ -81,6 +84,7 @@ class SecretShopModule(TaskModule):
             POPUP_BUY, ("secret_shop:dialog/buy_title", "dialog/cancel"), Dismiss.tap("dialog/cancel"),
             note="购买商品确认框（自动关闭时点取消）",
         ), replace=True, first=True)
+        chat.register(scenes)
 
     # ------------------------------------------------------------ 主流程
 
@@ -91,9 +95,12 @@ class SecretShopModule(TaskModule):
         self._scrolled = False
         self._last_res: Resources | None = None  # 最近一次核对过的顶栏读数，作为下一次操作的「操作前」读数
         self._page_index = 0
+        self._misses = 0  # 连续几页没出选中的商品
+        self.targets = cfg.buy_targets()
         mode = "dry-run（不点购买和刷新）" if cfg.dry_run else "实跑"
-        self.log.info("刷神秘商店：%s；目标 %s；最多刷新 %d 次，天空石预算 %d",
-                      mode, "、".join(_target_str(t) for t in cfg.targets), cfg.max_refreshes, cfg.skystone_budget)
+        self.log.info("书签刷取：%s；买 %s；最多刷新 %d 次；连续 %s 次没出就停止，%s 次没出就换频道",
+                      mode, "、".join(_target_str(t) for t in self.targets) or "（什么都没选）", cfg.max_refreshes,
+                      cfg.stop_after_misses or "-", cfg.channel_after_misses or "-")
         try:
             self._enter()
             res = self._resources()
@@ -101,6 +108,7 @@ class SecretShopModule(TaskModule):
             self.log.info("开始：%s", res)
             while True:
                 self._scan_page()
+                self._after_page()
                 self._refresh()
                 self._page_index += 1
         except StopShop as e:
@@ -134,6 +142,7 @@ class SecretShopModule(TaskModule):
         self._seen: set[str] = set()
         self._done: set[str] = set()  # 本页已买 / 已决定不买 / dry-run 已记下的商品
         self._attempts: dict[str, int] = {}
+        self._hit = False  # 这一页出现了选中的商品（买没买到都算）
         self.log.info("第 %d 页", self._page_index)
         if self._scrolled:
             self._scroll(down=False)
@@ -147,18 +156,19 @@ class SecretShopModule(TaskModule):
         self._scrolled = down
 
     def _scan_view(self) -> None:
-        cfg: SecretShopConfig = self.config
+        targets = self.targets
         for _ in range(12):  # 每买一件都重新扫描（画面变了）；上限防止意外死循环
             frame = self._settle_list()
-            items = page.scan_items(self.vision, frame, page.target_icons(cfg.targets))
+            items = page.scan_items(self.vision, frame, page.target_icons(targets))
             for it in items:
                 if it.name not in self._seen:
                     self._seen.add(it.name)
                     self.log.info("  %s", it)
-                    if (t := page.near_miss(it.name, cfg.targets)) is not None:
+                    if (t := page.near_miss(it.name, targets)) is not None:
                         self.log.warning("  「%s」和目标「%s」很像但没匹配上，可能是 OCR 认错了字", it.name, t.name)
-            todo = [it for it in items
-                    if it.name not in self._done and page.match_target(it, cfg.targets) is not None]
+            matched = [it for it in items if page.match_target(it, targets) is not None]
+            self._hit = self._hit or bool(matched)
+            todo = [it for it in matched if it.name not in self._done]
             if not todo:
                 return
             self._handle_target(todo[0])
@@ -167,7 +177,7 @@ class SecretShopModule(TaskModule):
     def _handle_target(self, item: ShopItem) -> None:
         cfg: SecretShopConfig = self.config
         res = self._last_res
-        decision = page.decide(item, cfg.targets, res.gold, cfg.gold_floor)
+        decision = page.decide(item, self.targets, res.gold, cfg.gold_floor)
         self.log.info("  决策：%s", decision)
         if not decision.buy:
             self._done.add(item.name)
@@ -233,6 +243,40 @@ class SecretShopModule(TaskModule):
         self.run_stats.gold_spent += spent
         raise ShopAnomaly(f"购买 {item.name} 后金币减少 {spent:,}，预期 {item.price:,}（{before} → {after}）")
 
+    # ------------------------------------------------------------ 没出就停 / 换频道
+
+    def _after_page(self) -> None:
+        cfg: SecretShopConfig = self.config
+        r = self.run_stats
+        self._misses = 0 if self._hit else self._misses + 1
+        r.max_misses = max(r.max_misses, self._misses)
+        if not self._hit:
+            self.log.info("这一页没出要买的商品（连续 %d 页）", self._misses)
+            if cfg.stop_after_misses and self._misses >= cfg.stop_after_misses:
+                raise StopShop(f"连续 {self._misses} 页没出要买的商品")
+        due = not self._hit and cfg.channel_after_misses and self._misses % cfg.channel_after_misses == 0
+        if due or (cfg.dry_run and cfg.probe_channel):
+            self._switch_channel()
+
+    def _switch_channel(self) -> None:
+        """换到下一个世界频道。dry-run（probe_channel）时换过去再换回来。"""
+        cfg: SecretShopConfig = self.config
+        switcher = ChannelSwitcher(self.ctl, self.vision, self.log)
+        try:
+            old, new = switcher.switch()
+            self.log.info("✔ 换世界频道：#%d → #%d", old, new)
+            if cfg.dry_run:
+                switcher.switch(old)
+                self.log.info("[dry-run] 已换回频道 #%d", old)
+            else:
+                self.run_stats.channel_switches.append(stats.ChannelSwitch(old, new, self._page_index))
+            self._ok()
+        except ChannelError as e:
+            self._fail(f"换频道失败：{e}")
+        finally:
+            self._back_to_shop()
+            self._settle_list()
+
     # ------------------------------------------------------------ 刷新
 
     def _refresh(self) -> None:
@@ -245,17 +289,17 @@ class SecretShopModule(TaskModule):
         cost = page.read_refresh_cost(self.vision, ctl.last_frame)  # 最后一帧是刚扫描过的列表
         if cost != cfg.refresh_cost:
             raise StopShop(f"刷新消耗读数 {cost} 与配置的 {cfg.refresh_cost} 不符")
-        if r.skystone_spent + cost > cfg.skystone_budget:
+        if cfg.skystone_budget is not None and r.skystone_spent + cost > cfg.skystone_budget:
             raise StopShop(f"天空石预算用完（已花 {r.skystone_spent}，预算 {cfg.skystone_budget}）")
         if before.skystone - cost < cfg.skystone_keep:
             raise StopShop(f"天空石 {before.skystone} 刷新后会低于保底 {cfg.skystone_keep}")
-        prices = [t.price for t in cfg.targets]
+        prices = [t.price for t in self.targets]
         if prices and None not in prices and before.gold - min(prices) < cfg.gold_floor:
             raise StopShop(f"金币 {before.gold:,} 已经不够在下限 {cfg.gold_floor:,} 之上买任何目标")
 
         if cfg.dry_run:
-            self.log.info("[dry-run] 下一步会刷新：消耗 %d 天空石（%d → %d），预算剩 %d",
-                          cost, before.skystone, before.skystone - cost, cfg.skystone_budget - r.skystone_spent)
+            self.log.info("[dry-run] 下一步会刷新：消耗 %d 天空石（%d → %d）",
+                          cost, before.skystone, before.skystone - cost)
             if cfg.probe_dialogs and self._open_refresh_dialog() is not None:
                 self.log.info("[dry-run] 刷新确认框核对通过，点取消")
                 self._back_to_shop()

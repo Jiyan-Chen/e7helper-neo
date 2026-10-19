@@ -1,7 +1,7 @@
 """刷商店的统计，写到模块数据目录：
 
 - `history.jsonl`：每次运行追加一行（含 dry-run）
-- `stats.json`：累计（只统计实跑：刷新次数、花费、买到的商品）
+- `stats.json`：累计（只统计实跑：刷新次数、花费、买到的商品、换频道次数）
 """
 
 from __future__ import annotations
@@ -28,6 +28,14 @@ class Purchase:
 
 
 @dataclass
+class ChannelSwitch:
+    old: int
+    new: int
+    page: int
+    time: str = field(default_factory=now)
+
+
+@dataclass
 class RunStats:
     dry_run: bool
     started: str = field(default_factory=now)
@@ -39,6 +47,8 @@ class RunStats:
     purchases: list[Purchase] = field(default_factory=list)
     would_buy: list[Purchase] = field(default_factory=list)  # dry-run 时决定要买的
     failures: int = 0  # 失败总次数（不只是连续的）
+    max_misses: int = 0  # 最长连续几页没出要买的商品
+    channel_switches: list[ChannelSwitch] = field(default_factory=list)
     skystone_start: int | None = None
     gold_start: int | None = None
     skystone_end: int | None = None
@@ -48,7 +58,8 @@ class RunStats:
     def summary(self) -> str:
         bought = "、".join(f"{p.name}(第{p.page}页)" for p in self.purchases) or "无"
         s = (f"刷新 {self.refreshes} 次，花费天空石 {self.skystone_spent}、金币 {self.gold_spent:,}，"
-             f"扫描 {self.pages} 页，买到：{bought}，失败 {self.failures} 次，停止原因：{self.stop_reason}")
+             f"扫描 {self.pages} 页，买到：{bought}，最长连续 {self.max_misses} 页没出，换频道 {len(self.channel_switches)} 次，"
+             f"失败 {self.failures} 次，停止原因：{self.stop_reason}")
         if self.dry_run:
             would = "、".join(f"{p.name}(第{p.page}页)" for p in self.would_buy) or "无"
             s = f"[dry-run] {s}；会买：{would}"
@@ -69,6 +80,7 @@ def save(data_dir: Path, run: RunStats) -> None:
         total["refreshes"] += run.refreshes
         total["skystone_spent"] += run.skystone_spent
         total["gold_spent"] += run.gold_spent
+        total["channel_switches"] += len(run.channel_switches)
         for p in run.purchases:
             total["bought"][p.name] = total["bought"].get(p.name, 0) + 1
         total["updated"] = run.ended or now()
@@ -80,7 +92,8 @@ def save(data_dir: Path, run: RunStats) -> None:
 
 
 def load_totals(data_dir: Path) -> dict:
-    total = {"runs": 0, "refreshes": 0, "skystone_spent": 0, "gold_spent": 0, "bought": {}, "updated": None}
+    total = {"runs": 0, "refreshes": 0, "skystone_spent": 0, "gold_spent": 0, "bought": {}, "channel_switches": 0,
+             "updated": None}
     path = data_dir / "stats.json"
     if path.exists():
         try:

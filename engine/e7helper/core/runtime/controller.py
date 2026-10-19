@@ -417,3 +417,10 @@ class Controller:
         self.device.back()
         if delay:
             self.sleep(self.humanize.delay_time(self.rng))
+
+    def input_text(self, text: str, *, delay: bool = True) -> None:
+        """往当前获得焦点的输入框里打字（先点输入框）。"""
+        self.check()
+        self.device.input_text(text)
+        if delay:
+            self.sleep(self.humanize.delay_time(self.rng))

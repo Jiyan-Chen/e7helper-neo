@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import cv2
 import numpy as np
-from game_sim import DANGER, GameSim, load_fixture
+from game_sim import DANGER, TRANSITIONS, GameSim, load_fixture
 
 from e7helper.core.geometry import Rect, Scaler
 
@@ -113,6 +113,8 @@ class ArenaSim(GameSim):
             self._go("arena_pvp")
         elif s == "arena_pvp" and _hit(TAB_NPC, bx, by):
             self._go(NPC_LIST)
+        elif s == "arena_pvp" and _hit(BACK_BTN, bx, by):
+            self._go("arena")
         elif s in (NPC_LIST, NPC_SELECTED):
             if _hit(FIRST_ROW, bx, by):
                 self._go(NPC_SELECTED)
@@ -149,6 +151,12 @@ class ArenaSim(GameSim):
                     if self.buy == "ok":
                         self.flags += 5
                     self._go(NPC_LIST)
+        else:
+            # 竞技场以外（大厅、模式选择的返回钮）按 GameSim 的通用规则（日常收取做完一项要回到大厅）
+            for area, target in TRANSITIONS.get(s, []):
+                if isinstance(area, Rect) and _hit(area, bx, by):
+                    self._go(target)
+                    return
 
     def _start(self) -> None:
         self.starts += 1

@@ -296,14 +296,29 @@ def serve(
                                   "started": datetime.now().isoformat(timespec="seconds")})
     _ok(f"API 服务：{url}（接口文档 {url}/docs）")
     console.print(f"  token：{token or '[yellow]未启用（--no-auth）[/]'}；已写入 {info_path}")
-    config = uvicorn.Config(api, log_config=None, access_log=False, ws="websockets-sansio", lifespan="on")
-    server = uvicorn.Server(config)
+    server = uvicorn.Server(server_config(api))
     # POST /api/shutdown（B09）：GUI 退出时让自己拉起的引擎正常关闭（急停任务、断开设备、删 api.json）
     api.state.request_shutdown = lambda: setattr(server, "should_exit", True)
     try:
         server.run(sockets=[sock])
     finally:
         remove_info()  # 启动失败等没走到 lifespan 关闭的情况
+
+
+# Windows 上 asyncio 默认的 Proactor 事件循环有两个毛病（B12 反馈 7，CPython 3.13 实测）：
+# - 客户端在被 accept 的瞬间断开（浏览器刷新 / 关页），accept 报 WinError 64，Proactor 会把监听 socket 关掉，
+#   之后整个 API 再也连不上；
+# - 对端已重置的连接，关闭时 shutdown() 抛错，连接没从 asyncio.Server 里摘掉，关服务时 wait_closed() 一直等。
+# Selector 事件循环没有这两个问题；引擎不用 asyncio 子进程（Selector 在 Windows 上唯一不支持的东西）。
+SERVER_LOOP = "asyncio:SelectorEventLoop"
+GRACEFUL_SHUTDOWN = 5.0  # 关服务时最多等连接 / 后台任务这么多秒，超时就取消（兜底，正常 1 秒内关完）
+
+
+def server_config(api) -> uvicorn.Config:  # noqa: F821 —— uvicorn 在函数里导入（启动快）
+    import uvicorn
+
+    return uvicorn.Config(api, log_config=None, access_log=False, ws="websockets-sansio", lifespan="on",
+                          loop=SERVER_LOOP, timeout_graceful_shutdown=GRACEFUL_SHUTDOWN)
 
 
 def _print_state(label: str, state: SceneState) -> None:

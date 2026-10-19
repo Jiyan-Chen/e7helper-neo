@@ -1,6 +1,6 @@
 // 我的流程（B11）：玩家自己编排的流程列表，运行 / 编辑 / 复制 / 加入计划 / 删除。
 import { useQueryClient } from "@tanstack/react-query";
-import { CalendarPlus, Copy, Images, Pencil, Play, Plus, ShieldCheck, Sparkles, Square, Trash2, Workflow } from "lucide-react";
+import { CalendarPlus, Copy, Images, Pencil, Play, Plus, Sparkles, Square, Trash2, Workflow } from "lucide-react";
 import { useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { STATUS_COLOR } from "@/components/module/RecentRuns";
@@ -21,7 +21,7 @@ function sampleFlow(): Flow {
   const s = (type: Step["type"], extra: Record<string, unknown> = {}) => ({ ...newStep(type), ...extra }) as Step;
   return {
     ...newFlow("示例：去圣域再回来"),
-    description: "从大厅进圣域，停两秒再返回大厅。不消耗任何资源，可以用来试试流程怎么跑。",
+    description: "从大厅进圣域，再回到大厅。",
     limits: { max_minutes: 3, max_taps: 20 },
     steps: [
       s("wait_scene", { scene: "lobby", timeout: 15, note: "先确认在大厅" }),
@@ -90,11 +90,6 @@ export function FlowsPage() {
         <p className="flex-1 text-muted">把常用的点击顺序存成流程，一键运行，或者加进计划定时运行。</p>
         <Link to="/templates" className="btn btn-ghost"><Images className="size-4" />我的模板</Link>
         <button type="button" className="btn btn-blue" onClick={() => navigate("/flows/new")}><Plus className="size-4" />新建流程</button>
-      </div>
-
-      <div className="mb-3 flex items-start gap-2 rounded-[10px] border border-gold-line/40 bg-black/25 px-4 py-2.5 text-sm text-muted">
-        <ShieldCheck className="mt-0.5 size-4 flex-none text-gold" />
-        <span>流程只做你编排的操作。遇到确认框、购买框<span className="text-ink">一律点取消</span>，碰到「确认 / 购买」按钮会直接停下，不会替你花资源。</span>
       </div>
 
       {isLoading && <p className="text-muted">加载中…</p>}

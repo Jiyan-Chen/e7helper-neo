@@ -82,7 +82,7 @@ class RepeatAnomaly(RuntimeError):
 class RepeatBattleModule(TaskModule):
     id = "repeat_battle"
     name = "重复刷关（托管 + 手动）"
-    description = "讨伐：结算并重开托管战斗；托管在后台跑的同时手动反复刷同一关，可选用叶子 / 天空石补行动力"
+    description = "自动刷讨伐：结算并重开托管战斗，同时手动反复刷关"
     config_model = RepeatBattleConfig
 
     def setup(self) -> None:

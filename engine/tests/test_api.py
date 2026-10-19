@@ -117,6 +117,54 @@ def test_redact_token_filter():
     assert rec.getMessage() == '127.0.0.1:1 - "WebSocket /ws?token=***&fps=2" [accepted]'
 
 
+def test_quiet_connection_lost(caplog):
+    """对端已断开时关连接的 ConnectionResetError 不记 ERROR（不出现在 GUI「动态」）；别的异常照常记。"""
+    import asyncio
+
+    from e7helper.api.app import quiet_connection_lost
+
+    msg = "Exception in callback _ProactorBasePipeTransport._call_connection_lost()"
+    loop = asyncio.new_event_loop()
+    try:
+        loop.set_exception_handler(quiet_connection_lost)
+        with caplog.at_level("DEBUG", logger="asyncio"):
+            loop.call_exception_handler({"message": msg, "exception": ConnectionResetError(10054, "reset")})
+            loop.call_exception_handler({"message": msg, "exception": ConnectionAbortedError(10053, "aborted")})
+            assert not [r for r in caplog.records if r.levelname == "ERROR"]
+            loop.call_exception_handler({"message": msg, "exception": ValueError("别的错")})
+            loop.call_exception_handler({"message": "Exception in callback other()",
+                                         "exception": ConnectionResetError(10054, "reset")})
+    finally:
+        loop.close()
+    errors = [r for r in caplog.records if r.levelname == "ERROR" and r.name == "asyncio"]
+    assert len(errors) == 2
+
+
+def test_server_uses_selector_loop_and_graceful_timeout(engine):
+    """`e7helper serve` 用 Selector 事件循环（Windows 的 Proactor 在客户端断开太快时会关掉监听 socket、
+    关服务时卡在 wait_closed，B12 反馈 7），关服务最多等 GRACEFUL_SHUTDOWN 秒。"""
+    import asyncio
+
+    from e7helper.cli import GRACEFUL_SHUTDOWN, server_config
+
+    cfg = server_config(create_app(engine, token=TOKEN))
+    assert cfg.get_loop_factory() is asyncio.SelectorEventLoop
+    assert cfg.timeout_graceful_shutdown == GRACEFUL_SHUTDOWN and 0 < GRACEFUL_SHUTDOWN <= 8  # GUI 退出 8 秒后强杀
+    assert cfg.ws == "websockets-sansio" and cfg.lifespan == "on"
+
+
+def test_lifespan_installs_loop_exception_handler(engine):
+    import asyncio
+
+    from e7helper.api.app import quiet_connection_lost
+
+    async def handler():
+        return asyncio.get_running_loop().get_exception_handler()
+
+    with _client(engine) as c:
+        assert c.portal.call(handler) is quiet_connection_lost
+
+
 def test_host_name_parsing():
     assert host_name("127.0.0.1:47800") == "127.0.0.1"
     assert host_name("[::1]:47800") == "::1"
@@ -258,7 +306,7 @@ def test_real_modules_daily_routes(tmp_path, detector):
         mods = {m["id"]: m for m in c.get("/api/modules").json()}
         assert mods["daily"]["supports_next_due"] and not mods["repeat_battle"]["supports_next_due"]
         # 真实模块的默认配置都是 dry-run
-        for mid in ("daily", "repeat_battle", "secret_shop", "arena_npc"):
+        for mid in ("daily", "repeat_battle", "secret_shop"):
             assert c.get(f"/api/modules/{mid}/config").json()["dry_run"] is True
 
 

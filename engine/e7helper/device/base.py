@@ -38,6 +38,10 @@ class Device(ABC):
         """Android 返回键。游戏里一般用来关闭弹窗；在大厅按会弹出「结束游戏」确认框。"""
         raise DeviceError(f"{self.name} 不支持返回键")
 
+    def input_text(self, text: str) -> None:
+        """往当前获得焦点的输入框里打字（B12：换世界频道要输入频道号）。"""
+        raise DeviceError(f"{self.name} 不支持输入文字")
+
     def close(self) -> None:  # noqa: B027 - 可选覆盖
         pass
 

@@ -48,7 +48,7 @@ export function SchedulesPage() {
   return (
     <div className="h-full overflow-auto px-[22px] py-4">
       <div className="mb-4 flex items-center gap-3">
-        <p className="flex-1 text-muted">到点自动运行。到点时有别的任务在运行，就排队等它结束。</p>
+        <p className="flex-1 text-muted">到点自动运行。</p>
         <label className="flex items-center gap-2 text-sm">
           <Check checked={!(data?.paused ?? false)} label="计划总开关" onChange={(on) => act(() => api().setSchedulerPaused(!on), on ? "计划已恢复" : "计划已全部暂停")} />
           计划总开关
@@ -275,7 +275,7 @@ export function ScheduleEditor({
         )}
         {trigger.type === "module" && (
           <Row label="说明">
-            <span className="text-sm text-muted">由功能自己决定下次时间（例如日常收取：每日重置后一次，精灵之森到点再一次）。</span>
+            <span className="text-sm text-muted">由功能自己决定什么时候运行。</span>
           </Row>
         )}
         <Row label="到点时有别的任务在运行">

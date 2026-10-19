@@ -18,10 +18,10 @@ export function Dialog({
   return (
     <D.Root open={open} onOpenChange={onOpenChange}>
       <D.Portal>
-        <D.Overlay className="fixed inset-0 z-40 bg-black/60 backdrop-blur-[2px]" />
+        <D.Overlay className="anim-overlay fixed inset-0 z-40 bg-black/60 backdrop-blur-[2px]" />
         <D.Content
           className={cn(
-            "fixed left-1/2 top-1/2 z-50 flex max-h-[86vh] w-[560px] max-w-[92vw] -translate-x-1/2 -translate-y-1/2 flex-col",
+            "anim-dialog fixed left-1/2 top-1/2 z-50 flex max-h-[86vh] w-[560px] max-w-[92vw] -translate-x-1/2 -translate-y-1/2 flex-col",
             "rounded-2xl border border-white/12 bg-[#151b2b]/97 shadow-[0_20px_60px_rgba(0,0,0,.6)]",
             className,
           )}

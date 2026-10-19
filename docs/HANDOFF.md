@@ -1,6 +1,6 @@
 # HANDOFF
 
-> 新会话从这里读起。上次更新：2026-10-19（B11 已通过）
+> 新会话从这里读起。上次更新：2026-10-19（B12 已通过）
 
 ## 当前进度
 - **B01 骨架 + 模块契约 + MuMu 设备层**：✅ 已通过，记录见 [reviews/B01.md](reviews/B01.md)。
@@ -15,7 +15,8 @@
 - **B10 打包发布（PyInstaller onedir + NSIS）**：✅ 已通过，记录见 [reviews/B10.md](reviews/B10.md)。
 - **B10a 弹窗补漏：断线自动重进**：✅ 已通过，记录见 [reviews/B10a.md](reviews/B10a.md)。B10 真机验证时发现的「与服务器的连接中断」弹窗，单独立项、单独审核。
 - **B11 自定义流程 + 玩家模板采集**：✅ 已通过，记录见 [reviews/B11.md](reviews/B11.md)。
-- 下一块：**B12 试用打磨（开发版）**（用户意见：先打磨已完成的部分，用户自由使用开发版、反馈问题，我逐条修改）。扩展模块顺延为 B13+，第一项是英雄数据库。
+- **B12 试用打磨（开发版）**：✅ 已通过，记录见 [reviews/B12.md](reviews/B12.md)。9 条反馈：竞技场并入日常收取、补旗做成附加选项、精简全部说明、「动态」红色 asyncio 报错、书签刷取（固定三种商品 + 没出就停 / 换世界频道）、标题栏做进应用、引擎关闭挂住（改用 Selector 事件循环）、左上角固定头像和应用名、界面过渡动画。
+- 下一块：**B12a 讨伐异界**（B12 新需求 1，单独立项、单独审核），之后 **B12b 日常收取：商店日常购买**（B12 新需求 2）。扩展模块 B13+（第一项英雄数据库）排在它们后面。
 
 ## 已有能力
 ### 设备（B01）
@@ -23,6 +24,7 @@
   - `d.screenshot()`：返回 BGR 帧，IPC 约 10ms
   - `d.tap(x, y)` / `d.swipe(...)`：坐标是设备像素
   - `d.adb.shell(...)`
+  - `d.input_text("70")`（B12）：往获得焦点的输入框打字，走 adb `input text`，只收字母和数字；`ctl.input_text(...)` 同名
 
 ### 视觉（B02，详见 architecture.md 的“视觉层”一节）
 - 模块里用 `self.vision`：
@@ -55,9 +57,11 @@
 - 事件总线：`self.events`，主题 `frame` / `log` / `task` / `scene` / `assistant`
 - 测试：`tests/game_sim.py` 用 fixtures 截图模拟游戏（点到「确认」会进入 DANGER），任务逻辑可以离线测；`tests/test_runtime_live.py` 是真机端到端测试
 
-### 刷神秘商店 `secret_shop`（B04，详见 architecture.md「已有模块」和 reviews/B04.md）
+### 书签刷取 `secret_shop`（B04，B12 改版；详见 architecture.md「已有模块」、reviews/B04.md 和 reviews/B12.md 反馈 5）
 - `python -m uv run e7helper run secret_shop`：默认 **dry-run**（只滑动、识别、决策）
-- 实跑：`-c '{"dry_run": false, "max_refreshes": N, "skystone_budget": M}'`；默认目标是誓约书签（184,000）和神秘奖牌（280,000），按名字或图标识别，并核对价格
+- 实跑：`-c '{"dry_run": false, "max_refreshes": N}'`。B12 起表单只有：`items`（固定三种商品，玩家点选：誓约书签 184,000 / 神秘奖牌 280,000 / 友情点数 18,000，默认前两种；按名字或图标识别，并核对价格）、`max_refreshes`「刷新次数」、`stop_after_misses`「连续多少次没出就停止」、`channel_after_misses`「连续多少次没出就换世界频道」、演练；天空石预算（默认不限）/ 保底、金币下限、`targets` 是内部接口；`probe_channel` 演练时换一次频道再换回来
+- 换世界频道（`chat.py`）：顶栏聊天图标 → 停在骑士团页签先点「频道」→ ⇆ →「变更频道」框输入当前频道号 +1 → 核对输入框数字 → 点框里的「输入」→ 标题变了才算 → 返回键一次关掉整个聊天。底部发消息的输入框绝不碰
+- B12 之前保存的配置（旧 targets + 预算 30）读进来会被 `_migrate_b12` 去掉旧默认值
 - 统计：`%LOCALAPPDATA%\e7helper\modules\secret_shop\history.jsonl`、`stats.json`
 - 实测：每页（扫两屏 + 刷新）约 3 秒，一次购买约 2 秒
 - 可以复用的做法：
@@ -66,17 +70,17 @@
   - 列表类界面用「列表区域停稳」代替整屏静止（`_settle_list`）；
   - 离线测试用 `tests/shop_sim.py` 式的模拟器（点到确认默认进入 DANGER）。
 
-### 竞技场 NPC `arena_npc`（B05，详见 architecture.md「已有模块」和 reviews/B05.md）
-- `python -m uv run e7helper run arena_npc`：默认 **dry-run**（导航到准备界面、决定模式后返回）
-- 实跑：`-c '{"dry_run": false}'` 打到旗帜用完；加 `"buy_flags": true` 用完后用友情点数补一次（100 换 5 面，每天一次）再打完
-- 表单只有 `buy_flags`、`dry_run`；内部字段（`max_battles`、`prefer_quick`、`probe_dialogs` 等）用 `SkipJsonSchema` 隐藏，CLI 仍可传
-- 统计：`%LOCALAPPDATA%\e7helper\modules\arena_npc\history.jsonl`、`stats.json`
+### 竞技场 NPC（B05；B12 起不是单独的模块，是日常收取的第 4 项，代码在 `modules/daily/arena.py`，模板在 `assets/daily/cn/arena/`）
+- 只跑竞技场：`python -m uv run e7helper run daily -c '{"mail": false, "forest": false, "covenant": false}'`（默认 dry-run：导航到准备界面、决定模式后回大厅）
+- 实跑 `"dry_run": false` 打到旗帜用完；`"arena_buy_flags": true` 用完后用友情点数补一次（100 换 5 面，每天一次，成功后账本记 `arena_buy`）
+- 内部字段 `arena_max_battles`、`arena_prefer_quick`、`arena_friendship_keep`、`arena_battle_timeout`、`arena_probe_dialogs`
+- 统计并进日常收取的 `history.jsonl` / `stats.json`；旧的 `modules\arena_npc\` 数据不再使用
 - 实测：快速对战一场约 7 秒（从点按钮到核对完成），普通战斗约 33 秒
 - 可以复用的做法：
   - 普通战斗中的**自动战斗**：图标静止约 0.6 秒 = 没开（开启后一直旋转），点完再观察（`_ensure_auto`）；
   - 战斗中不按返回键（会打开暂停菜单），只有网络异常立即重试；战斗画面在动就 `progress()`；
   - 两个选项的购买框：点购买前核对**哪个选项被选中**（边框亮度），不能只看按钮；
-  - 离线测试用 `tests/arena_sim.py`（战斗、结算、自动图标旋转都能模拟）。
+  - 离线测试用 `tests/arena_sim.py` + `tests/test_daily_arena.py`（战斗、结算、自动图标旋转都能模拟）。
 
 ### 重复刷关 `repeat_battle`（B06，详见 architecture.md「已有模块」和 reviews/B06.md）
 - 游戏的「重复战斗」已重做成**托管战斗**：准备界面设份数（1 份 = 4 次，行动力或叶子付费），后台按最快通关记录自动打，完成后在托管框「结算」。无记录的关卡开不了。
@@ -93,7 +97,8 @@
 
 ### 日常收取 `daily`（B07，详见 architecture.md「已有模块」和 reviews/B07.md）
 - `python -m uv run e7helper run daily`：默认 **dry-run**（三项都进去识别，不点领取 / 照料 / 召唤 / 收信）
-- 实跑：`-c '{"dry_run": false}'`；表单只有 `mail`、`forest`、`covenant`、`dry_run`；内部字段 `mail_max_hours`（默认 24）、`mail_max_claims`、`covenant_max`、`force`（忽略账本）
+- 实跑：`-c '{"dry_run": false}'`；表单有 `mail`、`forest`、`covenant`、`arena`（B12 并入，默认开）、`arena_buy_flags`（竞技场的附加选项）、`dry_run`；内部字段 `mail_max_hours`（默认 24）、`mail_max_claims`、`covenant_max`、`force`（忽略账本）、竞技场的 `arena_*`
+- 顺序：邮件 → 精灵之森 → 誓约召唤 → 竞技场；各项共用的异常在 `daily/errors.py`
 - 按天记账：`%LOCALAPPDATA%\e7helper\modules\daily\ledger.json`（游戏日北京时间 3 点切换；誓约当天用完就不进去；精灵之森按最短倒计时记下次时间）；统计 `history.jsonl`、`stats.json`
 - 实测：全部三项约 20–35 秒；免费十连约 7–10 秒，单抽约 15 秒（动画不能跳过）
 - 可以复用的做法：
@@ -107,6 +112,7 @@
   - 默认只监听 127.0.0.1；`--port 0` 随机端口；
   - `{pid, url, port, token}` 写进 `<数据目录>/api.json`，正常退出（Ctrl+C / CTRL_BREAK）时删除；
   - 启动后在后台自动连接设备（`--no-connect` 关掉），调度器同时启动。
+  - uvicorn 配置在 `cli.server_config()`：**Selector 事件循环**（B12 反馈 7：Windows 默认的 Proactor 在客户端断开太快时会关掉监听 socket、关服务时卡在 wait_closed），关服务最多等 5 秒。
 - **鉴权**：除 `GET /api/health`、`/docs` 外都要 token（`Authorization: Bearer` 或 `?token=`），并校验 Host 头；日志里的 `token=` 自动打码。
 - **核心路由**（`/api`）：
   - `status`、`logs`
@@ -143,6 +149,12 @@
 - **引擎新增**：`POST /api/shutdown`；`/api/capture/*` 模板采集接口（`api/capture.py`）；各模块配置字段补了中文 `title`。
 - 测试：前端 `src/lib/*.test.ts`（vitest）；引擎 `tests/test_capture_api.py`。全量 `705 passed, 7 skipped`。
 - 实测：拉起引擎 2.8–5.8 秒；经 GUI 跑 daily 演练 12.4 秒，中途停止立即生效；关闭应用时引擎正常退出并删除 api.json。
+
+- **B12 起**：
+  - 没有系统标题栏（`decorations: false`）：顶栏就是标题栏（`data-tauri-drag-region`，拖动、双击最大化），左上固定索尔缇娅头像 +「第七史诗助手」，右上 `WindowControls`（最小化 / 最大化 / 关闭，只在 Tauri 里显示）；启动画面顶上有 `WindowDragStrip`；权限在 `src-tauri/capabilities/default.json`。
+  - `ModuleUI` 新增 `subFields`（附加选项画在主开关那一行里）、`fieldRenderers`（模块自己画某个字段，例如书签刷取的 `ItemPicker`）。
+  - 过渡动画：`index.css` 里的 `--ease-*` / `--dur-*` 和 `anim-page` / `anim-dialog` / `anim-overlay` / `anim-menu` / `anim-slide-right` / `toast`；页面区按路径加 key（流程编辑器的路径算一页）。系统「减少动画」时全部关掉。
+  - 说明文字只写功能做什么（用户意见），不写运行逻辑和安全规则。
 
 ### 打包（B10，详见 architecture.md「打包发布」和 reviews/B10.md）
 - `cd engine && python -m uv run --group build python packaging/build.py`：检查 5 处版本号 → PyInstaller onedir → 冒烟测试（不碰设备）。产物 `engine/dist/e7engine/` 约 272MB、352 个文件。
@@ -204,23 +216,26 @@
   - 流程用嵌套积木（不用「跳到第 N 步」）；GUI 是「我的流程」页 + 一个通用模块 `custom_flow`（不是每个流程一个模块）；遇到确认框一律点取消、禁止点确认（均为用户选择）；
   - 编辑器界面由我决定：左步骤树 + 右属性面板 + 底部保存 / 运行，没做原型；
   - 流程可以只读引用 `common` 内置模板（不含 `popup/*`），其他内置模块的模板不开放；上限：单步 300 秒、循环 999 轮、嵌套 6 层、300 步（用户没有异议）。
+- B12（均为用户意见 / 选择）：
+  - 竞技场不单独做模块，并进日常收取；补旗是竞技场的附加选项，名字「用友情点数补充旗帜」，不带说明；
+  - 全应用的说明只讲功能做什么，不讲运行逻辑和安全边界；
+  - 神秘商店改名「书签刷取」：商品固定三种（誓约书签 / 神秘奖牌 / 友情点数），选中高亮、不能增删；设置只留刷新次数 / 连续没出就停 / 连续没出就换世界频道；换频道 = 当前频道号 +1；
+  - 标题栏做进应用（自己画窗口按钮），左上固定头像 + 应用名；界面加过渡动画；
+  - 讨伐异界和后三个地下城单独立项 B12a；日常收取的商店日常购买单独立项 B12b；都在 B12 之后做。
 
-## 下一块（B12 试用打磨）要做
-用户意见（2026-10-19）：B13 之前先 fine tune 已完成的部分。用户自由使用**开发版**，有问题反馈给我修改。
-- **怎么用开发版**（主工作区 `F:\e7helper-neo`，main 上）：
-  - 第一次：`cd engine && python -m uv sync`；`cd app && pnpm install`；
-  - 启动：`cd app && pnpm tauri dev`（没有在运行的引擎时自己拉起 venv 引擎，连 MuMu；数据目录是真实的 `%LOCALAPPDATA%\e7helper`）；
-  - 开发版有演练开关（内置功能默认演练，切实跑要确认）、内置模板采集、示例模块；自定义流程没有演练，会真的点击。
-- **这一块的工作方式**（和以往的块不同，是一个持续的反馈循环）：
-  1. 开工时在 ROADMAP 把 B12 标为进行中，建 `docs/reviews/B12.md`，里面按「反馈 N」逐条记：用户原话 → 原因 → 修改（文件）→ 验证（测试 / 截图 / 实测输出）。
-  2. 每条反馈先复现、定位再改；改完跑相关测试（必要时全量 `pytest` / `pnpm test` / `pnpm typecheck`），告诉用户怎么验证（开发版大多热更新；改了引擎要重启 `pnpm tauri dev` 或重启引擎）。
-  3. 需要我自己操作真机复现时先征得同意，只做不消耗资源的操作；用户自己操作时看日志、`debug/` 目录里的调试截图、`tasks.jsonl` 定位。
-  4. 一条反馈可能牵出新的弹窗 / 场景 / 模板：按 B10a 的方式采 fixture、写离线测试。
-  5. 不加新模块、不扩大范围；用户提的新功能先记进审核记录的「新需求」，问用户要不要现在做还是排进后面的块。
-  6. 用户宣布打磨结束时：ROADMAP 改「待审核」→ 审核通过后照常收尾。改动较多时结束前重新打包，按 B10 / B11 的方法在本机模拟干净环境验证一次。
-- 定位问题常用的东西：`%LOCALAPPDATA%\e7helper\logs\engine-stdout.log`、`debug\<时间>_<模块>_<状态>\`（last_frame.png / screen.png / log.txt）、`tasks.jsonl`、各模块 `history.jsonl`；GUI 的「日志」页；CLI `e7helper scene -f 图片`、`match`。
+## 下一块（B12a 讨伐异界）要做
+用户意见（2026-10-19）：重复刷关「讨伐还有下面三个没做，然后异界难度也没做」；单独立项、像 B10a 那样单独审核。
+- 现状：`repeat_battle` 只支持 双足飞龙 / 魔像 / 报丧妖 × 中级 / 上级 / 地狱级；讨伐列表下面的「讨伐阿吉玛纳克 / 卡戴斯 / 食人魔」只有「讨伐异界」难度；选到异界时模块直接停止（`__init__.py`「消耗异界代币，暂不支持」）。异界消耗异界专用代币，不是行动力（B06 记录）。
+1. 开工：ROADMAP 把 B12a 标进行中，建 `docs/reviews/B12a.md`。
+2. **先和用户确认**：异界代币叫什么、在哪看数量、怎么补充（要不要支持补充，用什么补）；托管能不能开异界、份数怎么算；手动刷异界是否和普通难度一样（战斗开始 → CLEAR → 结算 → 重新进行）；表单怎么加（`Hunt` 加三个、`Tier` 加异界，只有异界的地下城选别的难度时怎么提示）。
+3. **真机先看**（征得同意，只导航和截图）：讨伐列表底部、三个地下城的难度卡片、异界的准备界面（代币读数、托管框）、代币不够时的框；采 fixture 进 `tests/fixtures/rb_*`。
+4. 代码：`config.py` 的枚举、`page.py` 的读数、`__init__.py` 去掉「暂不支持」并按代币核对消耗；`tests/rb_sim.py` 加异界；离线测试覆盖导航、代币核对、代币不够、托管。
+5. 实跑一小轮会花异界代币，要用户同意。
 
-## 之后（B13 英雄数据库）要做（B12 结束后再开始）
+## 再下一块（B12b 日常收取：商店日常购买）要做（B12a 通过后）
+用户意见：「日常收取要把商店里日常的东西都买了」。开工时先和用户确认买哪些（商店哪几个页签、哪些商品）、用什么货币、刷新规则（每天 / 每周）、要不要开关和预算；然后真机导航截图、采 fixture、写离线测试，作为日常收取的一项（按天记账，当天买过不再进去），实跑前问用户。
+
+## 之后（B13 英雄数据库）要做（B12a / B12b 之后再开始）
 ROADMAP「B13+ 扩展模块」：英雄数据库（core/data）→ RTA BP 助手（assistant）→ 装备扫描 → GVG 作业查询 → 兑换码 → 资源统计，每个单独立项和审核。B13 先做英雄数据库，它是后面 RTA BP 助手的基础。
 1. **先和用户确认**：
    - 数据来源（官方指南站 / epic7db / Fribbels 的 `herodata.json` 等，B10 找图标时用过）、更新方式（随包内置 + 联网更新？）、许可和版权；
@@ -299,4 +314,14 @@ ROADMAP「B13+ 扩展模块」：英雄数据库（core/data）→ RTA BP 助手
 - **`python -I` 会忽略 `PYTHONIOENCODING`**：在 Git Bash 里用 venv 的 python 跑带中文输出的脚本时加 `-X utf8`，否则是 GBK 乱码。
 - 不碰真机测 GUI：可以写一个用 `tests/game_sim.py` 当设备的临时引擎（`Engine(device_factory=...)` + `create_app` + uvicorn），浏览器面板连它就能完整跑流程（做法见 reviews/B11.md「GUI」）。
 - **测试会对所有模块调 `setup()`**（`test_scene.test_relogin_popups_with_all_module_popups`，用假对象）：新模块的 setup 如果要读配置或会报错，要先做完弹窗注册。
-
+- **Windows 的 Proactor 事件循环两个毛病**（B12 反馈 7）：客户端在被 accept 的瞬间断开会报 WinError 64，Proactor 把监听 socket 关掉、API 再也连不上；对端已重置的连接关闭时 `shutdown()` 抛错（「动态」里那条 `_call_connection_lost` 红字），连接没从 `asyncio.Server` 摘掉，关服务时卡在 `wait_closed()`。`serve` 已改用 Selector 循环；以后自己起 asyncio 服务也要注意。复现做法见 reviews/B12.md 反馈 4 / 7。
+- **命令行的输出指向 NUL 时起不来**（B12 发现，没修）：`e7helper serve` / `screenshot` 的 stdout 重定向到 `/dev/null`、`subprocess.DEVNULL` 时直接退出。脚本里调用命令行把输出写到文件。
+- **聊天面板按一次返回键就整个关掉**（B12），包括里面的「变更频道」框；聊天关着时按返回键会退出当前界面（在商店里就回到大厅），所以先确认聊天开着再按。底部发消息的输入框和「输入」绝不能碰。
+- **骑士团页签和频道页签右上的图标不一样**（B12）：骑士团页签没有 ⇆，同一个位置是别的图标；换频道前先切到「频道」。
+- **聊天面板标题的 OCR 区域别太宽**：面板是半透明的，后面顶栏的天空石数字会被读进来（`chat.TITLE` 只看左边 190px）。
+- **pydantic 会把枚举的 docstring 当成字段说明**显示在 GUI 表单里（B12）：枚举的说明写注释，不写 docstring。
+- **GUI 保存的模块配置包含内部字段**（`save_config` 存整个 `model_dump`）：改了内部字段的默认值时，旧配置里的旧值会盖掉新默认值，要像 `secret_shop._migrate_b12` 那样迁移。
+- **测试 Tauri 窗口按钮**（B12）：PrintWindow 截窗口；往窗口里 `Chrome_RenderWidgetHostHWND` 子窗口 PostMessage 鼠标消息能点到网页（不动用户的鼠标），双击用 `WM_LBUTTONDBLCLK`。做法见 reviews/B12.md 反馈 6。点「关闭」会结束 `pnpm tauri dev`。
+- **浏览器面板隐藏时是后台页**：CSS 动画和计时会变慢，radix 对话框要等关闭动画播完才卸载，看起来像「关不掉」；量动画要在可见窗口里看。
+- **浏览器面板里改 hash 会被当成导航**，`javascript_tool` 的脚本会被打断：要测换页就先在页面里装 `animationstart` 之类的监听，再用点击触发，下一次调用读结果。
+- **我自己起的临时引擎用完要确认退出**：B12 时有三个临时引擎关不掉（原因见上面 Proactor 那条），留着会占端口、占内存。

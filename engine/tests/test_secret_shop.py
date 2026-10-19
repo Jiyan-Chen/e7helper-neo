@@ -86,7 +86,7 @@ def test_target_recognized_by_icon(vision, icon):
     frame = _with_icon("secret_shop_relist", icon, 361)
     items = page.scan_items(vision, frame, ["item/covenant", "item/mystic"])
     assert [i.icons for i in items] == [frozenset(), frozenset({icon}), frozenset(), frozenset()]
-    targets = SecretShopConfig().targets
+    targets = SecretShopConfig().buy_targets()
     hit = items[1]
     assert match_target(hit, targets).icon == icon
     assert "不符" in decide(hit, targets, 10**8, 0).reason  # 这一行实际价格 240,000
@@ -159,6 +159,10 @@ def shop_detector():
     ("lobby_exit_confirm", "confirm"),  # 结束游戏框不能被认成刷新确认框
     ("secret_shop", None),
     ("secret_shop_relist", None),
+    ("shop_chat_channel", "shop_chat"),  # B12 换频道：聊天面板 / 变更频道框按返回键关闭
+    ("shop_chat_guild", "shop_chat"),
+    ("shop_chat_change", "shop_chat_change"),
+    ("shop_chat_typed", "shop_chat_change"),
 ])
 def test_module_popups(shop_detector, fixture, popup):
     state = shop_detector.detect(_frame(fixture))
@@ -216,10 +220,45 @@ def test_decide(item, gold, floor, buy, reason):
 def test_config_schema_and_defaults():
     cfg = SecretShopConfig()
     assert cfg.dry_run is True  # 默认不花钱
-    assert [(t.name, t.price, t.icon) for t in cfg.targets] == [
+    assert [(t.name, t.price, t.icon) for t in cfg.buy_targets()] == [
         ("誓约书签", 184_000, "item/covenant"), ("神秘奖牌", 280_000, "item/mystic")]
+    assert cfg.skystone_budget is None and cfg.stop_after_misses == 0 and cfg.channel_after_misses == 0
+    # 三种商品按固定顺序，和选的顺序无关
+    picked = SecretShopConfig(items=["friendship", "covenant"]).buy_targets()
+    assert [t.name for t in picked] == ["誓约书签", "友情点数"]
+    assert SecretShopConfig(items=[]).buy_targets() == []
+    assert SecretShopConfig(targets=[{"name": "灿烂精髓长袍"}]).buy_targets()[0].name == "灿烂精髓长袍"
     schema = SecretShopModule.config_schema()
-    assert {"targets", "max_refreshes", "skystone_budget", "gold_floor", "dry_run"} <= set(schema["properties"])
+    props = schema["properties"]
+    assert set(props) == {"items", "max_refreshes", "stop_after_misses", "channel_after_misses", "dry_run",
+                          "refresh_cost", "max_failures", "probe_dialogs"}
+    assert props["items"]["x-enum-labels"] == {"covenant": "誓约书签", "mystic": "神秘奖牌", "friendship": "友情点数"}
+
+
+def test_old_saved_config_migrated():
+    """B12 之前 GUI 保存的配置带着旧默认值（targets 两项、预算 30）：读进来改用 items、不限预算；改过的保留。"""
+    old = {"targets": [{"name": "誓约书签", "price": 184_000, "icon": "item/covenant"},
+                       {"name": "神秘奖牌", "price": 280_000, "icon": "item/mystic"}],
+           "max_refreshes": 50, "skystone_budget": 30, "skystone_keep": 0, "gold_floor": 0, "refresh_cost": 3,
+           "max_failures": 3, "dry_run": True, "probe_dialogs": False}
+    cfg = SecretShopConfig.model_validate(old)
+    assert cfg.targets is None and cfg.skystone_budget is None and cfg.max_refreshes == 50
+    assert [t.name for t in cfg.buy_targets()] == ["誓约书签", "神秘奖牌"]
+    custom = SecretShopConfig.model_validate({**old, "targets": [{"name": "灿烂精髓长袍"}], "skystone_budget": 60})
+    assert custom.targets[0].name == "灿烂精髓长袍" and custom.skystone_budget == 60
+    # 新版保存的配置（带 items）不动
+    again = SecretShopConfig.model_validate(cfg.model_dump(mode="json"))
+    assert again.items == cfg.items and again.targets is None
+
+
+def test_friendship_points_recognized(vision):
+    """友情点数（B12 新增的第三种）：按名字和价格 18,000 认出，金币够就买；图标模板也能认出。"""
+    targets = SecretShopConfig(items=["friendship"]).buy_targets()
+    items = page.scan_items(vision, _frame("secret_shop"), page.target_icons(targets))
+    hit = [i for i in items if match_target(i, targets) is not None]
+    assert [(i.name, i.price) for i in hit] == [("友情点数", 18_000)]
+    assert hit[0].icons == frozenset({"item/friendship"})
+    assert decide(hit[0], targets, 10**6, 0).buy is True
 
 
 # ---------------------------------------------------------------- 流程（ShopSim）
@@ -442,3 +481,78 @@ def test_settle_list_lets_closing_dialog_fade(tmp_path):
     with Runtime(sim, scenes=default_detector(), humanize=Humanize.off()) as rt:
         _bare_module(rt.make_controller(Vision.for_module("secret_shop")))._settle_list()
     assert sim.taps == [] and sim.backs == 0
+
+
+# ---------------------------------------------------------------- 没出就停 / 换世界频道（B12）
+
+NOTHING = [{"name": "不存在的商品"}]  # 每页都「没出」
+
+
+def _assert_chat_safe(sim):
+    assert DANGER not in sim.history  # 从没点底部发消息的输入框 / 「输入」
+    assert sim.chat is None and sim.in_list  # 聊天关掉了，回到商店列表
+
+
+def test_stop_after_misses(tmp_path, monkeypatch):
+    sim = ShopSim(confirm="ok")
+    result = _run(sim, tmp_path, monkeypatch, dry_run=False, max_refreshes=10, stop_after_misses=2, targets=NOTHING)
+    assert result.status is TaskStatus.SUCCEEDED, result.error
+    run = _history(tmp_path)[-1]
+    assert run["refreshes"] == 1 and run["pages"] == 2 and run["max_misses"] == 2
+    assert "连续 2 页没出" in run["stop_reason"]
+
+
+def test_hit_resets_miss_count(tmp_path, monkeypatch):
+    """灿烂精髓长袍只在列表 B：B（出）→ A（没出 1）→ B（出，清零）→ A（没出 1）…… 连续 2 页才停，所以不会停。"""
+    sim = ShopSim(confirm="ok")
+    result = _run(sim, tmp_path, monkeypatch, dry_run=False, max_refreshes=4, stop_after_misses=2,
+                  targets=[{"name": "灿烂精髓长袍", "price": BUY_PRICE + 1}])  # 价格不符：出了但不买
+    assert result.status is TaskStatus.SUCCEEDED, result.error
+    run = _history(tmp_path)[-1]
+    assert run["refreshes"] == 4 and run["max_misses"] == 1 and run["purchases"] == []
+
+
+def test_channel_switch_after_misses(tmp_path, monkeypatch):
+    """连续 2 页没出：第 2 页（刷新 1 次后）换到下一个频道 69 → 70，再接着刷。"""
+    sim = ShopSim(confirm="ok")
+    result = _run(sim, tmp_path, monkeypatch, dry_run=False, max_refreshes=1, channel_after_misses=2,
+                  targets=NOTHING)
+    assert result.status is TaskStatus.SUCCEEDED, result.error
+    _assert_chat_safe(sim)
+    assert sim.channel_history == [70] and sim.channel == 70
+    run = _history(tmp_path)[-1]
+    assert [(c["old"], c["new"], c["page"]) for c in run["channel_switches"]] == [(69, 70, 1)]
+    assert run["refreshes"] == 1 and run["failures"] == 0
+    assert _totals(tmp_path)["channel_switches"] == 1
+
+
+def test_channel_switch_from_guild_tab(tmp_path, monkeypatch):
+    """聊天停在骑士团页签：先点左边的「频道」再换（用户提醒）。"""
+    sim = ShopSim(confirm="ok", chat_tab="guild")
+    result = _run(sim, tmp_path, monkeypatch, dry_run=False, max_refreshes=0, channel_after_misses=1,
+                  targets=NOTHING)
+    assert result.status is TaskStatus.SUCCEEDED, result.error
+    _assert_chat_safe(sim)
+    assert "shop_chat_guild" in sim.history and sim.chat_tab == "channel" and sim.channel_history == [70]
+
+
+def test_channel_typing_failed_does_not_submit(tmp_path, monkeypatch):
+    """打字没进输入框：不点「输入」，关掉聊天，记一次失败，接着刷商店。"""
+    sim = ShopSim(confirm="ok", type_text=False)
+    result = _run(sim, tmp_path, monkeypatch, dry_run=False, max_refreshes=0, channel_after_misses=1,
+                  targets=NOTHING)
+    assert result.status is TaskStatus.SUCCEEDED, result.error
+    _assert_chat_safe(sim)
+    assert sim.channel == 69 and sim.channel_history == []
+    run = _history(tmp_path)[-1]
+    assert run["failures"] == 1 and run["channel_switches"] == []
+
+
+def test_dry_run_probe_channel_switches_back(tmp_path, monkeypatch):
+    """dry-run + probe_channel：换到 70 再换回 69（用于实机验证），不计入统计，不点购买和刷新。"""
+    sim = ShopSim()
+    result = _run(sim, tmp_path, monkeypatch, probe_channel=True)
+    assert result.status is TaskStatus.SUCCEEDED, result.error
+    _assert_chat_safe(sim)
+    assert sim.channel_history == [70, 69] and sim.confirms == 0
+    assert _history(tmp_path)[-1]["channel_switches"] == []

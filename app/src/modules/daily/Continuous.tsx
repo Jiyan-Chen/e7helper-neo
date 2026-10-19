@@ -74,7 +74,7 @@ export function Continuous({ config }: ModuleExtraProps) {
       <div>
         <b className="text-[15px]">{CONTINUOUS_NAME}</b>
         {on && isDryRun(s?.config) && <span className="ml-2 text-xs text-warn" title="只导航和识别，不会真的领取">演练</span>}
-        <div className="text-xs text-muted">重置后收一次，精灵之森到点再收</div>
+        <div className="text-xs text-muted">每天自动收菜</div>
       </div>
       <div className="ml-2 text-right">
         <div className="text-xs text-muted">下次</div>

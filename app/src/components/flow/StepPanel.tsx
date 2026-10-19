@@ -19,18 +19,18 @@ const MISSING_OPTIONS = [
 ];
 
 const HINTS: Partial<Record<Step["type"], string>> = {
-  tap_template: "等模板出现，然后点它。模板设了「能点的地方」时点那里。",
-  tap_point: "点画面上固定的位置。界面位置会变的按钮用「点击模板」更稳。",
+  tap_template: "等模板出现，然后点它。",
+  tap_point: "点画面上固定的位置。",
   swipe: "从起点滑到终点，用来翻页、滚动列表。",
-  back: "按安卓返回键，大多数界面会回到上一层。在大厅按会弹「结束游戏」确认框——会自动点取消。",
-  wait: "什么都不做，等一段时间（例如等动画、等加载）。",
-  wait_still: "等画面不再变化（静止 0.5 秒），一直在动就等到上限后继续。",
+  back: "按返回键，回到上一层界面。",
+  wait: "等一段时间。",
+  wait_still: "等画面不再变化。",
   wait_template: "等某个模板出现或消失。",
-  wait_scene: "等回到助手认识的界面，并等画面静止。途中断线会自动重进游戏。",
+  wait_scene: "等到了某个界面。",
   end: "流程到这里就结束。",
-  break: "跳出所在的「重复」，接着做循环后面的步骤。",
-  if: "看条件成不成立，分别做「那么」或「否则」里的步骤。",
-  repeat: "反复做里面的步骤。每个循环都必须有次数上限。",
+  break: "跳出所在的「重复」。",
+  if: "条件成立做「那么」，不成立做「否则」。",
+  repeat: "反复做里面的步骤。",
 };
 
 export function StepPanel({
@@ -78,7 +78,7 @@ function Fields({ step, set }: { step: Step; set: <T extends Step>(patch: Partia
           <Row label="要点的模板"><TemplateField value={step.template ? [step.template] : []} onChange={(r) => set({ template: r[0] ?? "" })} /></Row>
           <Row label="最多等" inline><Num value={step.timeout} min={0} max={300} suffix="秒" onChange={(v) => set({ timeout: v })} /></Row>
           <Row label="找不到时" inline><Opt value={step.on_missing} options={MISSING_OPTIONS} onChange={(v) => set({ on_missing: v as "stop" })} /></Row>
-          <Toggle checked={step.settle} onChange={(v) => set({ settle: v })} label="点之前等画面静止" hint="界面切换动画期间点击会被游戏忽略，一般保持勾选" />
+          <Toggle checked={step.settle} onChange={(v) => set({ settle: v })} label="点之前等画面静止" hint="一般保持勾选" />
         </>
       );
     case "tap_point":

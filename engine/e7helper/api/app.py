@@ -43,6 +43,21 @@ DEFAULT_CORS_ORIGINS = ("http://tauri.localhost", "https://tauri.localhost", "ta
                         "http://localhost:1420", "http://127.0.0.1:1420")
 
 
+def quiet_connection_lost(loop: asyncio.AbstractEventLoop, context: dict) -> None:
+    """事件循环的异常处理：忽略 Windows 上对端已断开时 asyncio 关连接的报错，其余照常交给默认处理。
+
+    浏览器刷新 / 关页、GUI 重连时，对端已经把连接重置了，Proactor 在 `_call_connection_lost` 里
+    再 `shutdown()` 这个 socket 会抛 ConnectionResetError（WinError 10054）。连接本来就要关，没有影响，
+    但默认处理会记成 ERROR，经日志桥接出现在 GUI「动态」里（B12 反馈 4）。
+    B12 反馈 7 起 `e7helper serve` 改用 Selector 事件循环，不会再走到这里；留着给用 Proactor 起服务的场合兜底。
+    """
+    exc = context.get("exception")
+    if isinstance(exc, (ConnectionResetError, ConnectionAbortedError)) and             "_call_connection_lost" in str(context.get("message", "")):
+        log.debug("对端已断开，忽略关连接时的 %s", type(exc).__name__)
+        return
+    loop.default_exception_handler(context)
+
+
 @dataclass
 class Services:
     engine: Engine
@@ -115,7 +130,9 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        services.hub.start(asyncio.get_running_loop())
+        loop = asyncio.get_running_loop()
+        loop.set_exception_handler(quiet_connection_lost)
+        services.hub.start(loop)
         if autoconnect:
             threading.Thread(target=_autoconnect, args=(engine,), name="api:autoconnect", daemon=True).start()
         if start_scheduler:

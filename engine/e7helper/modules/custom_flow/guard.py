@@ -17,7 +17,7 @@ SAFE_POPUPS = ("disconnected", "announcement", "title_start", "network")
 GUARD_POPUPS: tuple[Popup, ...] = (
     Popup("flow_guard_shop_buy", ("secret_shop:dialog/buy_title", "dialog/cancel"), Dismiss.tap("dialog/cancel"),
           note="秘密商店购买框（自定义流程：点取消）"),
-    Popup("flow_guard_arena_buy", ("arena_npc:buy/title", "arena_npc:buy/cancel"), Dismiss.tap("arena_npc:buy/cancel"),
+    Popup("flow_guard_arena_buy", ("daily:arena/buy/title", "daily:arena/buy/cancel"), Dismiss.tap("daily:arena/buy/cancel"),
           note="竞技场购买旗帜（自定义流程：点取消）"),
     Popup("flow_guard_energy", ("repeat_battle:energy/title", "repeat_battle:energy/cancel"),
           Dismiss.tap("repeat_battle:energy/cancel"), note="行动力不足 / 购买行动力（自定义流程：点取消）"),
@@ -34,7 +34,7 @@ HANDLED_POPUPS = frozenset(SAFE_POPUPS) | {p.name for p in GUARD_POPUPS}
 FORBIDDEN_BUTTONS: dict[str, str] = {
     "common:dialog/confirm": "确认框的「确认」",
     "secret_shop:dialog/buy_ok": "秘密商店的「购买」",
-    "arena_npc:buy/ok": "竞技场补旗的「购买」",
+    "daily:arena/buy/ok": "竞技场补旗的「购买」",
     "repeat_battle:energy/buy": "行动力的「购买」",
     "daily:summon/again": "召唤结果的「再召唤一次」",
 }

@@ -27,7 +27,7 @@ export function Select({
         </S.Icon>
       </S.Trigger>
       <S.Portal>
-        <S.Content position="popper" sideOffset={4} className="z-50 min-w-[var(--radix-select-trigger-width)] overflow-hidden rounded-lg border border-gold-line/60 bg-[#151b2b] shadow-xl">
+        <S.Content position="popper" sideOffset={4} className="anim-menu z-50 min-w-[var(--radix-select-trigger-width)] overflow-hidden rounded-lg border border-gold-line/60 bg-[#151b2b] shadow-xl">
           <S.Viewport className="p-1">
             {options.map((o) => (
               <S.Item
