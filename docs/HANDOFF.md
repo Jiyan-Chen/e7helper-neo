@@ -1,6 +1,6 @@
 # HANDOFF
 
-> 新会话从这里读起。上次更新：2026-10-20（B12a 已通过）
+> 新会话从这里读起。上次更新：2026-10-20（B12b 已通过）
 
 ## 当前进度
 - **B01 骨架 + 模块契约 + MuMu 设备层**：✅ 已通过，记录见 [reviews/B01.md](reviews/B01.md)。
@@ -17,7 +17,8 @@
 - **B11 自定义流程 + 玩家模板采集**：✅ 已通过，记录见 [reviews/B11.md](reviews/B11.md)。
 - **B12 试用打磨（开发版）**：✅ 已通过，记录见 [reviews/B12.md](reviews/B12.md)。9 条反馈：竞技场并入日常收取、补旗做成附加选项、精简全部说明、「动态」红色 asyncio 报错、书签刷取（固定三种商品 + 没出就停 / 换世界频道）、标题栏做进应用、引擎关闭挂住（改用 Selector 事件循环）、左上角固定头像和应用名、界面过渡动画。
 - **B12a 讨伐异界**：✅ 已通过，记录见 [reviews/B12a.md](reviews/B12a.md)。重复刷关加上「异界」难度和 阿吉玛纳克 / 卡戴斯 / 食人魔；异界消耗光谱核心，可用叶子 / 天空石补充；异界胜利后的宝珠画面；「托管最多几份」进表单；GUI 新增 `fieldLocks`（食人魔锁定异界）。全量 `890 passed, 7 skipped`，前端 16 个。
-- 下一块：**B12b 日常收取：商店日常购买**（B12 新需求 2，单独立项、单独审核）。扩展模块 B13+（第一项英雄数据库）排在它后面。
+- **B12b 日常收取：商店日常购买**：✅ 已通过，记录见 [reviews/B12b.md](reviews/B12b.md)。日常收取加一项「商店」（排在竞技场前）：交易所 › 竞技场 → 商店 › 一般 → 商店 › 传承石，买用户圈定的 14 件每日 / 每周限购商品；按周记账；GUI 商品点选。实跑买了 13 次，天空石 0。
+- 下一块：**B13 英雄数据库**（扩展模块 B13+ 的第一项）。
 
 ## 已有能力
 ### 设备（B01）
@@ -39,8 +40,8 @@
     - `secret_shop`：`title`、`refresh`、`buy`；B04 新增 `coin`、`dialog/buy_title`、`dialog/buy_ok`、`dialog/refresh_text`、`item/covenant`、`item/mystic`
     - `arena_npc`（B05）：`tab/npc`、`npc/*`、`prep/*`、`battle/*`、`result/*`、`record/*`、`buy/*`，共 21 个
     - `repeat_battle`（B06）：`menu/hunt`、`hunt/header`、`prep/*`、`auto/*`、`battle/*`、`clear`、`result/*`、`after/*`、`energy/*`，共 27 个；B12a 新增 `core/*`（购买光谱核心框）、`ow_reward`（异界宝珠画面），共 33 个
-    - `daily`（B07）：`sanctuary/forest`、`forest/*`、`mail/*`、`summon/*`，共 18 个
-- fixtures：`engine/tests/fixtures/`（B07 后约 137MB）。B07 新增 35 张 `daily_*`（大厅、圣域白天 / 夜晚、精灵之森各状态和奖励框、邮件列表 / 详情框 / 领取后、召唤页、誓约页 21/21 · 11/21 · 1/21 · 用完 · 带光效、召唤动画、十连结果、单抽结果；期望结果在 `tests/test_daily.py`）。B06 新增 36 张 `rb_*`（讨伐导航、准备界面各状态、托管各框、战斗、CLEAR、结算、战后、行动力不足；期望结果在 `tests/test_repeat_battle.py`）。B12a 新增 15 张（约 14MB）：`rb_ow_*`（异界准备界面 有记录 / 无记录 / 卡戴斯、托管设置框、购买光谱核心框、宝珠画面、战后）、`rb_hunt_list_azimanak` / `_kades`、`rb_auto_setup_110`。此前的包括 `lobby`、`secret_shop`、`secret_shop_scrolled`、`secret_shop_refresh_confirm`；B05 新增 17 张 `arena_*`（模式选择外的竞技场各界面、战斗中、两种结算、补旗框三种状态）；B04 新增 `secret_shop_relist(_scrolled)`、`secret_shop_buy_confirm`、`secret_shop_sold`、`secret_shop_bought_toast`；B03 新增 `shop`、`arena`、`arena_notice`、`sanctuary`、`sanctuary_help`、`lobby_exit_confirm`、`lobby_network_error`；B10a 新增 `lobby_disconnected`、`summon_disconnected`、`title_announcement`、`title_connecting`、`title_start`、`title_start_forest`（约 5.9MB）。模板的期望结果在 `tests/test_vision_fixtures.py`，场景的期望结果在 `tests/test_scene.py`。
+    - `daily`（B07）：`sanctuary/forest`、`forest/*`、`mail/*`、`summon/*`，共 18 个；B12b 新增 `shop/*` 29 个（左侧菜单、页签、卡片价格图标、顶栏图标、购买商品框、获得奖励框）
+- fixtures：`engine/tests/fixtures/`（B07 后约 137MB；B12b 新增 16 张 `daily_shop_*`，约 18MB：更新精选、一般（买免费商品前 / 后）、传承石（开头 / 中间 / 末尾）、交易所 › 竞技场、7 种购买框、获得奖励）。B07 新增 35 张 `daily_*`（大厅、圣域白天 / 夜晚、精灵之森各状态和奖励框、邮件列表 / 详情框 / 领取后、召唤页、誓约页 21/21 · 11/21 · 1/21 · 用完 · 带光效、召唤动画、十连结果、单抽结果；期望结果在 `tests/test_daily.py`）。B06 新增 36 张 `rb_*`（讨伐导航、准备界面各状态、托管各框、战斗、CLEAR、结算、战后、行动力不足；期望结果在 `tests/test_repeat_battle.py`）。B12a 新增 15 张（约 14MB）：`rb_ow_*`（异界准备界面 有记录 / 无记录 / 卡戴斯、托管设置框、购买光谱核心框、宝珠画面、战后）、`rb_hunt_list_azimanak` / `_kades`、`rb_auto_setup_110`。此前的包括 `lobby`、`secret_shop`、`secret_shop_scrolled`、`secret_shop_refresh_confirm`；B05 新增 17 张 `arena_*`（模式选择外的竞技场各界面、战斗中、两种结算、补旗框三种状态）；B04 新增 `secret_shop_relist(_scrolled)`、`secret_shop_buy_confirm`、`secret_shop_sold`、`secret_shop_bought_toast`；B03 新增 `shop`、`arena`、`arena_notice`、`sanctuary`、`sanctuary_help`、`lobby_exit_confirm`、`lobby_network_error`；B10a 新增 `lobby_disconnected`、`summon_disconnected`、`title_announcement`、`title_connecting`、`title_start`、`title_start_forest`（约 5.9MB）。模板的期望结果在 `tests/test_vision_fixtures.py`，场景的期望结果在 `tests/test_scene.py`。
 - CLI：
   - `capture <module> <name>`：弹窗框选，或用 `-f 文件 -r x,y,w,h` 指定
   - `match <module> [names] [-f] [-a]`
@@ -71,7 +72,7 @@
   - 列表类界面用「列表区域停稳」代替整屏静止（`_settle_list`）；
   - 离线测试用 `tests/shop_sim.py` 式的模拟器（点到确认默认进入 DANGER）。
 
-### 竞技场 NPC（B05；B12 起不是单独的模块，是日常收取的第 4 项，代码在 `modules/daily/arena.py`，模板在 `assets/daily/cn/arena/`）
+### 竞技场 NPC（B05；B12 起不是单独的模块，是日常收取的一项（B12b 起排第 5），代码在 `modules/daily/arena.py`，模板在 `assets/daily/cn/arena/`）
 - 只跑竞技场：`python -m uv run e7helper run daily -c '{"mail": false, "forest": false, "covenant": false}'`（默认 dry-run：导航到准备界面、决定模式后回大厅）
 - 实跑 `"dry_run": false` 打到旗帜用完；`"arena_buy_flags": true` 用完后用友情点数补一次（100 换 5 面，每天一次，成功后账本记 `arena_buy`）
 - 内部字段 `arena_max_battles`、`arena_prefer_quick`、`arena_friendship_keep`、`arena_battle_timeout`、`arena_probe_dialogs`
@@ -100,8 +101,8 @@
 
 ### 日常收取 `daily`（B07，详见 architecture.md「已有模块」和 reviews/B07.md）
 - `python -m uv run e7helper run daily`：默认 **dry-run**（三项都进去识别，不点领取 / 照料 / 召唤 / 收信）
-- 实跑：`-c '{"dry_run": false}'`；表单有 `mail`、`forest`、`covenant`、`arena`（B12 并入，默认开）、`arena_buy_flags`（竞技场的附加选项）、`dry_run`；内部字段 `mail_max_hours`（默认 24）、`mail_max_claims`、`covenant_max`、`force`（忽略账本）、竞技场的 `arena_*`
-- 顺序：邮件 → 精灵之森 → 誓约召唤 → 竞技场；各项共用的异常在 `daily/errors.py`
+- 实跑：`-c '{"dry_run": false}'`；表单有 `mail`、`forest`、`covenant`、`shop` / `shop_items`（B12b）、`arena`（B12 并入，默认开）、`arena_buy_flags`（竞技场的附加选项）、`dry_run`；内部字段 `mail_max_hours`（默认 24）、`mail_max_claims`、`covenant_max`、`force`（忽略账本）、竞技场的 `arena_*`
+- 顺序：邮件 → 精灵之森 → 誓约召唤 → 商店 → 竞技场；各项共用的异常在 `daily/errors.py`
 - 按天记账：`%LOCALAPPDATA%\e7helper\modules\daily\ledger.json`（游戏日北京时间 3 点切换；誓约当天用完就不进去；精灵之森按最短倒计时记下次时间）；统计 `history.jsonl`、`stats.json`
 - 实测：全部三项约 20–35 秒；免费十连约 7–10 秒，单抽约 15 秒（动画不能跳过）
 - 可以复用的做法：
@@ -109,6 +110,17 @@
   - 点了按钮后弹出的确认 / 详情框要核对内容再点（邮件详情框核对剩余时间）；认不出的静止画面就停，不乱点；
   - 一项失败不影响其他项（`ItemFailed`），核对异常立即停止整个任务（`DailyAnomaly`）。
 - 离线测试用 `tests/daily_sim.py`（「全部领取」、非第一行领取、不免费的召唤、「再召唤一次」都是 DANGER）。
+
+### 商店日常购买（B12b；日常收取的第 4 项，代码在 `modules/daily/shop.py` / `shop_page.py`，模板在 `assets/daily/cn/shop/`；详见 architecture.md「已有模块 / 商店」和 reviews/B12b.md）
+- 只跑商店：`python -m uv run e7helper run daily -c '{"mail": false, "forest": false, "covenant": false, "arena": false}'`（默认 dry-run：三页都扫，记下会买什么）；实跑加 `"dry_run": false`
+- 表单：`shop`（默认开）、`shop_items`（`ShopItem` 14 件，默认全选）；内部 `shop_affinity_weekly`（亲密度献礼选择箱每周次数，默认 5）、`shop_max_buys`（每次最多买几次）、`shop_probe_dialogs`（dry-run 时打开购买框核对后点取消）
+- 商品清单在 `shop.CATALOG`（名字、页、货币、单价、限购、每日 / 每周）；货币只认 免费 / 友情点数 / 行动力 / 银光传承石 / 竞技场点数
+- 账本：每日的记 `done["shop:<id>"]`，每周的记 `week_done`（游戏周 = 周一北京时间 3 点切换，`ledger.game_week`）；计时多了「每周重置」
+- 实测：只看光谱核心约 15 秒；三页全扫约 75 秒；全部买约 100 秒（每次购买约 4 秒）
+- 可以复用的做法：
+  - 横向列表：按名字 OCR 找卡片（名字框中心 = 卡片中心），只处理完整显示的卡片；滑不动（卡片名和位置不变）= 到头；买完会重排就重扫；
+  - 买完核对**只看读数差**（天空石不变 + 付款货币正好减少总价），不依赖「获得奖励」框；
+  - 离线测试用 `tests/daily_shop_sim.py`：真实 fixtures 认场景 / 按钮，卡片和顶栏由模型给（测试把 `shop_page.scan_cards / read_top / read_dialog` 换成 `sim.fake_*`）。
 
 ### API 层（B08，详见 architecture.md「API 层」和 reviews/B08.md）
 - `python -m uv run e7helper serve [--port 47800] [--index N] [--no-connect] [--paused] [--no-auth] [--token X] [--allow-host H]`
@@ -226,21 +238,18 @@
   - 神秘商店改名「书签刷取」：商品固定三种（誓约书签 / 神秘奖牌 / 友情点数），选中高亮、不能增删；设置只留刷新次数 / 连续没出就停 / 连续没出就换世界频道；换频道 = 当前频道号 +1；
   - 标题栏做进应用（自己画窗口按钮），左上固定头像 + 应用名；界面加过渡动画；
   - 讨伐异界和后三个地下城单独立项 B12a；日常收取的商店日常购买单独立项 B12b；都在 B12 之后做。
+- B12b（用户选择，2026-10-20 审核通过）：
+  - 花金币 / 免费 / 友情点数 / 各类代币，不花天空石；每日 + 每周限购都买；商品按用户截图圈定（14 件），表单是开关 + 逐个点选；
+  - 光谱核心（160 行动力）行动力够就买满、不留保底；亲密度献礼选择箱越买越贵，每周只买 5 次；5面旗帜不进清单，由竞技场的「用友情点数补充旗帜」负责；
+  - 商店排在竞技场前；页的顺序 交易所 → 一般 → 传承石（先拿到行动力再买光谱核心，我的决定）；
+  - 传承石页签的绿色货币叫「银光传承石」（用户告知）。
 - B12a（用户选择，2026-10-20 审核通过）：
   - 光谱核心允许用叶子 / 天空石补充；实现上沿用原来两个补充开关并改成通用名字（我的决定，审核没有异议）；
   - 异界能托管、用代币付费，手动流程同普通难度（实测胜利后是宝珠画面，已处理）；
   - 只有食人魔只有异界（用户纠正），GUI 选食人魔时难度锁定成异界，引擎收到别的难度直接停止并提示；
   - 「托管最多几份」放进表单（默认 0 = 不限，持有多少就全部拿来开托管）。
 
-## 下一块（B12b 日常收取：商店日常购买）要做
-用户意见：「日常收取要把商店里日常的东西都买了」。单独立项、单独审核。
-1. 开工：ROADMAP 把 B12b 标进行中，建 `docs/reviews/B12b.md`。
-2. **先和用户确认**：买哪些（商店哪几个页签、哪些商品）、用什么货币、刷新规则（每天 / 每周）、要不要开关和预算。
-3. **真机先看**（征得同意，只导航和截图，不点购买）：大厅「商店」各页签、商品列表、购买框、买过之后的样子；采 fixture。
-4. 代码：作为日常收取的一项（`modules/daily/`，按天记账，当天买过不再进去）；购买框注册成模块弹窗（自动关闭点取消），并加进 `custom_flow/guard.py` 的守卫和禁点按钮；按货币读数差确认；`tests/daily_sim.py` 加商店；离线测试。
-5. 实跑会花货币，要用户同意。
-
-## 之后（B13 英雄数据库）要做（B12b 之后再开始）
+## 下一块（B13 英雄数据库）要做
 ROADMAP「B13+ 扩展模块」：英雄数据库（core/data）→ RTA BP 助手（assistant）→ 装备扫描 → GVG 作业查询 → 兑换码 → 资源统计，每个单独立项和审核。B13 先做英雄数据库，它是后面 RTA BP 助手的基础。
 1. **先和用户确认**：
    - 数据来源（官方指南站 / epic7db / Fribbels 的 `herodata.json` 等，B10 找图标时用过）、更新方式（随包内置 + 联网更新？）、许可和版权；
@@ -336,4 +345,10 @@ ROADMAP「B13+ 扩展模块」：英雄数据库（core/data）→ RTA BP 助手
 - **讨伐列表底边会截掉一半名字**（B12a）：OCR 照样认出（高约 18），但点不准；`find_hunt` 要求高 ≥ 26。
 - **异界准备界面右下角就是「战斗开始」**：普通难度切换快速 / 普通战斗的钮在那个位置，异界没有这个钮，别按固定坐标点。
 - **录屏存 JPEG 当不了按钮 fixture**：有 `max_diff` 的按钮模板颜色校验过不了。要做 fixture 的画面用 PNG 截。
+- **商店买完多数商品没有「获得奖励」框**（B12b 实跑踩过）：行动力这类入场券只在顶部中间飘一条提示约 1.5 秒（挡住顶栏数字），只有普琳免费商品弹框。买成以读数差为准，读顶栏前先等提示飘完。
+- **商店列表买完会重排**：买完的移到最后，其他卡片往前挪；不要记卡片位置，每次重扫。
+- **商店列表甩得很远**：0.6 秒拖 740 像素会挪 5 列以上，中间的商品直接跳过；用 1 秒拖 400 像素（约 2 列）。
+- **商店卡片的「1/1」OCR 常读成「11」**（斜杠丢了），买完的灰色「0/3」有时读不出：见 `shop_page.parse_counter` 和 `shop._find`。
+- **商店购买框有三种布局**（有数量条 / 只能买 1 个 / 越买越贵），标题「购买商品」字号不同，要两个模板；秘密商店的购买框也是同一种框。
+- **同名商品**：一般页有两张「光谱核心」（行动力买 / 生命之叶买），按「剩余/上限」和价格图标区分。
 - **worktree 里没有 `.venv` 和 `node_modules`**：先 `python -m uv sync`（设 `UV_DEFAULT_INDEX`）；`pnpm typecheck` 会自动装依赖。

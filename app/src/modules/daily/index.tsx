@@ -1,6 +1,7 @@
-import { Gift, Mail, Sparkles, Swords, Trees } from "lucide-react";
+import { Gift, Mail, ShoppingCart, Sparkles, Swords, Trees } from "lucide-react";
 import type { ModuleUI } from "../types";
 import { Continuous, syncContinuous } from "./Continuous";
+import { ShopItemPicker } from "./ShopItemPicker";
 
 const ui: ModuleUI = {
   id: "daily",
@@ -8,14 +9,17 @@ const ui: ModuleUI = {
   order: 10,
   menuLabel: "日常收取",
   runLabel: "收一次菜",
-  fieldIcons: { mail: Mail, forest: Trees, covenant: Sparkles, arena: Swords },
+  fieldIcons: { mail: Mail, forest: Trees, covenant: Sparkles, shop: ShoppingCart, arena: Swords },
   subFields: { arena_buy_flags: "arena" },
+  fieldDeps: { shop_items: "shop" },
+  fieldRenderers: { shop_items: ShopItemPicker },
   statLabels: {
     runs: "运行次数",
     mails: "领取邮件",
     forest_claims: "精灵之森领取",
     cares: "照料",
     summons: "免费召唤",
+    shop_buys: "商店购买",
     battles: "竞技场场数",
     wins: "竞技场胜场",
     flags_spent: "用掉旗帜",

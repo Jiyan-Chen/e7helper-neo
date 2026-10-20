@@ -39,7 +39,7 @@ export function ConfigForm({
         const value = locked ? locks[f.key] : config[f.key];
         const subs = visible.filter((s) => ui.subFields?.[s.key] === f.key);
         const Custom = ui.fieldRenderers?.[f.key];
-        if (Custom) return <Custom key={f.key} field={f} value={value} onChange={(v) => update(f.key, v)} />;
+        if (Custom) return <Custom key={f.key} field={f} value={value} onChange={(v) => update(f.key, v)} disabled={off} />;
         return (
           <FieldRow key={f.key} field={f} value={value} onChange={(v) => update(f.key, v)} error={errors[f.key]}
             disabled={off} ui={ui} devOnly={!!ui.devFields?.includes(f.key)}>

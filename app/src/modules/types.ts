@@ -17,6 +17,8 @@ export interface FieldRendererProps {
   field: Field;
   value: unknown;
   onChange: (v: unknown) => void;
+  /** 控制它的开关（fieldDeps）关掉时为 true */
+  disabled?: boolean;
 }
 
 export interface ModuleExtraProps {

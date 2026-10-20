@@ -234,7 +234,7 @@ def _fast_waits(monkeypatch):
 
 def _config(**cfg):
     """日常收取只开竞技场这一项。"""
-    return DailyConfig(**{"mail": False, "forest": False, "covenant": False, **cfg})
+    return DailyConfig(**{"mail": False, "forest": False, "covenant": False, "shop": False, **cfg})
 
 
 def _run(sim, tmp_path, monkeypatch, *, timeout=120, **cfg):
@@ -466,7 +466,7 @@ def test_start_from_prep_and_result(tmp_path, monkeypatch):
 
 
 def test_arena_runs_after_other_items(tmp_path, monkeypatch):
-    """四项都开：竞技场排在最后（ArenaSim 没有邮件 / 圣域 / 召唤界面，前三项换成只记顺序）。"""
+    """五项都开：竞技场排在最后（ArenaSim 没有邮件 / 圣域 / 召唤 / 商店界面，前四项换成只记顺序）。"""
     from e7helper.modules.daily import StopItem
 
     order = []
@@ -477,13 +477,14 @@ def test_arena_runs_after_other_items(tmp_path, monkeypatch):
             raise StopItem("跳过")
         return run
 
-    for key in ("mail", "forest", "covenant"):
+    for key in ("mail", "forest", "covenant", "shop"):
         monkeypatch.setattr(DailyModule, f"_{key}", fake(key))
     sim = ArenaSim("lobby", flags=1, start="ok")
-    result = _run(sim, tmp_path, monkeypatch, dry_run=False, mail=True, forest=True, covenant=True)
+    result = _run(sim, tmp_path, monkeypatch, dry_run=False, mail=True, forest=True, covenant=True, shop=True)
     assert result.status is TaskStatus.SUCCEEDED, result.error
     run = _history(tmp_path)[-1]
-    assert order == ["mail", "forest", "covenant"] and list(run["items"]) == ["mail", "forest", "covenant", "arena"]
+    assert order == ["mail", "forest", "covenant", "shop"]
+    assert list(run["items"]) == ["mail", "forest", "covenant", "shop", "arena"]
     assert run["items"]["arena"] == "旗帜用完（打了 1 场）" and sim.starts == 1
 
 

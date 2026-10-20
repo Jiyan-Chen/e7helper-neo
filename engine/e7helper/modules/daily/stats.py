@@ -2,7 +2,8 @@
 
 - `history.jsonl`：每次运行追加一行（含 dry-run）
 - `stats.json`：累计（只统计实跑：领取的邮件、精灵之森领取 / 照料、免费召唤次数、
-  竞技场场次 / 胜场 / 消耗旗帜 / 补旗次数，以及最近一次补旗的时间）
+  竞技场场次 / 胜场 / 消耗旗帜 / 补旗次数，以及最近一次补旗的时间；B12b 起还有商店购买次数，
+  花费的友情点数包括商店里用友情点数买的）
 
 按天的「做过没有」记在 `ledger.json`（见 ledger.py），不在这里。
 """
@@ -47,6 +48,16 @@ class Battle:
 
 
 @dataclass
+class ShopBuy:
+    item: str  # ShopItem 的值
+    name: str
+    count: int  # 这次买了几个
+    currency: str  # Currency 的值
+    price: int  # 总价（按顶栏读数差核对过）
+    time: str = field(default_factory=now)
+
+
+@dataclass
 class RunStats:
     dry_run: bool
     started: str = field(default_factory=now)
@@ -60,6 +71,7 @@ class RunStats:
     flags_spent: int = 0  # 按旗帜读数差计，不按点击次数
     flag_buys: int = 0  # 确认旗帜增加后才计
     friendship_spent: int = 0
+    shop_buys: list[ShopBuy] = field(default_factory=list)  # 看到「获得奖励」、顶栏读数差和价格一致才算
     flags_start: int | None = None
     flags_end: int | None = None
     would: list[str] = field(default_factory=list)  # dry-run 时会做的事
@@ -76,7 +88,7 @@ class RunStats:
     def summary(self) -> str:
         s = (f"邮件 {len(self.mails)} 封，精灵之森领取 {len(self.forest_claims)} 次"
              f"（{'、'.join(self.forest_claims) or '无'}），照料 {self.cares} 次，"
-             f"免费召唤 {self.summon_times} 次，")
+             f"免费召唤 {self.summon_times} 次，商店购买 {len(self.shop_buys)} 次，")
         if self.flags_start is not None:
             quick = sum(b.mode == "quick" for b in self.battles)
             s += (f"竞技场 {len(self.battles)} 场（快速 {quick}，胜 {self.wins}，旗帜 {self.flags_start} → "
@@ -108,6 +120,7 @@ def save(data_dir: Path, run: RunStats) -> None:
         total["flags_spent"] += run.flags_spent
         total["flag_buys"] += run.flag_buys
         total["friendship_spent"] += run.friendship_spent
+        total["shop_buys"] += len(run.shop_buys)
         if run.flag_buys:
             total["last_flag_buy"] = run.ended or now()
         total["updated"] = run.ended or now()
@@ -120,7 +133,7 @@ def save(data_dir: Path, run: RunStats) -> None:
 
 def load_totals(data_dir: Path) -> dict:
     total = {"runs": 0, "mails": 0, "forest_claims": 0, "cares": 0, "summons": 0, "battles": 0, "quick_battles": 0,
-             "wins": 0, "flags_spent": 0, "flag_buys": 0, "friendship_spent": 0, "last_flag_buy": None,
+             "wins": 0, "flags_spent": 0, "flag_buys": 0, "friendship_spent": 0, "shop_buys": 0, "last_flag_buy": None,
              "updated": None}
     path = data_dir / "stats.json"
     if path.exists():

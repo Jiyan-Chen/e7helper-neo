@@ -23,6 +23,10 @@ GUARD_POPUPS: tuple[Popup, ...] = (
           Dismiss.tap("repeat_battle:energy/cancel"), note="行动力不足 / 购买行动力（自定义流程：点取消）"),
     Popup("flow_guard_core", ("repeat_battle:core/title", "repeat_battle:core/cancel"),
           Dismiss.tap("repeat_battle:core/cancel"), note="购买光谱核心（自定义流程：点取消）"),
+    Popup("flow_guard_daily_shop_buy", ("daily:shop/dlg/title", "daily:shop/dlg/cancel"),
+          Dismiss.tap("daily:shop/dlg/cancel"), note="商店购买商品框（自定义流程：点取消）"),
+    Popup("flow_guard_daily_shop_buy1", ("daily:shop/dlg/title2", "daily:shop/dlg/cancel"),
+          Dismiss.tap("daily:shop/dlg/cancel"), note="商店购买商品框，没有数量条（自定义流程：点取消）"),
     Popup("flow_guard_auto_start", ("repeat_battle:auto/confirm_text", "dialog/cancel"), Dismiss.tap("dialog/cancel"),
           note="是否开始托管战斗（自定义流程：点取消）"),
     # 通用二次确认框（结束游戏、天空石立即更新、各种购买确认……）
@@ -40,4 +44,5 @@ FORBIDDEN_BUTTONS: dict[str, str] = {
     "repeat_battle:energy/buy": "行动力的「购买」",
     "repeat_battle:core/buy": "光谱核心的「购买」",
     "daily:summon/again": "召唤结果的「再召唤一次」",
+    "daily:shop/dlg/buy": "商店购买商品框的「购买」",
 }

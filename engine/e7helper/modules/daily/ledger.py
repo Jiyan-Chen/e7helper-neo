@@ -5,6 +5,8 @@
 - `done`：当天已经做完的项（誓约免费召唤 `covenant`、竞技场补旗 `arena_buy`），日期变了自动清空。账上记了做完就不再进去看。
 - `forest_next`：精灵之森下一次有东西可领 / 可照料的时间（按界面上的倒计时算），不受日期影响。
   没到时间就不进精灵之森。
+- `week_done`（B12b）：本「游戏周」已经买完的商店每周商品，周变了自动清空。每周重置是周一的每日重置
+  （北京时间周一凌晨 3 点）：B12b 实测周二下午商店显示「5天后可购买」。游戏周用那周周一的日期命名。
 
 账本只用来省导航；能不能领、领没领到，都以画面为准（见各项的核对规则）。
 """
@@ -34,6 +36,18 @@ def game_day(t: datetime) -> date:
     return (t.astimezone(UTC) + timedelta(hours=24 - RESET_UTC_HOUR)).date()
 
 
+def game_week(t: datetime) -> date:
+    """t 所在的游戏周，用那周周一（游戏日）的日期命名。"""
+    d = game_day(t)
+    return d - timedelta(days=d.weekday())
+
+
+def next_week_reset(t: datetime) -> datetime:
+    """t 之后的下一次每周重置（周一的每日重置 = 周日 UTC 19:00），带时区。"""
+    monday = game_week(t) + timedelta(days=7)
+    return datetime(monday.year, monday.month, monday.day, tzinfo=UTC) - timedelta(hours=24 - RESET_UTC_HOUR)
+
+
 def next_reset(t: datetime) -> datetime:
     """t 之后（不含 t）的下一次每日重置（UTC 19:00），带时区。"""
     t = t.astimezone(UTC)
@@ -46,7 +60,9 @@ class Ledger:
         self.path = path
         self.clock = clock
         self.day = game_day(clock()).isoformat()
+        self.week = game_week(clock()).isoformat()
         self.done: dict[str, dict] = {}
+        self.week_done: dict[str, dict] = {}
         self.forest_next: datetime | None = None
         self._load()
 
@@ -64,6 +80,8 @@ class Ledger:
             return
         if data.get("day") == self.day:
             self.done = dict(data.get("done") or {})
+        if data.get("week") == self.week:
+            self.week_done = dict(data.get("week_done") or {})
         if data.get("forest_next"):
             try:
                 self.forest_next = datetime.fromisoformat(data["forest_next"])
@@ -75,6 +93,13 @@ class Ledger:
 
     def mark_done(self, item: str, **info) -> None:
         self.done[item] = {"time": self.clock().isoformat(timespec="seconds"), **info}
+        self.save()
+
+    def is_week_done(self, item: str) -> bool:
+        return item in self.week_done
+
+    def mark_week_done(self, item: str, **info) -> None:
+        self.week_done[item] = {"time": self.clock().isoformat(timespec="seconds"), **info}
         self.save()
 
     def forest_due(self) -> bool:
@@ -89,6 +114,8 @@ class Ledger:
         data = {
             "day": self.day,
             "done": self.done,
+            "week": self.week,
+            "week_done": self.week_done,
             "forest_next": self.forest_next.isoformat(timespec="seconds") if self.forest_next else None,
             "updated": self.clock().isoformat(timespec="seconds"),
         }

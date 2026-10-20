@@ -342,18 +342,30 @@ pnpm bundle                                                       # = tauri buil
   - 补充：点顶栏核心图标打开「购买光谱核心」框（叶子 2 换 1、天空石 80 换 1、数量「1/N」保持 1），不点「战斗开始」去触发；核对后买 1 个，按顶栏核心 +1 和天空石读数差确认。核心不会自然回复，核对不留余量；
   - 只有食人魔只有异界一种难度；GUI 选食人魔时难度锁定成异界（`ModuleUI.fieldLocks`），引擎收到别的难度直接停止并提示。
 
-### `daily` 日常收取：邮件 / 精灵之森 / 誓约免费召唤 / 竞技场（B07，竞技场 B12 并入）
+### `daily` 日常收取：邮件 / 精灵之森 / 誓约免费召唤 / 商店 / 竞技场（B07，竞技场 B12 并入，商店 B12b）
 | 文件 | 职责 |
 |---|---|
-| `__init__.py` | `DailyModule`：按 邮件 → 精灵之森 → 誓约召唤 → 竞技场 的顺序做（各有开关），每项前后回到大厅；一项失败不影响其他项（任务最后记为失败），核对异常（`DailyAnomaly`）立即停止整个任务。`setup()` 注册场景 `daily_mail` / `daily_forest` / `daily_covenant` / `daily_summon` / `daily_summon_anim` / `daily_summon_hero` / `daily_summon_results` 和弹窗 `daily_forest_reward`（点击关闭）/ `daily_mail_detail`（自动关闭时点「点击关闭」，不收信） |
+| `__init__.py` | `DailyModule`：按 邮件 → 精灵之森 → 誓约召唤 → 商店 → 竞技场 的顺序做（各有开关），每项前后回到大厅；一项失败不影响其他项（任务最后记为失败），核对异常（`DailyAnomaly`）立即停止整个任务。`setup()` 注册场景 `daily_mail` / `daily_forest` / `daily_covenant` / `daily_summon` / `daily_summon_anim` / `daily_summon_hero` / `daily_summon_results` 和弹窗 `daily_forest_reward`（点击关闭）/ `daily_mail_detail`（自动关闭时点「点击关闭」，不收信） |
 | `page.py` | 纯函数识别：邮件行（「领取」锚点 + 剩余时间 OCR）、邮件数、邮件详情框；精灵之森三张卡和照料；誓约召唤的免费按钮、剩余免费气泡、顶栏货币区域 |
-| `ledger.py` | 按天记账 `ledger.json`：游戏日（北京时间 3 点 = UTC 19:00 切换）、当天做完的项（`covenant`、`arena_buy`）、精灵之森下次时间 |
-| `config.py` / `stats.py` | `DailyConfig`（表单是四项开关、`arena_buy_flags` 和 `dry_run`）；`history.jsonl`、`stats.json`（含竞技场场次 / 胜场 / 旗帜 / 补旗） |
+| `ledger.py` | 按天记账 `ledger.json`：游戏日（北京时间 3 点 = UTC 19:00 切换）、当天做完的项（`covenant`、`arena_buy`、商店每日商品 `shop:<id>`）、精灵之森下次时间；B12b 加按周记账：游戏周（周一的每日重置切换，用那周周一命名）、本周买完的商店每周商品 `week_done` |
+| `config.py` / `stats.py` | `DailyConfig`（表单是五项开关、商店的 `shop_items`、`arena_buy_flags` 和 `dry_run`）；`ShopItem` 枚举；`history.jsonl`、`stats.json`（含竞技场场次 / 胜场 / 旗帜 / 补旗、商店购买次数） |
 | `errors.py` | 各项共用的 `StopItem` / `ItemFailed` / `DailyAnomaly` |
 
 - 账本只用来省导航：誓约召唤当天用完就不进去；竞技场当天补过旗就不再打开补旗框；精灵之森按界面上最短的倒计时决定下次进入时间。能不能领、领没领到都以画面为准。
 - 「有没有花东西」的核对：召唤前后对比**顶栏货币区域的画面**，比逐个 OCR 读数可靠，不受图标和数字宽度影响。前后各取两帧（间隔 0.6 秒），两两比较都变了的像素 ≤ 60 才算没变：背景立绘的星星光效会飘进这块区域（单帧最多约 80 个像素，只出现一帧）；数字真的变化时是 5000+。其他有多种货币的界面也可以这样核对。
 - 「点击关闭」在多个弹窗里都有（竞技场战斗记录、托管结算完毕、精灵之森奖励），模块弹窗要加背景场景的标题来区分。
+
+#### 商店（`shop.py` / `shop_page.py`；B12b）
+| 文件 | 职责 |
+|---|---|
+| `shop.py` | `Shop`（不是模块，借用日常收取的 ctl / vision / 统计 / 账本）：大厅「商店」→ 交易所 › 竞技场 → 商店 › 一般 → 商店 › 传承石，每页从左往右扫、按名字找 `CATALOG` 里选中的商品，买完重新扫（买完的会移到列表最后），滑不动就是到头，买过东西就从头再扫一遍。`register()` 注册场景 `daily_shop_store` / `daily_shop_exchange` 和弹窗 `daily_shop_buy` / `daily_shop_buy1`（购买商品框，点取消）/ `daily_shop_reward`（获得奖励，点击关闭）。`ShopAnomaly` 是 `DailyAnomaly` |
+| `shop_page.py` | 纯函数识别：`scan_cards`（两行商品名 OCR → 卡片中心；右上「剩余/上限」、按钮绿 = 能买、价格图标 + 数字）、`read_dialog`（三种布局：有数量条 / 只能买 1 个 / 越买越贵）、`read_top`（顶栏按图标定位读数）、`tab_selected`（页签下的亮光带）、`is_reward` |
+
+- `CATALOG`：每件商品的名字、所在页、货币、单价（越买越贵的为 None）、限购上限、每日 / 每周。同名商品用上限和价格图标区分（一般页有一张用生命之叶买的光谱核心）。
+- 只用 免费 / 友情点数 / 行动力 / 银光传承石 / 竞技场点数；价格图标认不出的（天空石、生命之叶、传承石）一律不买。
+- 点「购买」前核对购买框（名字、货币、剩余次数、数量条按「最多」、总价 = 单价 × 数量、够付）；买完核对天空石不变、付款货币正好减少总价（行动力允许少减 3 点，自然恢复），核对不过立即停止整个任务。「获得奖励」框只有部分商品有（入场券类只在顶部飘一条提示），出现就点击关闭，只有免费商品要求看到它。
+- 亲密度献礼选择箱每周只买 `shop_affinity_weekly`（默认 5）次，按卡片上的「剩余/上限」算。
+- 内部字段：`shop_affinity_weekly`、`shop_max_buys`、`shop_probe_dialogs`。模板在 `assets/daily/cn/shop/`；流程守卫引用 `daily:shop/dlg/*`。
 
 #### 竞技场（`arena.py` / `arena_page.py`；B05 的 `arena_npc` 模块，B12 按用户意见并入日常收取）
 | 文件 | 职责 |

@@ -300,9 +300,10 @@ def test_real_modules_daily_routes(tmp_path, detector):
     engine = make_engine(tmp_path, detector, modules=discover())
     with _client(engine, autoconnect=False) as c:
         led = c.get("/api/modules/daily/ledger").json()
-        assert set(led) == {"day", "done", "forest_next", "forest_due"} and led["forest_due"] is True
+        assert set(led) == {"day", "done", "week", "week_done", "forest_next", "forest_due"}
+        assert led["forest_due"] is True
         keys = [t["key"] for t in c.get("/api/modules/daily/timers").json()]
-        assert keys == ["reset", "forest", "covenant"]
+        assert keys == ["reset", "weekly", "forest", "covenant"]
         mods = {m["id"]: m for m in c.get("/api/modules").json()}
         assert mods["daily"]["supports_next_due"] and not mods["repeat_battle"]["supports_next_due"]
         # 真实模块的默认配置都是 dry-run

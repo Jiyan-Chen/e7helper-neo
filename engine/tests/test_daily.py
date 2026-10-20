@@ -262,8 +262,8 @@ def test_ledger_corrupt_file(tmp_path):
 
 
 def test_config_schema_only_switches():
-    assert set(DailyConfig.model_json_schema()["properties"]) == {"mail", "forest", "covenant", "arena",
-                                                                  "arena_buy_flags", "dry_run"}
+    assert set(DailyConfig.model_json_schema()["properties"]) == {"mail", "forest", "covenant", "shop", "shop_items",
+                                                                  "arena", "arena_buy_flags", "dry_run"}
     cfg = DailyConfig()
     assert cfg.dry_run and cfg.arena and not cfg.arena_buy_flags and cfg.arena_prefer_quick
     assert DailyConfig(arena_max_battles=2).arena_max_battles == 2  # 内部字段仍然可以传
@@ -273,10 +273,10 @@ def test_config_schema_only_switches():
 
 
 def _run(sim, tmp_path, *, timeout=300, **cfg):
-    """DailySim 不模拟竞技场：竞技场这一项默认关掉（竞技场的流程测试在 test_daily_arena.py）。"""
+    """DailySim 不模拟竞技场和商店：这两项默认关掉（流程测试在 test_daily_arena.py / test_daily_shop.py）。"""
     with Runtime(sim, scenes=default_detector(), humanize=Humanize.off(), debug_root=tmp_path / "debug",
                  seed=1) as rt:
-        return rt.run_task(DailyModule, DailyConfig(**{"arena": False, **cfg}), timeout=timeout)
+        return rt.run_task(DailyModule, DailyConfig(**{"arena": False, "shop": False, **cfg}), timeout=timeout)
 
 
 def _data(tmp_path):
