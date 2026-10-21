@@ -553,5 +553,63 @@ def ocr_cmd(
     console.print(f"[dim]{len(results)} 条，{dt:.0f} ms[/]")
 
 
+@app.command("heroes")
+def heroes_cmd(
+    query: Annotated[Optional[str], typer.Argument(help="按名字 / 英文名 / 别名 / 编号搜索")] = None,
+    update: Annotated[bool, typer.Option("--update", help="联网更新（写进数据目录）")] = False,
+    bundled: Annotated[bool, typer.Option("--bundled", help="（开发）和 --update 一起用：更新随包数据 assets/data/heroes")] = False,
+    no_icons: Annotated[bool, typer.Option("--no-icons", help="更新时不下载头像")] = False,
+) -> None:
+    """英雄数据库（B13）：查英雄、联网更新。"""
+    from e7helper.core.data import ELEMENT_LABELS, ROLE_LABELS, heroes, load_heroes, reload_heroes
+    from e7helper.core.data import hero_update
+    from e7helper.core.data.hero_db import DATA_FILE, DATA_NAME, read_hero_file
+    from e7helper.core.paths import bundled_data_dir, user_data_dir
+
+    if update:
+        if bundled:
+            target = bundled_data_dir(DATA_NAME)
+            current, other_dirs = read_hero_file(target / DATA_FILE), []
+        else:
+            db = load_heroes()
+            target = user_data_dir(DATA_NAME)
+            current, other_dirs = db.file, [d for d in db.dirs if d != target]
+        t = time.perf_counter()
+        try:
+            res = hero_update.update_heroes(target, current, other_dirs=other_dirs, icons=not no_icons)
+        except hero_update.UpdateError as e:
+            _fail(str(e))
+            raise typer.Exit(1) from None
+        (_ok if res.changed else _warn)(
+            f"{'已更新' if res.changed else '没有变化'}：{res.total} 名，新增 {len(res.added)}、删除 {len(res.removed)}、"
+            f"变化 {len(res.modified)}；新头像 {res.icons}、详情 {res.details}、技能图标 {res.detail_icons}，"
+            f"{time.perf_counter() - t:.1f} 秒 → {target}")
+        if res.added:
+            console.print(f"新增：{', '.join(res.added)}")
+        if res.missing_names:
+            _warn(f"没有中文名（先用英文名）：{', '.join(res.missing_names)}")
+        if res.icon_failed:
+            _warn(f"头像下载失败：{', '.join(res.icon_failed)}")
+        if res.wiki_error:
+            _warn(f"e7.wiki 没连上，这次没更新中文名和详情：{res.wiki_error}")
+        if res.detail_failed:
+            _warn(f"详情下载失败：{', '.join(res.detail_failed)}")
+        reload_heroes()
+
+    db = heroes()
+    console.print(f"英雄 {len(db)} 名 · 来源 {db.source} · 用的是{'数据目录' if db.origin == 'user' else '随包'}的 · "
+                  f"更新于 {db.updated or '—'}")
+    if not query:
+        return
+    found = db.search(query, limit=30)
+    table = Table("编号", "名字", "英文名", "属性", "职业", "星级", "速度", "头像")
+    for h in found:
+        table.add_row(h.code, h.name, h.name_en, ELEMENT_LABELS.get(h.element, h.element),
+                      ROLE_LABELS.get(h.role, h.role), "★" * h.rarity, f"{h.stats.get('spd', 0):g}",
+                      "有" if db.icon_path(h.code) else "—")
+    console.print(table)
+    console.print(f"[dim]{len(found)} 条[/]")
+
+
 if __name__ == "__main__":
     app()

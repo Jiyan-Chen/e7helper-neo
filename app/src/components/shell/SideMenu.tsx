@@ -1,4 +1,4 @@
-import { BarChart3, CalendarClock, Crop, History, Images, ScrollText, Settings, Workflow } from "lucide-react";
+import { BarChart3, BookUser, CalendarClock, Crop, History, Images, ScrollText, Settings, Workflow } from "lucide-react";
 import { NavLink } from "react-router";
 import { Ornament } from "@/components/ui/Ornament";
 import { isDev } from "@/lib/env";
@@ -56,6 +56,10 @@ export function SideMenu() {
       <NavLink to="/templates" className={({ isActive }) => cn("menu-item", isActive && "active")}>
         <Images className="size-6 flex-none" />
         <span className="truncate">我的模板</span>
+      </NavLink>
+      <NavLink to="/heroes" className={({ isActive }) => cn("menu-item", isActive && "active")}>
+        <BookUser className="size-6 flex-none" />
+        <span className="truncate">英雄图鉴</span>
       </NavLink>
       <Ornament className="mx-[18px] my-2.5" />
       {PAGES.map((p) => (

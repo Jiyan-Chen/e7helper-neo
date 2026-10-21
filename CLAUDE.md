@@ -36,7 +36,7 @@ uv 是用 `pip install --user` 装的，不在 PATH 上，所以统一用 `pytho
 python -m uv sync
 python -m uv run pytest                        # 单元测试
 E7_DEVICE_TESTS=1 python -m uv run pytest -m device   # 真机测试（需 MuMu 运行）
-python -m uv run e7helper doctor | bench | screenshot | tap X Y | modules | run <id>
+python -m uv run e7helper doctor | bench | screenshot | tap X Y | modules | run <id> | heroes [词]
 python -m uv run e7helper serve [--no-connect]       # API 服务（B08），端口和 token 见 %LOCALAPPDATA%\e7helper\api.json
 ```
 

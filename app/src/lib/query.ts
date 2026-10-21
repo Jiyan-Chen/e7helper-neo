@@ -18,4 +18,7 @@ export const qk = {
   flows: ["flows"] as const,
   flow: (id: string) => ["flows", id] as const,
   userTemplates: ["user-templates"] as const,
+  heroes: ["heroes"] as const,
+  heroDetail: (code: string) => ["heroes", code, "detail"] as const,
+  heroBuilds: (code: string) => ["heroes", code, "builds"] as const,
 };
