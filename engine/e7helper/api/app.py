@@ -30,6 +30,7 @@ from .auth import LOCAL_HOSTS, AuthConfig, HostCheckMiddleware, require_token
 from .capture import FrameCache, build_capture_router
 from .flows import build_flows_router
 from .engine import ApiError, Engine
+from .heroes import build_heroes_router
 from .scheduler import Scheduler, ScheduleSpec
 from .ws import Hub, build_ws_router, encode_jpeg
 
@@ -170,6 +171,7 @@ def create_app(
     frames = FrameCache()
     app.include_router(build_capture_router(engine, frames), prefix="/api", dependencies=[Depends(require_token)])
     app.include_router(build_flows_router(engine, services.scheduler, frames), prefix="/api", dependencies=[Depends(require_token)])
+    app.include_router(build_heroes_router(), prefix="/api", dependencies=[Depends(require_token)])
     _mount_module_routes(app, engine)
     app.include_router(build_ws_router(services))
     return app

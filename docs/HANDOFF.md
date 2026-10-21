@@ -1,6 +1,6 @@
 # HANDOFF
 
-> 新会话从这里读起。上次更新：2026-10-20（B12c 已通过，打包 0.2.0）
+> 新会话从这里读起。上次更新：2026-10-21（B13 已通过；main 合入 B12c + 0.2.0）
 
 ## 当前进度
 - **B01 骨架 + 模块契约 + MuMu 设备层**：✅ 已通过，记录见 [reviews/B01.md](reviews/B01.md)。
@@ -19,8 +19,9 @@
 - **B12a 讨伐异界**：✅ 已通过，记录见 [reviews/B12a.md](reviews/B12a.md)。重复刷关加上「异界」难度和 阿吉玛纳克 / 卡戴斯 / 食人魔；异界消耗光谱核心，可用叶子 / 天空石补充；异界胜利后的宝珠画面；「托管最多几份」进表单；GUI 新增 `fieldLocks`（食人魔锁定异界）。全量 `890 passed, 7 skipped`，前端 16 个。
 - **B12b 日常收取：商店日常购买**：✅ 已通过，记录见 [reviews/B12b.md](reviews/B12b.md)。日常收取加一项「商店」（排在竞技场前）：交易所 › 竞技场 → 商店 › 一般 → 商店 › 传承石，买用户圈定的 14 件每日 / 每周限购商品；按周记账；GUI 商品点选。实跑买了 13 次，天空石 0。
 - **B12c 书签刷取：历史统计**：✅ 已通过，记录见 [reviews/B12c.md](reviews/B12c.md)。书签刷取页「设置」下面加「刷取历史」（代替通用「最近运行」）：近 7 天 / 近 30 天 / 全部，商品卡（几次、共几个、平均刷几次出一次）、刷新 / 天空石 / 金币 / 运行次数、每天刷新次数柱状图（标出书签 / 奖牌，「全部」超过 45 天按周）、每次运行列表；dry-run 不算。删掉原「统计」页和各模块 `statLabels`。全量 `973 passed, 7 skipped`，前端 22 个。
-- **发布 0.2.0**（B12c 审核后用户要求）：五处版本号改成 0.2.0，重新冻结引擎、打 NSIS 安装包（见「打包」）。
-- 下一块：**B13 英雄数据库**（见下面「下一块」，先和用户确认再动手）。
+- **发布 0.2.0**（B12c 审核后用户要求）：五处版本号改成 0.2.0，重新冻结引擎、打 NSIS 安装包（见「打包」）。**这个安装包不含 B13**（B13 之后才合进 main），下次发版再带上。
+- **B13 英雄数据库**：✅ 已通过，记录见 [reviews/B13.md](reviews/B13.md)。`core/data`：389 名英雄（Fribbels 数据 + e7.wiki 的国服中文名 / 昵称 / 技能 / 角色奉献 / 专属装备 / 发布日期），随包内置 + 联网更新；Fribbels 配装库实时汇总（中位数，速度套看前 10% / 前 25%，其他按速度分快中慢）；GUI「英雄图鉴」（按发布日期排、筛选、详情三个页签），属性 / 职业 / 套装 / 刻印 / 等级 / 属性类型图标都从游戏截图裁。审核改了 12 轮。全量 `1004 passed, 7 skipped`，前端 22 个。用户先开了 B13（在 B12c 之前的 main 上做），2026-10-21 合进 main。
+- 下一块：**B14+ 扩展模块**（RTA BP 助手起，见下面「下一块」，先和用户确认再动手）。
 
 ## 已有能力
 ### 设备（B01）
@@ -178,7 +179,7 @@
 ### 打包（B10，详见 architecture.md「打包发布」和 reviews/B10.md）
 - `cd engine && python -m uv run --group build python packaging/build.py`：检查 5 处版本号 → PyInstaller onedir → 冒烟测试（不碰设备）。产物 `engine/dist/e7engine/` 约 272MB、352 个文件。
 - `cd app && pnpm bundle`（= `tauri build --config src-tauri/tauri.bundle.conf.json`）：安装包 `app/src-tauri/target/release/bundle/nsis/第七史诗助手_<版本>_x64-setup.exe`，约 96MB。
-- **当前发布 0.2.0**（2026-10-20，B12c 之后）：引擎 `dist/e7engine/` 272MB、446 个文件，冒烟测试全过；安装包 `第七史诗助手_0.2.0_x64-setup.exe` 97.39 MiB（Rust release 编译 3 分 35 秒）。没装，直接跑 `target/release/e7helper.exe`（临时数据目录、`--no-connect --paused`）：5.1 秒拉起随包 `engine/e7engine.exe`，`/api/health` 版本 0.2.0；关窗口后引擎退出、api.json 删除。冻结版的 `GET /api/modules/secret_shop/report` 实测能用。下次发版改 5 处版本号（`build.py` 会检查）。
+- **当前发布 0.2.0**（2026-10-20，B12c 之后）：引擎 `dist/e7engine/` 272MB、446 个文件，冒烟测试全过；安装包 `第七史诗助手_0.2.0_x64-setup.exe` 97.39 MiB（Rust release 编译 3 分 35 秒）。没装，直接跑 `target/release/e7helper.exe`（临时数据目录、`--no-connect --paused`）：5.1 秒拉起随包 `engine/e7engine.exe`，`/api/health` 版本 0.2.0；关窗口后引擎退出、api.json 删除。冻结版的 `GET /api/modules/secret_shop/report` 实测能用。这个包不含 B13（B13 之后才合进 main）。下次发版改 5 处版本号（`build.py` 会检查）。
 - 引擎冻结：`engine/packaging/`（`entry.py`、`e7engine.spec`、`build.py`）；冻结后 `paths.FROZEN`，`ENGINE_ROOT = sys._MEIPASS`；解释器开 `-X utf8`。
 - `engine.rs`：release 构建拉起 `<资源目录>/engine/e7engine.exe serve --port 0`；debug 构建照旧用 venv；`E7_ENGINE_DIR` / `E7_ENGINE_ARGS` / `E7_DATA_DIR` 两种构建都认。
 - 应用名「第七史诗助手」，exe `e7helper.exe`；NSIS `installMode: both`、简体中文；当前用户默认装到 `%LOCALAPPDATA%\Programs\第七史诗助手`。
@@ -196,9 +197,18 @@
 - 测试：`tests/test_custom_flow.py`（41 个，GameSim 离线）、`tests/test_flows_api.py`（9 个）、`app/src/lib/flow.test.ts`（8 个）。全量 `780 passed, 7 skipped`；前端 16 个。
 - 实测（真机，正式版）：采「圣域入口」模板 1.00；大厅 → 圣域 → 返回 10.6 秒，1 次点击。
 
+### 英雄数据库（B13，详见 architecture.md「游戏数据 `e7helper.core.data`」和 reviews/B13.md）
+- `from e7helper.core.data import heroes; db = heroes()`：`db.get("c2111")` / `db.find(名字或昵称)`（忽略空白、全半角、大小写、间隔号，OCR 结果能直接查）/ `db.search(词)` / `db.icon(编号)`（头像 BGR 112×112）/ `db.detail(编号)`（技能、角色奉献、群阵位置 `devotion_slot`、专属装备三选一效果）/ `db.artifacts()`（神器中文名 + e7.wiki 图标名）。不依赖设备，助手模块可以直接用。
+- 数据：随包 `engine/assets/data/heroes/`（`heroes.json` 一名一行、`icons/`、`details/<编号>.json` + `details/icons/`、`artifacts.json`、`overrides.json` 名字修正表）；联网更新写 `<数据目录>/data/heroes/`，较新的优先。只收 `c` 开头的编号（`m` 开头是愚人节怪物英雄）。随包数据更新：`python -m uv run e7helper heroes --update --bundled`（首次约 3 分钟；详情按 e7.wiki 更新时间增量下载）。
+- 来源：Fribbels 仓库（herodata / artifactdata / 简中翻译 / 头像，GitHub → jsDelivr）、e7.wiki（`admin.e7.wiki/api/open/epicseven/hero/card-list`、`.../artifact/artifact-list`、`assets2.e7.wiki/static/heroes/<slug>.json`）、Fribbels 配装库 `krivpfvxi0.execute-api.us-west-2.amazonaws.com/dev/getBuilds`（POST 英文名）、神器图标先官方指南站再 e7.wiki。都不是公开 API。
+- 配装汇总（`hero_builds.py`）：中位数；带速度套的组合 前 10% / 前 25% / 中位三行，不带的按速度三等分快 / 中 / 慢；装备均分 = 装备分 ÷ 6；缓存一天（`builds/`，带格式版本）。
+- API：`/api/heroes`、`/api/heroes/{code}`（`/icon`、`/detail`、`/builds?refresh=`）、`/api/hero-icons/{name}`、`/api/artifacts/{code}/icon`、`POST /api/heroes/update`。
+- GUI：左侧菜单「英雄图鉴」（正式版也有，宽页面）；详情弹窗 `components/heroes/HeroDetailDialog.tsx`（860px，角色信息 / 技能详情 / 配装方案）。游戏图标 60 个在 `app/src/assets/game/`（`gameIcon(名字)`，没有时退回文字 / 色块）：`element_*`、`role_*`、`set_*`、`stat_*`、`grade_d…sss`、`devotion_self`、`devotion_team_<位置>`（1 右、2 下、3 上、4 左）。
+- 测试：`tests/test_heroes.py` 36 个、`app/src/lib/heroes.test.ts`；冒烟测试检查随包英雄数据、头像、技能详情和图标。
+
 ### 模块与 CLI（B01，B03 / B08 更新）
 - 模块：继承 `TaskModule` / `AssistantModule`，放到 `e7helper/modules/<id>/` 就会被自动发现。参考 `modules/hello/`。
-- CLI：`doctor`、`bench`、`screenshot`、`tap`、`modules`、`run <id> [-c JSON] [-t 超时]`（经 runtime）、`scene [-f 图片] [--dismiss] [--watch]`、`capture`（新增 `--tap`）、`match`、`ocr`、`serve`（B08）。
+- CLI：`doctor`、`bench`、`screenshot`、`tap`、`modules`、`run <id> [-c JSON] [-t 超时]`（经 runtime）、`scene [-f 图片] [--dismiss] [--watch]`、`capture`（新增 `--tap`）、`match`、`ocr`、`serve`（B08）、`heroes [词] [--update [--bundled]]`（B13）。
 
 ## 关键决策
 - 基准分辨率 1600×900。本机 MuMu 已经是 1600×900（平板模式 tablet.2）。
@@ -242,6 +252,12 @@
   - 神秘商店改名「书签刷取」：商品固定三种（誓约书签 / 神秘奖牌 / 友情点数），选中高亮、不能增删；设置只留刷新次数 / 连续没出就停 / 连续没出就换世界频道；换频道 = 当前频道号 +1；
   - 标题栏做进应用（自己画窗口按钮），左上固定头像 + 应用名；界面加过渡动画；
   - 讨伐异界和后三个地下城单独立项 B12a；日常收取的商店日常购买单独立项 B12b；都在 B12 之后做。
+- B13（用户选择，2026-10-21 审核通过）：
+  - 数据随包内置 + 联网更新；国服中文名用 Fribbels 简中 / e7.wiki 的（用户确认一致）；assassin 叫「盗贼」；技能等中文资料用 e7.wiki；配装用 Fribbels 配装库原始数据；立绘不做；不显示昵称（只用来搜索）；
+  - GUI 图标一律用**游戏里的图标**，由用户把游戏点到对应界面、我只截图裁出来（不用网站上的图）；
+  - 图鉴按发布日期新的在前；愚人节怪物英雄不要；专属装备只显示三选一的效果，不显示背景说明；
+  - 配装统计不用平均值：中位数，带速度套的看前 10% / 前 25%，不带的按速度分快 / 中 / 慢；装备分显示成装备均分；
+  - 头像先只存，识别留给 RTA BP 助手（到时看真实 BP 画面）。
 - B12c（2026-10-20 审核通过）：
   - 统计只做书签刷取，不单独做页面，删掉原「统计」页（用户意见）；
   - 放在设置下面代替「最近运行」、范围按钮、商品卡 / 数字 / 柱状图 / 每次运行列表、dry-run 不算、数据全部从 `history.jsonl` 算（我的决定，审核没有异议）；
@@ -258,18 +274,15 @@
   - 只有食人魔只有异界（用户纠正），GUI 选食人魔时难度锁定成异界，引擎收到别的难度直接停止并提示；
   - 「托管最多几份」放进表单（默认 0 = 不限，持有多少就全部拿来开托管）。
 
-## 下一块（B13 英雄数据库）要做
-ROADMAP「B13+ 扩展模块」：英雄数据库（core/data）→ RTA BP 助手（assistant）→ 装备扫描 → GVG 作业查询 → 兑换码 → 资源统计，每个单独立项和审核。B13 先做英雄数据库，它是后面 RTA BP 助手的基础。
-1. **先和用户确认**：
-   - 数据来源（官方指南站 / epic7db / Fribbels 的 `herodata.json` 等，B10 找图标时用过）、更新方式（随包内置 + 联网更新？）、许可和版权；
-   - 存哪些字段（中文名 / 英文名 / 编号 `c2111` 这类 id / 属性 / 职业 / 星级 / 头像 / 技能 / 套装推荐…），国服中文名怎么对上；
-   - 存储位置和格式（随包放 `engine/assets/data/`？用户数据目录放更新后的版本？sqlite 还是 json）；
-   - GUI 要不要有「英雄图鉴」页，还是只作为 RTA BP 助手的底层数据；
-   - 头像要不要用于识别（BP 界面认英雄），要不要现在就做识别。
-2. 放在 `core/data`（architecture.md 顶部的分层图里预留的位置），不依赖设备；接口要能被助手模块（只读帧）使用。
-3. 不操作游戏的部分优先做；要读游戏界面时先征得用户同意，只截图、不点击。
+## 下一块（B14+ 扩展模块）要做
+ROADMAP「B14+ 扩展模块」：RTA BP 助手（assistant）→ 装备扫描 → GVG 作业查询 → 兑换码 → 资源统计，每个单独立项和审核。
+- RTA BP 助手可以直接用 B13 的 `heroes()`：OCR 读到的名字用 `db.find`，头像用 `db.icon`（Fribbels 的 112×112 小图，和游戏里 BP 画面的构图、边框可能不一样，开工时先截真实 BP 画面再定识别方法）；配装 / 技能数据也在。
+- 要读游戏界面时先征得用户同意，只截图、不点击。
 
 ## 坑
+- **从游戏截图裁图标**（B13）：脚本在 `engine/tools/`（`cut_icons.py` 彩色图标、`cut_flat_icons.py` 单色白图标、`make_team_icons.py` 群阵图示；用 `.venv/Scripts/python.exe engine/tools/<脚本> <截图> <输出目录> 名字:x,y,w,h ...`）——按和按钮底色的差距算透明度；宽的图标（SS / SSS）不要补成正方形，否则等高显示时会变小；选中行是白底黑图标，统一成白色再用；群阵图示是用一张「34」的截图按位置重新上色生成 7 种。截图时用户可能需要先点开筛选框，我只截图（用户允许时可以在列表文字区慢拖）。
+- **Fribbels / e7.wiki / 配装库都不是公开 API**（B13）：哪天格式变了，`heroes --update` 或配装页会失败；随包数据不受影响。e7.wiki 的 `publish_dt` 只有 235 名有，发布日期用详情里的 `releaseDate`。
+- **heredoc 里写 Python 再替换源码时，`\x89` 这类转义会被吃掉**（B13 踩过：写出了含非 ASCII 字节的 bytes 字面量，SyntaxError）。改含转义的代码用 Edit 工具。
 - **断线后游戏回到标题画面**（B10a）：用户在手机上登录同一账号就能把模拟器挤下线，用来复现很方便。自动重进约 55 秒，只点屏幕、不输入账号；重进后游戏停在大厅，任务之前所在的界面没了，在别的界面里等待的任务会超时失败（只有 `tap_until` 导航能接上）。不要做「重进后整个任务重跑」，会重置天空石等预算计数。每天首次登录的签到 / 奖励画面还没登记。
 - **「点击关闭」到处都有**（竞技场战斗记录、托管结算完毕、精灵之森奖励、邮件详情框）：模块弹窗要加背景场景的标题区分（B07）。
 - **有些邮件点「领取」后会弹出详情框**，要再点「收信」；邮件列表按剩余时间排序，快过期的在最上面（B07）。

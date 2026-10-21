@@ -164,7 +164,8 @@ def build_capture_router(engine: Engine, frames: FrameCache | None = None) -> AP
     @r.get("/stores", summary="有模板目录的模块（common 是跨模块共用的）")
     def stores() -> list[dict]:
         out = []
-        for d in sorted(p for p in paths.ASSETS_DIR.iterdir() if p.is_dir()):
+        # assets/data 是游戏数据（B13，英雄数据库），不是模板目录
+        for d in sorted(p for p in paths.ASSETS_DIR.iterdir() if p.is_dir() and p.name != "data"):
             store = TemplateStore.for_module(d.name)
             out.append({"module": d.name, "count": len(store.names())})
         known = {o["module"] for o in out}

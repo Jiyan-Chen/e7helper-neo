@@ -5,6 +5,7 @@ import type {
   ScheduleSpec, SchedulesSnapshot, SceneInfo, Status, TaskRecord,
 } from "./types";
 import type { Flow, FlowSummary, UserTemplate } from "./flow";
+import type { HeroBuilds, HeroDetail, HeroList, HeroUpdateResult } from "./heroes";
 
 export interface UserTemplateSaveBody {
   frame: string;
@@ -135,6 +136,15 @@ export class Api {
     this.request<void>("DELETE", `/api/user-templates/${encodeURIComponent(name)}${force ? "?force=true" : ""}`);
   testTemplates = (templates: string[], frame?: string) =>
     this.request<{ frame: string | null; results: (CaptureHit & { ref: string })[] }>("POST", "/api/user-templates/test", { templates, frame });
+
+  // 英雄图鉴（B13）
+  heroes = () => this.get<HeroList>("/api/heroes");
+  heroIconUrl = (code: string, v = "") => `${this.url}/api/heroes/${code}/icon${this.tokenQuery()}&v=${encodeURIComponent(v)}`;
+  updateHeroes = () => this.request<HeroUpdateResult>("POST", "/api/heroes/update");
+  heroDetail = (code: string) => this.get<HeroDetail>(`/api/heroes/${code}/detail`);
+  heroBuilds = (code: string, refresh = false) => this.get<HeroBuilds>(`/api/heroes/${code}/builds${refresh ? "?refresh=true" : ""}`);
+  heroAssetUrl = (name: string) => `${this.url}/api/hero-icons/${encodeURIComponent(name)}${this.tokenQuery()}`;
+  artifactIconUrl = (code: string) => `${this.url}/api/artifacts/${encodeURIComponent(code)}/icon${this.tokenQuery()}`;
 
   private tokenQuery() {
     return this.token ? `?token=${encodeURIComponent(this.token)}` : "?";

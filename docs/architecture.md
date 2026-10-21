@@ -6,9 +6,9 @@
   └───────────────▲ REST + WebSocket（B08）────────────┘
   ┌───────────────┴──── engine/ (Python) ─────────────────┐
   │ api/      核心路由 + 各模块自注册的子路由与 WS 频道           │
-  │ modules/  hello(示例) automation…(B04+) rta_draft…(B13+)   │
+  │ modules/  hello(示例) automation…(B04+) rta_draft…(B14+)   │
   │ core/     geometry paths log | runtime events vision scene  │
-  │           data storage（B02+ 逐步加入）                       │
+  │           data（B13 英雄数据库）storage（逐步加入）             │
   │ device/   MuMuManager + nemu IPC(主) + adb(后备)             │
   └──────────────────────────────────────────────────────┘
 ```
@@ -144,6 +144,45 @@ python -m uv run e7helper run <id> [-c JSON] [-t 超时秒] [-d 助手运行秒]
 python -m uv run e7helper scene [-f 图片 ...] [--dismiss] [--watch]        # 识别场景/弹窗、关闭弹窗、持续观察
 ```
 
+## 游戏数据 `e7helper.core.data`（B13）
+不依赖设备的游戏资料，任务模块和助手模块都能直接用（助手只读帧，不需要别的能力）。目前只有英雄数据库。
+```python
+from e7helper.core.data import heroes
+db = heroes()                 # 进程内缓存；联网更新后 reload_heroes()
+db.get("c2111")               # Hero：code / name（国服中文名）/ name_en / aliases（昵称，含拼音）/ element / role / rarity / zodiac / stats / slug / released（发布日期）
+db.find("雪国的苏莉塔妮亚")    # 中文名 / 英文名 / 别名精确匹配（忽略空白、全半角、大小写、间隔号），OCR 结果可以直接查
+db.search("维德瑞")            # 包含关系：完全一致 → 开头一致 → 包含，同档按发布日期新的在前
+db.icon("c2111")              # 头像 BGR（112×112），没有返回 None；以后 BP 助手认头像用
+db.detail("c2111")            # HeroDetail：技能、角色奉献、专属装备（中文），没有返回 None
+db.artifacts()                # 神器编号 → {name（中文）, name_en}
+```
+| 文件 | 职责 |
+|---|---|
+| `hero_db.py` | `Hero` / `HeroFile`（heroes.json 的格式）/ `HeroDB`（查询、头像、详情、详情图标、神器表；按「用户数据目录 → 随包目录」查找）；`load_heroes()` 读两份 heroes.json、用 `updated` 较新的一份；属性 / 职业 / 星座 / 套装 / 属性类型的国服叫法（套装名对照游戏核对过）、四件套列表 |
+| `hero_detail.py` | `HeroDetail`（技能、灵魂燃烧、效果、强化、倍率、专属装备、角色奉献、群阵影响的位置 `devotion_slot`）；e7.wiki 数据 → 我们的格式（富文本：段落 → 片段，`hl` 是游戏里高亮的词） |
+| `hero_update.py` | 联网更新（只收 `c` 开头的编号，`m` 开头的愚人节怪物英雄不要）：Fribbels 的英雄 / 神器数据 + 简中翻译（`MirrorFetcher` 依次试 raw.githubusercontent.com、jsDelivr），e7.wiki 的角色列表（中文名、昵称、更新时间）和详情；有变化才写，详情只在 e7.wiki 更新时间变了时重下，缺的头像 / 图标才下；新数据比现有少一成以上就不覆盖；e7.wiki 连不上时只更新 Fribbels 那部分 |
+| `hero_builds.py` | 配装方案：Fribbels 配装库（`getBuilds`，POST 英雄英文名）的玩家配装 → 套装组合占比 / 属性中位数 / 常用神器；带速度套的组合分前 10% / 前 25%（按速度最快的那部分）/ 全部三行，不带的按速度三等分成快 / 中 / 慢三档，每行份数 + 属性中位数；装备分换算成装备均分（÷6）；缓存一天（带格式版本） |
+
+- **数据来源**（B13 用户确认）：
+  - [Fribbels Epic 7 Optimizer](https://github.com/fribbels/Fribbels-Epic-7-Optimizer)：`data/cache/herodata.json`（编号、属性、职业、星级、星座、60 级 6 星满觉醒属性、slug）、`artifactdata.json`（神器编号）、`data/locales/zh/translation.json`（简中名）、头像 `data/cachedimages/<编号>_s.png`；配装库接口 `krivpfvxi0.execute-api.us-west-2.amazonaws.com/dev/getBuilds`。
+  - e7.wiki（国服中文站）：`admin.e7.wiki/api/open/epicseven/hero/card-list`（中文名、昵称、更新时间）、`assets2.e7.wiki/static/heroes/<slug>.json`（技能等详情）和其中引用的图标。中文名优先用 e7.wiki 的。
+  - 神器图标：先官方指南站 `static.smilegatemegaport.com/.../wearingStatus/images/artifact/<编号>_ico.png`，新神器那里没有，再用 e7.wiki 的 `assets2.e7.wiki/arts/assets/item_arti/<图标名>.png`（图标名来自 e7.wiki 神器列表 `admin.e7.wiki/api/open/epicseven/artifact/artifact-list`，更新时存进 `artifacts.json`）；第一次显示时下载缓存。
+  - 属性 / 职业 / 套装图标：从游戏截图裁的，放在 GUI 的 `app/src/assets/game/`（见「GUI」）。
+- **存储**：随包 `engine/assets/data/heroes/`：`heroes.json`（一名英雄一行）、`icons/<编号>.png`、`details/<编号>.json` + `details/icons/`（技能 / 效果 / 专属装备图标，文件名沿用 e7.wiki 的）、`artifacts.json`（一件一行）、`overrides.json`。联网更新写 `<数据目录>/data/heroes/`（同样结构，只放新的）；配装缓存 `builds/<编号>.json`、神器图标缓存 `artifacts/<编号>.png` 也在这里。详情两边都有时用 e7.wiki 更新时间新的那份。`overrides.json` 按编号改中文名、加别名，加载时套用，更新不会冲掉。
+- **随包数据怎么更新**（发版前）：`python -m uv run e7helper heroes --update --bundled`（写进 `assets/data/heroes/`，补下载头像和图标，首次约 3 分钟）。玩家在 GUI「英雄图鉴」点「检查更新」= `POST /api/heroes/update`。
+- CLI：`e7helper heroes [搜索词] [--update [--bundled] [--no-icons]]`。
+- 接口（`api/heroes.py`，要 token；图片用 `?token=`）：
+
+| 路由 | 说明 |
+|---|---|
+| `GET /api/heroes` | 全部英雄 + `source` / `origin` / `updated` / `labels`（属性、职业、星座、套装、属性类型的中文名，`percent_stats`） |
+| `GET /api/heroes/{code}`、`GET /api/heroes/{code}/icon` | 一名英雄 / 头像 PNG |
+| `GET /api/heroes/{code}/detail` | 详情；没有 404 `no_detail` |
+| `GET /api/heroes/{code}/builds?refresh=` | 配装统计；下载失败 502 `builds_failed`（有旧缓存时返回旧的，带 `stale`） |
+| `GET /api/hero-icons/{name}` | 技能 / 效果 / 专属装备图标 |
+| `GET /api/artifacts/{code}/icon` | 神器图标（官方指南站 → e7.wiki）；都失败 502 `icon_failed` |
+| `POST /api/heroes/update` | 联网更新；正在更新 409 `busy`，下载失败 502 `update_failed` |
+
 ## API 层 `e7helper.api`（B08）
 ```
 python -m uv run e7helper serve [--port 47800] [--index N] [--no-connect] [--paused] [--no-auth] [--token X] [--allow-host H]
@@ -178,6 +217,7 @@ python -m uv run e7helper serve [--port 47800] [--index N] [--no-connect] [--pau
 | `POST /shutdown` → 202（B09） | 关闭服务（GUI 退出时关掉自己拉起的引擎）；只有 `serve` 起的服务支持，其他 501 |
 | `/capture/...`（B09，开发工具） | 模板采集，见下文 |
 | `/flows/...`、`/user-templates/...`（B11） | 自定义流程和玩家模板，见下文 |
+| `/heroes/...`（B13） | 英雄数据库，见「游戏数据」 |
 
 **模块子路由**：`Module.routes()` 返回的路由挂到 `/api/modules/<id>/`，同样要 token。第一段路径不能是 `config` / `stats` / `timers` 或路径参数，否则启动时报 `ModuleRegistryError`。fastapi 在 `routes()` 里再导入。已有：`GET /api/modules/daily/ledger`、`GET /api/modules/secret_shop/report`（B12c）。
 
@@ -257,7 +297,7 @@ pnpm typecheck
 | `src/lib/` | `api.ts`（REST）、`ws.ts`（/ws，断线重连）、`frames.ts`（/ws/frames → object URL）、`store.ts`（zustand：状态、场景、日志；事件到来时让 react-query 失效）、`time.ts`（三种时间格式统一转 Date）、`schema.ts`（JSON Schema → 字段）、`labels.ts`（场景名、状态、日志的中文化） |
 | `src/components/shell/` | 启动画面、顶栏（左边固定是索尔缇娅头像 + 「第七史诗助手」；右边模拟器、当前画面、下个计划、停止、窗口按钮）、左侧菜单、右侧「实时画面 + 动态」（可收起）、背景。窗口没有系统标题栏（`decorations: false`，B12）：顶栏就是标题栏（`data-tauri-drag-region`：拖动、双击最大化），`WindowControls` 画最小化 / 最大化 / 关闭（只在 Tauri 里显示）；启动画面顶上有一条 `WindowDragStrip` |
 | `src/components/module/` | 通用模块页：说明、计时胶囊、（开发版）演练条、自动表单、最近运行、底部行动条 |
-| `src/pages/` | 计划、运行记录、日志、设置、模板采集（开发版，菜单里叫「内置模板采集」）；B11：`FlowsPage`（我的流程）、`FlowEditorPage`（编辑流程）、`TemplatesPage`（我的模板） |
+| `src/pages/` | 计划、运行记录、日志、设置、模板采集（开发版，菜单里叫「内置模板采集」）；B11：`FlowsPage`（我的流程）、`FlowEditorPage`（编辑流程）、`TemplatesPage`（我的模板）；B13：`HeroesPage`（英雄图鉴） |
 | `src/components/flow/` | B11：步骤树（嵌套积木、拖动排序）、属性面板、模板选择 / 现场采集、坐标点选、冻结画面画布 |
 | `src/lib/flow.ts` | B11：流程的数据形状和步骤树操作（按 id 定位、插入 / 移动 / 复制、编号、中文描述、本地检查、校验错误定位） |
 | `src/modules/<id>/index.tsx` | 模块的界面扩展，见下 |
@@ -273,6 +313,9 @@ pnpm typecheck
 - 编辑流程：左边步骤树（「如果」「重复」是积木，里面再放步骤；拖动步骤左边的把手调整顺序、拖进 / 拖出积木，也有上移 / 下移），右边选中步骤的属性（模板缩略图选择、现场采集、在画面上点选坐标 / 画滑动线、「在当前画面上找」只截图测试），底部保存 / 运行。运行时按 `custom_flow.step` 事件高亮正在执行的那一步。离开页面时有未保存的修改会提醒（`useBlocker`）。
 - 我的模板：截图（或打开截图）→ 框要认的东西（可选框能点的地方）→ 起名、选「固定 / 会移动」「识别严格度」「变暗时不算」→ 保存并自测。下面列出玩家模板（用在哪些流程、在当前画面上找、删除）。
 - 运行记录里自定义流程显示成「流程「名字」」。流程编辑器和我的模板页需要宽画面，不显示右侧栏。
+
+**英雄图鉴（B13）**：左侧菜单「我的模板」下面，正式版也有。头像网格（属性色边框 + 右下角属性图标），默认按发布日期新的在前（没有日期的最后），搜索（中文名 / 英文名 / 昵称 / 编号）、属性 / 职业 / 星级筛选（`lib/heroes.ts` 的 `filterHeroes`，排序同引擎 `search`），右上「检查更新」。宽页面，不显示右侧栏。点开是 `components/heroes/HeroDetailDialog.tsx`（参照 e7.wiki 的角色详情）：角色信息（星级、属性 / 职业 / 星座、发布日期、简介、角色奉献、专属装备（主属性 + 三选一的效果，不显示背景说明）、满级属性；昵称只用来搜索，不显示）/ 技能详情（描述、灵魂燃烧、专属装备效果、技能特效、强化、倍率）/ 配装方案（Fribbels 玩家配装的套装组合、属性中位数表（带速度套的分前 10% / 前 25% / 中位，不带的分快 / 中 / 慢三档）、常用神器）。
+- **游戏图标**（B13 审核后加）：属性 `element_<键>`、职业 `role_<键>`、套装 `set_<键>`、属性类型 `stat_<键>`（cp / atk / def / hp / spd / chc / chd / eff / efr / dac）、等级 `grade_<b…sss>`、刻印 `devotion_self` / `devotion_team_<位置>`（群阵影响的位置，1 右、2 下、3 上、4 左）的 PNG 放在 `src/assets/game/`，是从游戏截图里裁出来、按按钮底色抠成透明的；`lib/gameIcons.ts` 用 `import.meta.glob` 按文件名收集，`gameIcon(name)` 没有时返回 undefined（调用方退回色块 / 文字）。
 
 **样式**：游戏风（原型见 `docs/prototypes/b09/d-epic.html`），配色和组件类在 `src/index.css`。背景是圣域（进入圣域时 UI 淡入前的一帧，`src/assets/bg_sanctuary.jpg`），用 CSS 压暗。只用系统字体（数字用 Bahnschrift）。
 

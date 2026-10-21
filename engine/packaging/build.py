@@ -158,6 +158,20 @@ def _smoke_serve(env: dict[str, str], data: Path) -> None:
         assert [f["name"] for f in flows] == ["冒烟"], flows
         print("[ok] 自定义流程：玩家模板存进数据目录，流程可以新建 / 列出")
 
+        # B13：随包的英雄数据和头像（不联网更新）
+        _, hs = call("/api/heroes")
+        assert hs["origin"] == "bundled" and hs["count"] >= 385 and all(h["icon"] for h in hs["heroes"]), hs["count"]
+        req = urllib.request.Request(url + "/api/heroes/c2111/icon", headers={"Authorization": "Bearer smoke-token"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            assert r.read(8) == b"\x89PNG\r\n\x1a\n"
+        _, det = call("/api/heroes/c2111/detail")
+        assert len(det["skills"]) == 3 and det["skills"][0]["icon"], det
+        req = urllib.request.Request(url + "/api/hero-icons/" + det["skills"][0]["icon"],
+                                     headers={"Authorization": "Bearer smoke-token"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            assert r.read(4) == b"RIFF"
+        print(f"[ok] 英雄数据库：随包 {hs['count']} 名，头像、技能详情和技能图标可读")
+
         asyncio.run(_smoke_ws(url))
         print("[ok] WebSocket：/ws hello、/ws/frames 未连接状态")
 

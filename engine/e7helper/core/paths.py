@@ -30,6 +30,18 @@ def module_data_dir(module_id: str) -> Path:
     return path
 
 
+def bundled_data_dir(name: str) -> Path:
+    """随包的游戏数据（B13，`core.data`）：assets/data/<name>/，只读。"""
+    return ASSETS_DIR / "data" / name
+
+
+def user_data_dir(name: str) -> Path:
+    """联网更新后的游戏数据（B13）：<数据目录>/data/<name>/，比随包的新时优先用。"""
+    path = data_dir() / "data" / name
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def debug_dir() -> Path:
     """任务失败时的调试信息目录：<数据目录>/debug/。"""
     path = data_dir() / "debug"
