@@ -1,6 +1,6 @@
 # HANDOFF
 
-> 新会话从这里读起。上次更新：2026-10-20（B12b 已通过）
+> 新会话从这里读起。上次更新：2026-10-20（B12c 已通过，打包 0.2.0）
 
 ## 当前进度
 - **B01 骨架 + 模块契约 + MuMu 设备层**：✅ 已通过，记录见 [reviews/B01.md](reviews/B01.md)。
@@ -18,7 +18,9 @@
 - **B12 试用打磨（开发版）**：✅ 已通过，记录见 [reviews/B12.md](reviews/B12.md)。9 条反馈：竞技场并入日常收取、补旗做成附加选项、精简全部说明、「动态」红色 asyncio 报错、书签刷取（固定三种商品 + 没出就停 / 换世界频道）、标题栏做进应用、引擎关闭挂住（改用 Selector 事件循环）、左上角固定头像和应用名、界面过渡动画。
 - **B12a 讨伐异界**：✅ 已通过，记录见 [reviews/B12a.md](reviews/B12a.md)。重复刷关加上「异界」难度和 阿吉玛纳克 / 卡戴斯 / 食人魔；异界消耗光谱核心，可用叶子 / 天空石补充；异界胜利后的宝珠画面；「托管最多几份」进表单；GUI 新增 `fieldLocks`（食人魔锁定异界）。全量 `890 passed, 7 skipped`，前端 16 个。
 - **B12b 日常收取：商店日常购买**：✅ 已通过，记录见 [reviews/B12b.md](reviews/B12b.md)。日常收取加一项「商店」（排在竞技场前）：交易所 › 竞技场 → 商店 › 一般 → 商店 › 传承石，买用户圈定的 14 件每日 / 每周限购商品；按周记账；GUI 商品点选。实跑买了 13 次，天空石 0。
-- 下一块：**B12c 书签刷取：历史统计**（B12b 审核后用户提出，排在 B13 英雄数据库前面）。
+- **B12c 书签刷取：历史统计**：✅ 已通过，记录见 [reviews/B12c.md](reviews/B12c.md)。书签刷取页「设置」下面加「刷取历史」（代替通用「最近运行」）：近 7 天 / 近 30 天 / 全部，商品卡（几次、共几个、平均刷几次出一次）、刷新 / 天空石 / 金币 / 运行次数、每天刷新次数柱状图（标出书签 / 奖牌，「全部」超过 45 天按周）、每次运行列表；dry-run 不算。删掉原「统计」页和各模块 `statLabels`。全量 `973 passed, 7 skipped`，前端 22 个。
+- **发布 0.2.0**（B12c 审核后用户要求）：五处版本号改成 0.2.0，重新冻结引擎、打 NSIS 安装包（见「打包」）。
+- 下一块：**B13 英雄数据库**（见下面「下一块」，先和用户确认再动手）。
 
 ## 已有能力
 ### 设备（B01）
@@ -64,7 +66,7 @@
 - 实跑：`-c '{"dry_run": false, "max_refreshes": N}'`。B12 起表单只有：`items`（固定三种商品，玩家点选：誓约书签 184,000 / 神秘奖牌 280,000 / 友情点数 18,000，默认前两种；按名字或图标识别，并核对价格）、`max_refreshes`「刷新次数」、`stop_after_misses`「连续多少次没出就停止」、`channel_after_misses`「连续多少次没出就换世界频道」、演练；天空石预算（默认不限）/ 保底、金币下限、`targets` 是内部接口；`probe_channel` 演练时换一次频道再换回来
 - 换世界频道（`chat.py`）：顶栏聊天图标 → 停在骑士团页签先点「频道」→ ⇆ →「变更频道」框输入当前频道号 +1 → 核对输入框数字 → 点框里的「输入」→ 标题变了才算 → 返回键一次关掉整个聊天。底部发消息的输入框绝不碰
 - B12 之前保存的配置（旧 targets + 预算 30）读进来会被 `_migrate_b12` 去掉旧默认值
-- 统计：`%LOCALAPPDATA%\e7helper\modules\secret_shop\history.jsonl`、`stats.json`
+- 统计：`%LOCALAPPDATA%\e7helper\modules\secret_shop\history.jsonl`、`stats.json`；B12c：`GET /api/modules/secret_shop/report?runs=500`（`stats.report`：实跑按天汇总 + 每次运行明细），GUI 书签刷取页的「刷取历史」（`src/modules/secret_shop/ShopHistory.tsx` + `report.ts`）
 - 实测：每页（扫两屏 + 刷新）约 3 秒，一次购买约 2 秒
 - 可以复用的做法：
   - 有消耗的操作**按资源读数差确认**，不按点击次数计；
@@ -158,8 +160,8 @@
 - **开发版 / 正式版**（`src/lib/env.ts`；用户意见：正式版面向玩家，按用户思维布局）：
   - 演练开关只在开发版显示（默认演练，切实跑要确认）；正式版启动任务、建计划一律 `dry_run:false`（`lib/run.ts`）。引擎里模块默认仍是演练。
   - 只在开发版出现：模板采集、示例模块、日志「全部」、设备后端、引擎地址；`VITE_E7_DEV=1` 可在打包版打开。
-- **页面**：各模块页（通用：说明、计时胶囊、设置自动保存、最近运行、底部开始 / 停止）、计划（列表、新建 / 编辑、推荐计划、总开关）、运行记录、统计、日志、设置（模拟器连接 / 切换实例）、模板采集（开发版）。外壳：顶栏（模拟器、当前画面、下个计划、停止）、左侧菜单、右侧「实时画面 + 动态」。
-- **模块界面扩展**：`src/modules/<id>/index.tsx` 默认导出 `ModuleUI`，自动收集（图标、菜单名、字段图标 / 依赖 / 开发版字段、统计项中文名、推荐计划、`RunExtra`、`Header`、`onConfigSaved`）。daily 的「持续收菜」是 `RunExtra`；repeat_battle 推荐「托管自动结算」计划。
+- **页面**：各模块页（通用：说明、计时胶囊、设置自动保存、最近运行、底部开始 / 停止）、计划（列表、新建 / 编辑、推荐计划、总开关）、运行记录、日志、设置（模拟器连接 / 切换实例）、模板采集（开发版）。外壳：顶栏（模拟器、当前画面、下个计划、停止）、左侧菜单、右侧「实时画面 + 动态」。
+- **模块界面扩展**：`src/modules/<id>/index.tsx` 默认导出 `ModuleUI`，自动收集（图标、菜单名、字段图标 / 依赖 / 开发版字段、推荐计划、`RunExtra`、`Header`、`onConfigSaved`）。daily 的「持续收菜」是 `RunExtra`；repeat_battle 推荐「托管自动结算」计划。
 - **样式**：游戏风（原型 `docs/prototypes/b09/d-epic.html`，用户选定），主题和组件类在 `src/index.css`；背景是压暗的圣域图 `src/assets/bg_sanctuary.jpg`。
 - **引擎新增**：`POST /api/shutdown`；`/api/capture/*` 模板采集接口（`api/capture.py`）；各模块配置字段补了中文 `title`。
 - 测试：前端 `src/lib/*.test.ts`（vitest）；引擎 `tests/test_capture_api.py`。全量 `705 passed, 7 skipped`。
@@ -171,10 +173,12 @@
   - B12a：`ModuleUI.fieldLocks(config)` 按当前设置锁定字段（显示锁定值、变灰，和设置不一致时自动写入）；计划编辑里的设置改成函数式更新。
   - 过渡动画：`index.css` 里的 `--ease-*` / `--dur-*` 和 `anim-page` / `anim-dialog` / `anim-overlay` / `anim-menu` / `anim-slide-right` / `toast`；页面区按路径加 key（流程编辑器的路径算一页）。系统「减少动画」时全部关掉。
   - 说明文字只写功能做什么（用户意见），不写运行逻辑和安全规则。
+  - B12c：「统计」页删掉了；`ModuleUI.RunsPanel` 代替通用「最近运行」（书签刷取的刷取历史）；`api.moduleGet(id, path)` 调模块子路由。
 
 ### 打包（B10，详见 architecture.md「打包发布」和 reviews/B10.md）
 - `cd engine && python -m uv run --group build python packaging/build.py`：检查 5 处版本号 → PyInstaller onedir → 冒烟测试（不碰设备）。产物 `engine/dist/e7engine/` 约 272MB、352 个文件。
-- `cd app && pnpm bundle`（= `tauri build --config src-tauri/tauri.bundle.conf.json`）：安装包 `app/src-tauri/target/release/bundle/nsis/第七史诗助手_0.1.0_x64-setup.exe`，约 96MB。
+- `cd app && pnpm bundle`（= `tauri build --config src-tauri/tauri.bundle.conf.json`）：安装包 `app/src-tauri/target/release/bundle/nsis/第七史诗助手_<版本>_x64-setup.exe`，约 96MB。
+- **当前发布 0.2.0**（2026-10-20，B12c 之后）：引擎 `dist/e7engine/` 272MB、446 个文件，冒烟测试全过；安装包 `第七史诗助手_0.2.0_x64-setup.exe` 97.39 MiB（Rust release 编译 3 分 35 秒）。没装，直接跑 `target/release/e7helper.exe`（临时数据目录、`--no-connect --paused`）：5.1 秒拉起随包 `engine/e7engine.exe`，`/api/health` 版本 0.2.0；关窗口后引擎退出、api.json 删除。冻结版的 `GET /api/modules/secret_shop/report` 实测能用。下次发版改 5 处版本号（`build.py` 会检查）。
 - 引擎冻结：`engine/packaging/`（`entry.py`、`e7engine.spec`、`build.py`）；冻结后 `paths.FROZEN`，`ENGINE_ROOT = sys._MEIPASS`；解释器开 `-X utf8`。
 - `engine.rs`：release 构建拉起 `<资源目录>/engine/e7engine.exe serve --port 0`；debug 构建照旧用 venv；`E7_ENGINE_DIR` / `E7_ENGINE_ARGS` / `E7_DATA_DIR` 两种构建都认。
 - 应用名「第七史诗助手」，exe `e7helper.exe`；NSIS `installMode: both`、简体中文；当前用户默认装到 `%LOCALAPPDATA%\Programs\第七史诗助手`。
@@ -238,6 +242,11 @@
   - 神秘商店改名「书签刷取」：商品固定三种（誓约书签 / 神秘奖牌 / 友情点数），选中高亮、不能增删；设置只留刷新次数 / 连续没出就停 / 连续没出就换世界频道；换频道 = 当前频道号 +1；
   - 标题栏做进应用（自己画窗口按钮），左上固定头像 + 应用名；界面加过渡动画；
   - 讨伐异界和后三个地下城单独立项 B12a；日常收取的商店日常购买单独立项 B12b；都在 B12 之后做。
+- B12c（2026-10-20 审核通过）：
+  - 统计只做书签刷取，不单独做页面，删掉原「统计」页（用户意见）；
+  - 放在设置下面代替「最近运行」、范围按钮、商品卡 / 数字 / 柱状图 / 每次运行列表、dry-run 不算、数据全部从 `history.jsonl` 算（我的决定，审核没有异议）；
+  - 书签一次 5 个、奖牌一次 50 个写在前端 `items.ts`。
+- 发布：B12c 后打包 0.2.0（用户要求发 release，版本号是我的决定）。
 - B12b（用户选择，2026-10-20 审核通过）：
   - 花金币 / 免费 / 友情点数 / 各类代币，不花天空石；每日 + 每周限购都买；商品按用户截图圈定（14 件），表单是开关 + 逐个点选；
   - 光谱核心（160 行动力）行动力够就买满、不留保底；亲密度献礼选择箱越买越贵，每周只买 5 次；5面旗帜不进清单，由竞技场的「用友情点数补充旗帜」负责；
@@ -249,19 +258,7 @@
   - 只有食人魔只有异界（用户纠正），GUI 选食人魔时难度锁定成异界，引擎收到别的难度直接停止并提示；
   - 「托管最多几份」放进表单（默认 0 = 不限，持有多少就全部拿来开托管）。
 
-## 下一块（B12c 书签刷取：历史统计）要做
-用户意见（2026-10-20）：「优化一下刷书签页面，加个可以统计历史情况的 feature，把 app 原有的统计页面删掉」。补充：
-- **统计只做书签刷取**，日常收取、重复刷关的统计不要了；
-- **不在 GUI 上单独做页面**，放进书签刷取的页面里；
-- 表现形式由我决定（审核时再调）。
-
-1. 开工：ROADMAP 把 B12c 标进行中，建 `docs/reviews/B12c.md`。
-2. 设计时自己定（写进审核记录，审核时用户看）：放在页面哪里（例如设置下面一块可折叠 / 页签切换「设置 | 历史」）、看什么（累计、按天 / 按周汇总、每次运行明细、平均多少次刷新出一个书签 / 奖牌、花费）、要不要小图表；正式版没有演练，dry-run 的记录不算进去。按「说明只讲功能」「游戏风」的用户偏好做（memory 里有）。
-3. 删掉原「统计」页：`app/src/pages/StatsPage.tsx`、`App.tsx` 里的 `stats` 路由、左侧菜单的「统计」；各模块 `statLabels` 只剩书签刷取用得上的（其他的可以删）；对应的前端测试一起改。引擎的 `GET /api/modules/{id}/stats` 留着（书签刷取的历史要用）。
-4. 数据：`%LOCALAPPDATA%\e7helper\modules\secret_shop\history.jsonl`（每次运行一行，含 dry-run；`secret_shop/stats.py` 的 `RunStats`：`purchases` 带价格和第几页、`channel_switches` 等）+ `stats.json`（累计）。现有接口 `?limit=N` 只给最近 N 次；按天汇总、出货率等可以在引擎加一个书签刷取自己的子路由（`routes()`），或者前端算。
-5. 不碰真机也能做（用已有的 history.jsonl 或造的数据）；验证用浏览器面板 + 不连设备的临时引擎（做法见 reviews/B12b.md「GUI」）。
-
-## 之后（B13 英雄数据库）要做（B12c 之后再开始）
+## 下一块（B13 英雄数据库）要做
 ROADMAP「B13+ 扩展模块」：英雄数据库（core/data）→ RTA BP 助手（assistant）→ 装备扫描 → GVG 作业查询 → 兑换码 → 资源统计，每个单独立项和审核。B13 先做英雄数据库，它是后面 RTA BP 助手的基础。
 1. **先和用户确认**：
    - 数据来源（官方指南站 / epic7db / Fribbels 的 `herodata.json` 等，B10 找图标时用过）、更新方式（随包内置 + 联网更新？）、许可和版权；

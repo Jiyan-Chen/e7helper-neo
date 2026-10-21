@@ -1,4 +1,4 @@
-import { BarChart3, CalendarClock, Crop, History, Images, ScrollText, Settings, Workflow } from "lucide-react";
+import { CalendarClock, Crop, History, Images, ScrollText, Settings, Workflow } from "lucide-react";
 import { NavLink } from "react-router";
 import { Ornament } from "@/components/ui/Ornament";
 import { isDev } from "@/lib/env";
@@ -10,7 +10,6 @@ import { menuModules, moduleUI } from "@/modules/registry";
 const PAGES = [
   { to: "/schedules", label: "计划", icon: CalendarClock },
   { to: "/history", label: "运行记录", icon: History },
-  { to: "/stats", label: "统计", icon: BarChart3 },
   { to: "/logs", label: "日志", icon: ScrollText },
   { to: "/settings", label: "设置", icon: Settings },
 ];

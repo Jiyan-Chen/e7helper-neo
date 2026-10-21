@@ -62,12 +62,6 @@ export interface ModuleTimer {
   note: string;
 }
 
-export interface ModuleStats {
-  module: string;
-  stats: Record<string, unknown> | null;
-  history: Record<string, unknown>[];
-}
-
 export interface LogRecord {
   level: "DEBUG" | "INFO" | "WARNING" | "ERROR" | "CRITICAL";
   name: string;

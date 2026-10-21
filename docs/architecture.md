@@ -179,7 +179,7 @@ python -m uv run e7helper serve [--port 47800] [--index N] [--no-connect] [--pau
 | `/capture/...`（B09，开发工具） | 模板采集，见下文 |
 | `/flows/...`、`/user-templates/...`（B11） | 自定义流程和玩家模板，见下文 |
 
-**模块子路由**：`Module.routes()` 返回的路由挂到 `/api/modules/<id>/`，同样要 token。第一段路径不能是 `config` / `stats` / `timers` 或路径参数，否则启动时报 `ModuleRegistryError`。fastapi 在 `routes()` 里再导入。已有：`GET /api/modules/daily/ledger`。
+**模块子路由**：`Module.routes()` 返回的路由挂到 `/api/modules/<id>/`，同样要 token。第一段路径不能是 `config` / `stats` / `timers` 或路径参数，否则启动时报 `ModuleRegistryError`。fastapi 在 `routes()` 里再导入。已有：`GET /api/modules/daily/ledger`、`GET /api/modules/secret_shop/report`（B12c）。
 
 ### WebSocket
 - `/ws?token=`：连上后先收到 `{"type":"hello","data":<status>}`。请求 `{"id", "op", ...}`，每个都有回复 `{"type":"reply","id","ok","data"|"error"}`：
@@ -257,12 +257,12 @@ pnpm typecheck
 | `src/lib/` | `api.ts`（REST）、`ws.ts`（/ws，断线重连）、`frames.ts`（/ws/frames → object URL）、`store.ts`（zustand：状态、场景、日志；事件到来时让 react-query 失效）、`time.ts`（三种时间格式统一转 Date）、`schema.ts`（JSON Schema → 字段）、`labels.ts`（场景名、状态、日志的中文化） |
 | `src/components/shell/` | 启动画面、顶栏（左边固定是索尔缇娅头像 + 「第七史诗助手」；右边模拟器、当前画面、下个计划、停止、窗口按钮）、左侧菜单、右侧「实时画面 + 动态」（可收起）、背景。窗口没有系统标题栏（`decorations: false`，B12）：顶栏就是标题栏（`data-tauri-drag-region`：拖动、双击最大化），`WindowControls` 画最小化 / 最大化 / 关闭（只在 Tauri 里显示）；启动画面顶上有一条 `WindowDragStrip` |
 | `src/components/module/` | 通用模块页：说明、计时胶囊、（开发版）演练条、自动表单、最近运行、底部行动条 |
-| `src/pages/` | 计划、运行记录、统计、日志、设置、模板采集（开发版，菜单里叫「内置模板采集」）；B11：`FlowsPage`（我的流程）、`FlowEditorPage`（编辑流程）、`TemplatesPage`（我的模板） |
+| `src/pages/` | 计划、运行记录、日志、设置、模板采集（开发版，菜单里叫「内置模板采集」）；B11：`FlowsPage`（我的流程）、`FlowEditorPage`（编辑流程）、`TemplatesPage`（我的模板） |
 | `src/components/flow/` | B11：步骤树（嵌套积木、拖动排序）、属性面板、模板选择 / 现场采集、坐标点选、冻结画面画布 |
 | `src/lib/flow.ts` | B11：流程的数据形状和步骤树操作（按 id 定位、插入 / 移动 / 复制、编号、中文描述、本地检查、校验错误定位） |
 | `src/modules/<id>/index.tsx` | 模块的界面扩展，见下 |
 
-**模块界面扩展**：在 `src/modules/<id>/index.tsx` 默认导出 `ModuleUI`（`src/modules/types.ts`），`import.meta.glob` 自动收集、按 module id 挂载；没有的模块用通用页。可以提供：图标和菜单顺序、菜单短名、运行按钮文字、字段图标、字段依赖（控制项关掉时变灰）、附加选项 `subFields`（画在主开关那一行里，B12）、自己画的字段 `fieldRenderers`（例如书签刷取的商品选择，B12）、按设置锁定字段 `fieldLocks`（例如重复刷关选食人魔时难度锁定成异界，锁定值会自动写进设置，B12a）、只在开发版显示的字段、统计项中文名（统计页按它显示）、推荐计划（计划页一键添加）、`RunExtra`（运行条左侧控件）、`Header`、`onConfigSaved`。
+**模块界面扩展**：在 `src/modules/<id>/index.tsx` 默认导出 `ModuleUI`（`src/modules/types.ts`），`import.meta.glob` 自动收集、按 module id 挂载；没有的模块用通用页。可以提供：图标和菜单顺序、菜单短名、运行按钮文字、字段图标、字段依赖（控制项关掉时变灰）、附加选项 `subFields`（画在主开关那一行里，B12）、自己画的字段 `fieldRenderers`（例如书签刷取的商品选择，B12）、按设置锁定字段 `fieldLocks`（例如重复刷关选食人魔时难度锁定成异界，锁定值会自动写进设置，B12a）、只在开发版显示的字段、推荐计划（计划页一键添加）、`RunExtra`（运行条左侧控件）、`Header`、`RunsPanel`（代替通用的「最近运行」，B12c）、`onConfigSaved`。
 - 例：`daily` 的「持续收菜」= `RunExtra`，开关一条 `module` 触发的计划；`onConfigSaved` 把新设置同步进这条计划的配置快照。
 - 例：`repeat_battle` 的推荐计划「托管自动结算」= 每 30 分钟、`manual: false`。
 
@@ -311,8 +311,9 @@ pnpm bundle                                                       # = tauri buil
 | `page.py` | 纯函数识别：`scan_items`（以「购买」按钮为锚点读名字/价格/金币图标/物品图标）、`read_resources`（先定位顶栏图标再读数）、`read_refresh_cost`、`read_buy_dialog`；决策 `decide` |
 | `chat.py` | 换世界频道（B12）：`ChannelSwitcher.switch()`：聊天图标 → 停在骑士团页签就先点「频道」→ 读标题「频道#N」→ ⇆ → 「变更频道」框 → 点输入框 → `ctl.input_text(N+1)` → 核对输入框里的数字 → 点框里的「输入」→ 标题变成 N+1 → 返回键关掉聊天。9999 之后回到 1；底部发消息的输入框绝不碰 |
 | `config.py` | `SecretShopConfig`：表单 `items`（三种固定商品，`CATALOG`：誓约书签 / 神秘奖牌 / 友情点数）、`max_refreshes`、`stop_after_misses`、`channel_after_misses`、`dry_run`；开发版 `refresh_cost` / `max_failures` / `probe_dialogs`；内部 `targets`（直接指定，测试用）、`skystone_budget`（默认不限）、`skystone_keep`、`gold_floor`、`probe_channel`（演练时换过去再换回来）。`_migrate_b12` 去掉 B12 之前保存的旧默认值 |
-| `stats.py` | `data_dir/history.jsonl`（每次运行一行，含 `max_misses`、`channel_switches`）、`stats.json`（实跑累计，含换频道次数） |
+| `stats.py` | `data_dir/history.jsonl`（每次运行一行，含 dry-run、`max_misses`、`channel_switches`）、`stats.json`（实跑累计，含换频道次数）；B12c：`load_history` / `report`（实跑记录按天汇总 + 每次运行明细，中断原因换成「手动停止」等），给 `GET /api/modules/secret_shop/report?runs=500` 用 |
 
+- **刷取历史**（B12c，GUI `src/modules/secret_shop/ShopHistory.tsx`，数据和汇总在 `report.ts`）：书签刷取页底部代替「最近运行」。时间范围 近 7 天 / 近 30 天 / 全部（记在 localStorage）；商品卡（出了几次、共几个、平均刷几次出一次 = 页数 ÷ 次数）、刷新次数 / 天空石 / 金币 / 运行次数；每天刷新次数柱状图（「全部」跨度超过 45 天按周），柱子上方标出买到的书签 / 奖牌，悬停看明细；每次运行列表（默认 6 条，可展开）。dry-run 的记录不算。原「统计」页 B12c 删掉了，引擎的 `GET /api/modules/{id}/stats` 留着。
 - 「没出」= 这一页（进店时的列表 + 每次刷新后）没有任何选中的商品，买没买到都不算没出；出了就清零。连续 N 页没出就停止（不再刷新）；连续页数是 M 的倍数时换一次频道。
 - 换频道失败（界面没出现、数字没输进去、标题没变）只记一次失败，关掉聊天接着刷。
 

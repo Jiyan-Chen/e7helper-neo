@@ -33,17 +33,6 @@ const ui: ModuleUI = {
     refill_skystone: "manual",
     max_skystone_refills: "refill_skystone",
   },
-  statLabels: {
-    runs: "运行次数",
-    battles: "手动场数",
-    auto_claimed: "托管结算",
-    auto_started: "托管重开",
-    auto_runs_claimed: "托管完成次数",
-    energy_spent: "花费行动力",
-    cores_spent: "花费光谱核心",
-    leaves_spent: "用掉生命之叶",
-    skystone_spent: "花费天空石",
-  },
   presets: [
     {
       name: "托管自动结算",

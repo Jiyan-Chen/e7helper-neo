@@ -10,7 +10,7 @@ from shop_sim import BUY_PRICE, ShopSim
 from e7helper.core.runtime import Humanize, Runtime, TaskStatus
 from e7helper.core.scene import default_detector
 from e7helper.core.vision import Vision
-from e7helper.modules.secret_shop import SecretShopConfig, SecretShopModule, Target, page
+from e7helper.modules.secret_shop import SecretShopConfig, SecretShopModule, Target, page, stats
 from e7helper.modules.secret_shop.page import Resources, ShopItem, decide, match_target, name_matches, near_miss
 
 LIST_A_TOP = ["橄榄石龙", "铁血剑兵", "友情点数", "风云风獬兽"]
@@ -556,3 +556,76 @@ def test_dry_run_probe_channel_switches_back(tmp_path, monkeypatch):
     _assert_chat_safe(sim)
     assert sim.channel_history == [70, 69] and sim.confirms == 0
     assert _history(tmp_path)[-1]["channel_switches"] == []
+
+
+# ---------------------------------------------------------------- 刷取历史（B12c）
+
+
+def _rec(started, *, dry=False, refreshes=0, sky=0, gold=0, pages=1, buys=(), switches=0, reason="达到最多刷新次数 3",
+         **extra):
+    r = {"dry_run": dry, "started": started, "ended": started, "refreshes": refreshes, "skystone_spent": sky,
+         "gold_spent": gold, "pages": pages, "purchases": [{"name": n, "price": 1, "page": p, "time": started} for n, p in buys],
+         "would_buy": [], "failures": 0, "max_misses": 2, "channel_switches": [{"old": 1, "new": 2, "page": 0}] * switches,
+         "stop_reason": reason}
+    r.update(extra)
+    return r
+
+
+def test_report_skips_dry_run_and_groups_by_day():
+    records = [
+        _rec("2026-10-14T21:04:07", dry=True, refreshes=5, buys=[("誓约书签", 0)]),
+        _rec("2026-10-15T00:55:47", refreshes=3, sky=9, pages=4),
+        _rec("2026-10-15T23:59:00", refreshes=3, sky=9, gold=464000, pages=4, buys=[("神秘奖牌", 1), ("誓约书签", 3)],
+             switches=1),
+        _rec("2026-10-17T08:00:00", refreshes=10, sky=30, gold=184000, pages=11, buys=[("誓约书签", 7)]),
+    ]
+    rep = stats.report(records)
+    assert rep["run_count"] == 3
+    assert [d["date"] for d in rep["days"]] == ["2026-10-15", "2026-10-17"]
+    d15 = rep["days"][0]
+    assert (d15["runs"], d15["refreshes"], d15["skystone_spent"], d15["gold_spent"], d15["pages"]) == (2, 6, 18, 464000, 8)
+    assert d15["bought"] == {"神秘奖牌": 1, "誓约书签": 1} and d15["channel_switches"] == 1
+    # 明细新的在前，带每次买到的商品和第几页
+    assert [r["started"] for r in rep["runs"]] == ["2026-10-17T08:00:00", "2026-10-15T23:59:00", "2026-10-15T00:55:47"]
+    assert rep["runs"][1]["purchases"] == [{"name": "神秘奖牌", "page": 1}, {"name": "誓约书签", "page": 3}]
+    assert rep["runs"][1]["bought"] == {"神秘奖牌": 1, "誓约书签": 1}
+    assert stats.report(records, runs_limit=1)["runs"][0]["started"] == "2026-10-17T08:00:00"
+    assert stats.report(records, runs_limit=1)["run_count"] == 3
+
+
+def test_report_old_records_and_stop_reasons():
+    old = _rec("2026-10-15T01:17:43", reason="TaskStopped：stopped")
+    del old["max_misses"], old["channel_switches"]  # B04 时期的记录
+    rep = stats.report([
+        old,
+        _rec("2026-10-16T01:00:00", reason="TaskTimeout：timeout"),
+        _rec("2026-10-16T02:00:00", reason="ShopAnomaly：天空石读数差 6"),
+        _rec("2026-10-16T03:00:00", reason="连续 5 页没出要买的商品"),
+        {"dry_run": False},  # 坏记录跳过
+    ])
+    reasons = {r["started"]: r["stop_reason"] for r in rep["runs"]}
+    assert reasons == {"2026-10-15T01:17:43": "手动停止", "2026-10-16T01:00:00": "超过时限",
+                       "2026-10-16T02:00:00": "出错：天空石读数差 6", "2026-10-16T03:00:00": "连续 5 页没出要买的商品"}
+    first = rep["runs"][-1]
+    assert first["channel_switches"] == 0 and first["max_misses"] == 0
+
+
+def test_load_history_skips_bad_lines(tmp_path):
+    (tmp_path / "history.jsonl").write_text('{"dry_run": false, "started": "2026-10-15T01:00:00"}\n坏行\n[1]\n',
+                                            encoding="utf-8")
+    assert len(stats.load_history(tmp_path)) == 1
+    assert stats.load_history(tmp_path / "nope") == []
+
+
+def test_live_run_shows_in_report(tmp_path, monkeypatch):
+    """实跑写进 history.jsonl 后，report 能读到；dry-run 的不出现。"""
+    target = [{"name": "灿烂精髓长袍", "price": BUY_PRICE}]
+    _run(ShopSim("lobby", first_list="B"), tmp_path, monkeypatch, targets=target)  # dry-run
+    sim = ShopSim("lobby", first_list="B", confirm="ok")
+    assert _run(sim, tmp_path, monkeypatch, dry_run=False, max_refreshes=3, targets=target).ok
+    assert len(_history(tmp_path)) == 2
+    rep = stats.report(stats.load_history(tmp_path / "data" / "modules" / "secret_shop"))
+    assert rep["run_count"] == 1
+    run = rep["runs"][0]
+    assert (run["refreshes"], run["skystone_spent"], run["bought"]) == (3, 9, {"灿烂精髓长袍": 2})
+    assert [d["refreshes"] for d in rep["days"]] == [3]

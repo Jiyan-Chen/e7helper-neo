@@ -9,12 +9,6 @@ const ui: ModuleUI = {
   menuLabel: "自定义流程",
   menuHidden: true,
   fieldIcons: { flow: Workflow },
-  statLabels: {
-    runs: "运行次数",
-    succeeded: "成功",
-    taps: "点击次数",
-    blocked: "被安全规则拦下",
-  },
 };
 
 export default ui;

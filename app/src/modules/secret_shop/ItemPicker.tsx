@@ -1,15 +1,7 @@
 // 书签刷取：要买的商品。固定三种，点一下选中（高亮）/ 取消，不能增删改（B12 用户意见）。
 import { cn } from "@/lib/utils";
 import type { FieldRendererProps } from "../types";
-import covenant from "./icons/covenant.png";
-import friendship from "./icons/friendship.png";
-import mystic from "./icons/mystic.png";
-
-const ITEMS = [
-  { id: "covenant", name: "誓约书签", icon: covenant },
-  { id: "mystic", name: "神秘奖牌", icon: mystic },
-  { id: "friendship", name: "友情点数", icon: friendship },
-] as const;
+import { ITEMS } from "./items";
 
 export function ItemPicker({ field, value, onChange }: FieldRendererProps) {
   const picked = new Set(Array.isArray(value) ? (value as string[]) : []);

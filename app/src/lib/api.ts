@@ -1,7 +1,7 @@
 // REST 客户端。错误格式见 architecture.md「API 层」：{"error": {"code", "message", "detail"}}。
 import type {
   CaptureFrame, CaptureHit, CaptureSaveBody, CaptureSaved, CaptureTemplate, Rect4,
-  DeviceInfo, Instances, LogRecord, ModuleDetail, ModuleInfo, ModuleStats, ModuleTimer, Schedule,
+  DeviceInfo, Instances, LogRecord, ModuleDetail, ModuleInfo, ModuleTimer, Schedule,
   ScheduleSpec, SchedulesSnapshot, SceneInfo, Status, TaskRecord,
 } from "./types";
 import type { Flow, FlowSummary, UserTemplate } from "./flow";
@@ -75,7 +75,8 @@ export class Api {
   module = (id: string) => this.get<ModuleDetail>(`/api/modules/${id}`);
   saveConfig = (id: string, config: Record<string, unknown>) =>
     this.request<Record<string, unknown>>("PUT", `/api/modules/${id}/config`, config);
-  stats = (id: string, limit = 20) => this.get<ModuleStats>(`/api/modules/${id}/stats?limit=${limit}`);
+  /** 模块自己的子路由（GET /api/modules/<id>/<path>） */
+  moduleGet = <T>(id: string, path: string) => this.get<T>(`/api/modules/${id}/${path}`);
   timers = (id: string) => this.get<ModuleTimer[]>(`/api/modules/${id}/timers`);
 
   // 任务

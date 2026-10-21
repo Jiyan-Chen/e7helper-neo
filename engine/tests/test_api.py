@@ -311,6 +311,27 @@ def test_real_modules_daily_routes(tmp_path, detector):
             assert c.get(f"/api/modules/{mid}/config").json()["dry_run"] is True
 
 
+def test_real_modules_secret_shop_report(tmp_path, detector):
+    """书签刷取的刷取历史（B12c）：dry-run 不算，按天汇总，明细新的在前。"""
+    d = tmp_path / "data" / "modules" / "secret_shop"
+    d.mkdir(parents=True)
+    lines = [
+        {"dry_run": True, "started": "2026-10-14T21:04:07", "refreshes": 9, "purchases": []},
+        {"dry_run": False, "started": "2026-10-15T00:55:47", "refreshes": 3, "skystone_spent": 9, "pages": 4,
+         "purchases": [{"name": "誓约书签", "price": 184000, "page": 2}]},
+        {"dry_run": False, "started": "2026-10-16T01:00:00", "refreshes": 1, "skystone_spent": 3, "pages": 2,
+         "purchases": []},
+    ]
+    (d / "history.jsonl").write_text("".join(json.dumps(x, ensure_ascii=False) + "\n" for x in lines), encoding="utf-8")
+    engine = make_engine(tmp_path, detector, modules=discover())
+    with _client(engine, autoconnect=False) as c:
+        rep = c.get("/api/modules/secret_shop/report").json()
+        assert rep["run_count"] == 2 and [x["date"] for x in rep["days"]] == ["2026-10-15", "2026-10-16"]
+        assert rep["days"][0]["bought"] == {"誓约书签": 1}
+        assert c.get("/api/modules/secret_shop/report?runs=1").json()["runs"][0]["started"] == "2026-10-16T01:00:00"
+        assert c.get("/api/modules/secret_shop/report", headers={"Authorization": ""}).status_code == 401
+
+
 # ---------------------------------------------------------------- 任务
 
 

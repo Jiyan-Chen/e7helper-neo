@@ -26,6 +26,7 @@ export function ModulePage({ moduleId }: { moduleId: string }) {
   if (error || !module || !config) return <div className="p-6 text-bad">打不开这个功能：{errorMessage(error)}</div>;
   const dryField = fields.find((f) => f.key === "dry_run");
   const Header = ui.Header;
+  const RunsPanel = ui.RunsPanel;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -48,10 +49,12 @@ export function ModulePage({ moduleId }: { moduleId: string }) {
             </div>
             <ConfigForm fields={fields} config={config} update={update} errors={errors} ui={ui} />
           </section>
-          <section className="panel px-4 py-3.5">
-            <h3 className="panel-title mb-2">最近运行</h3>
-            <RecentRuns moduleId={moduleId} />
-          </section>
+          {RunsPanel ? <RunsPanel module={module} config={config} /> : (
+            <section className="panel px-4 py-3.5">
+              <h3 className="panel-title mb-2">最近运行</h3>
+              <RecentRuns moduleId={moduleId} />
+            </section>
+          )}
         </div>
       </div>
       <RunBar module={module} config={config} ui={ui} />

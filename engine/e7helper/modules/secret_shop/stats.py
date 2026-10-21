@@ -101,3 +101,93 @@ def load_totals(data_dir: Path) -> dict:
         except (OSError, ValueError):
             log.warning("累计统计文件损坏，重新开始计数：%s", path)
     return total
+
+
+# ---------------------------------------------------------------- 历史统计（B12c，GUI 书签刷取页的「刷取历史」）
+
+# 任务被中断时 stop_reason 是「异常类名：消息」，换成玩家看得懂的说法
+_ABORT_REASONS = {"TaskStopped": "手动停止", "TaskTimeout": "超过时限", "TaskStuck": "画面卡住"}
+
+
+def load_history(data_dir: Path) -> list[dict]:
+    """读 history.jsonl 的全部记录；坏行跳过。"""
+    path = data_dir / "history.jsonl"
+    if not path.exists():
+        return []
+    records = []
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        log.exception("运行记录读取失败：%s", path)
+        return []
+    for line in lines:
+        try:
+            r = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(r, dict):
+            records.append(r)
+    return records
+
+
+def _reason(text: str) -> str:
+    name, sep, msg = (text or "").partition("：")
+    if sep and name in _ABORT_REASONS:
+        return _ABORT_REASONS[name]
+    if sep and name.isidentifier() and name[:1].isupper():  # 其他异常：只留消息
+        return f"出错：{msg}" if msg else "出错"
+    return text or ""
+
+
+def _int(v) -> int:
+    return v if isinstance(v, int) and not isinstance(v, bool) else 0
+
+
+def report(records: list[dict], runs_limit: int = 500) -> dict:
+    """实跑记录（dry-run 不算）按天汇总 + 每次运行的明细（新的在前，最多 runs_limit 条）。
+
+    天按开始时间的本地日期（记录里的时间就是本地时间）。B04 时期的旧记录没有 max_misses / channel_switches，按 0 算。
+    """
+    days: dict[str, dict] = {}
+    runs: list[dict] = []
+    for r in records:
+        if r.get("dry_run", True) is not False:
+            continue
+        started = r.get("started")
+        if not isinstance(started, str) or len(started) < 10:
+            continue
+        purchases = [p for p in r.get("purchases") or [] if isinstance(p, dict) and isinstance(p.get("name"), str)]
+        bought: dict[str, int] = {}
+        for p in purchases:
+            bought[p["name"]] = bought.get(p["name"], 0) + 1
+        switches = r.get("channel_switches")
+        run = {
+            "started": started,
+            "ended": r.get("ended"),
+            "refreshes": _int(r.get("refreshes")),
+            "skystone_spent": _int(r.get("skystone_spent")),
+            "gold_spent": _int(r.get("gold_spent")),
+            "pages": _int(r.get("pages")),
+            "bought": bought,
+            "purchases": [{"name": p["name"], "page": _int(p.get("page"))} for p in purchases],
+            "channel_switches": len(switches) if isinstance(switches, list) else 0,
+            "max_misses": _int(r.get("max_misses")),
+            "failures": _int(r.get("failures")),
+            "stop_reason": _reason(str(r.get("stop_reason") or "")),
+        }
+        runs.append(run)
+        day = days.setdefault(started[:10], {
+            "date": started[:10], "runs": 0, "refreshes": 0, "skystone_spent": 0, "gold_spent": 0, "pages": 0,
+            "bought": {}, "channel_switches": 0,
+        })
+        day["runs"] += 1
+        for k in ("refreshes", "skystone_spent", "gold_spent", "pages", "channel_switches"):
+            day[k] += run[k]
+        for name, n in bought.items():
+            day["bought"][name] = day["bought"].get(name, 0) + n
+    runs.sort(key=lambda x: x["started"], reverse=True)
+    return {
+        "days": [days[k] for k in sorted(days)],
+        "runs": runs[:max(0, runs_limit)],
+        "run_count": len(runs),
+    }

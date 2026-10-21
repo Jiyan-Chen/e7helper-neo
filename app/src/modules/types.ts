@@ -62,11 +62,11 @@ export interface ModuleUI {
   devFields?: string[];
   /** 数组字段里只在开发版显示的子字段，键是 "数组字段.子字段" */
   devSubFields?: string[];
-  /** stats.json 的键 → 中文名（按这个顺序显示；没列出的不显示） */
-  statLabels?: Record<string, string>;
   presets?: SchedulePreset[];
   /** 运行条左侧的附加控件（daily 的「持续收菜」） */
   RunExtra?: ComponentType<ModuleExtraProps>;
+  /** 代替通用「最近运行」的面板（书签刷取的刷取历史） */
+  RunsPanel?: ComponentType<ModuleExtraProps>;
   /** 设置面板上方的附加内容 */
   Header?: ComponentType<ModuleExtraProps>;
   /** 设置保存后调用（daily 用它把新设置同步到「持续收菜」计划） */

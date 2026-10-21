@@ -19,7 +19,6 @@ import { HistoryPage } from "@/pages/HistoryPage";
 import { LogsPage } from "@/pages/LogsPage";
 import { SchedulesPage } from "@/pages/SchedulesPage";
 import { SettingsPage } from "@/pages/SettingsPage";
-import { StatsPage } from "@/pages/StatsPage";
 import { TemplatesPage } from "@/pages/TemplatesPage";
 
 /** 空闲时每 10 秒识别一次当前画面（有任务时场景由任务的事件推送）。 */
@@ -97,7 +96,6 @@ const router = createHashRouter([
       { path: "m/:id", element: <ModuleRoute /> },
       { path: "schedules", element: <SchedulesPage /> },
       { path: "history", element: <HistoryPage /> },
-      { path: "stats", element: <StatsPage /> },
       { path: "logs", element: <LogsPage /> },
       { path: "settings", element: <SettingsPage /> },
       { path: "flows", element: <FlowsPage /> },

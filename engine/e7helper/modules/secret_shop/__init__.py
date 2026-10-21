@@ -86,6 +86,20 @@ class SecretShopModule(TaskModule):
         ), replace=True, first=True)
         chat.register(scenes)
 
+    @classmethod
+    def routes(cls):
+        from fastapi import APIRouter, Query
+
+        from e7helper.core.paths import module_data_dir
+
+        router = APIRouter()
+
+        @router.get("/report", summary="刷取历史：实跑记录按天汇总 + 每次运行的明细（新的在前），dry-run 不算")
+        def get_report(runs: int = Query(500, ge=0, le=5000)) -> dict:
+            return stats.report(stats.load_history(module_data_dir(cls.id)), runs_limit=runs)
+
+        return router
+
     # ------------------------------------------------------------ 主流程
 
     def run(self) -> None:
