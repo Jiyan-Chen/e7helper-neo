@@ -1,6 +1,6 @@
 # HANDOFF
 
-> 新会话从这里读起。上次更新：2026-10-21（B13 已通过；main 合入 B12c + 0.2.0）
+> 新会话从这里读起。上次更新：2026-10-23（B14a 已通过；B14 RTA BP 助手拆成 B14a–B14f）
 
 ## 当前进度
 - **B01 骨架 + 模块契约 + MuMu 设备层**：✅ 已通过，记录见 [reviews/B01.md](reviews/B01.md)。
@@ -21,7 +21,8 @@
 - **B12c 书签刷取：历史统计**：✅ 已通过，记录见 [reviews/B12c.md](reviews/B12c.md)。书签刷取页「设置」下面加「刷取历史」（代替通用「最近运行」）：近 7 天 / 近 30 天 / 全部，商品卡（几次、共几个、平均刷几次出一次）、刷新 / 天空石 / 金币 / 运行次数、每天刷新次数柱状图（标出书签 / 奖牌，「全部」超过 45 天按周）、每次运行列表；dry-run 不算。删掉原「统计」页和各模块 `statLabels`。全量 `973 passed, 7 skipped`，前端 22 个。
 - **发布 0.2.0**（B12c 审核后用户要求）：五处版本号改成 0.2.0，重新冻结引擎、打 NSIS 安装包（见「打包」）。**这个安装包不含 B13**（B13 之后才合进 main），下次发版再带上。
 - **B13 英雄数据库**：✅ 已通过，记录见 [reviews/B13.md](reviews/B13.md)。`core/data`：389 名英雄（Fribbels 数据 + e7.wiki 的国服中文名 / 昵称 / 技能 / 角色奉献 / 专属装备 / 发布日期），随包内置 + 联网更新；Fribbels 配装库实时汇总（中位数，速度套看前 10% / 前 25%，其他按速度分快中慢）；GUI「英雄图鉴」（按发布日期排、筛选、详情三个页签），属性 / 职业 / 套装 / 刻印 / 等级 / 属性类型图标都从游戏截图裁。审核改了 12 轮。全量 `1004 passed, 7 skipped`，前端 22 个。用户先开了 B13（在 B12c 之前的 main 上做），2026-10-21 合进 main。
-- 下一块：**B14+ 扩展模块**（RTA BP 助手起，见下面「下一块」，先和用户确认再动手）。
+- **B14a RTA：对局数据**：✅ 已通过，记录见 [reviews/B14a.md](reviews/B14a.md)。RTA BP 助手（对齐 e7rtabot.com/draft）按用户意见拆成 B14a–B14f，每块一个会话。本块：`core/rta`（选秀规则、国服 + 海外官方战绩站客户端、对局解析、sqlite 滚雪球采集、数据报告）+ CLI `rta probe / crawl / report`。审核通过时采集库国服 16.0 万场、海外 42.7 万场（本赛季 ss21 为主），解析通过率约 98.5%（失败的全是选秀阶段有人退出）。全量 `1060 passed, 7 skipped`，之后 RTA 测试 53 个。
+- 下一块：**B14b RTA：胜率 / 选人模型**（见下面「下一块」）。
 
 ## 已有能力
 ### 设备（B01）
@@ -206,9 +207,19 @@
 - GUI：左侧菜单「英雄图鉴」（正式版也有，宽页面）；详情弹窗 `components/heroes/HeroDetailDialog.tsx`（860px，角色信息 / 技能详情 / 配装方案）。游戏图标 60 个在 `app/src/assets/game/`（`gameIcon(名字)`，没有时退回文字 / 色块）：`element_*`、`role_*`、`set_*`、`stat_*`、`grade_d…sss`、`devotion_self`、`devotion_team_<位置>`（1 右、2 下、3 上、4 左）。
 - 测试：`tests/test_heroes.py` 36 个、`app/src/lib/heroes.test.ts`；冒烟测试检查随包英雄数据、头像、技能详情和图标。
 
+### RTA 对局数据（B14a，详见 architecture.md「RTA 选秀 `e7helper.core.rta`」和 reviews/B14a.md）
+- `from e7helper.core.rta import rules, parse_battle`：
+  - `rules`：`PICK_ORDER`（F S S F F S S F F S，F = 先手方）、`mover(n)` / `left_in_turn(n)` / `side_counts(n)` / `interleave()`、保护位 = 每边第 3 手、`validate(prebans, picks, banned, complete=)`（中文问题列表）、段位和段位档（金牌及以下合一档）、开战规则对照表 `OPENING_RULES` + 类别兜底 `rule_label(tid, category)`；
+  - `parse_battle(raw, "cn"|"global") → Match`（`first` / `second` 两个 `Side`：段位、预禁、按顺序的 5 个 `Pick`（被禁、站位、神器、套装、伤害）；`winner`、`rule`、`rule_category`、`sequence()`），不合格抛 `BadBattle(reason)`。
+- `official.OfficialClient("cn"|"global")`：限速（默认 1 秒 + 抖动）、429 / 5xx 退避重试；`seasons / current_season / recommend / ranking（海外） / battles / popular_hero / hero_analysis`。
+- 采集库 `<数据目录>/dev/rta/crawl.sqlite`（不进 git）：`players`（队列，玩家编号只在这里）、`battles`（`key = 服务器:battle_seq`，`raw` 是去掉昵称 / 编号后的原始字段）、`meta`（每天请求数）。读法：`crawl.iter_battles(server=, season=)` → (服务器, raw)，再 `parse_battle`。
+- CLI（开发用）：`e7helper rta probe -s cn|global`（采一页看字段）、`rta crawl [--server both] [--season …] [--min-grade champion] [--max-requests N]`（Ctrl+C / 关掉后接着采）、`rta report [--json]`。
+- 实测：国服约 4000 场 / 分钟（一页 100 场约 80 场是新的），海外约 1400 场 / 分钟（接口一次 3–4 秒）。国服优胜者以上约 2000 名玩家，几个小时就采完；海外玩家多，滚雪球到近 1 万名。
+- 测试：`tests/test_rta_*.py`（53 个），合成对局在 `tests/rta_fakes.py`（照官方格式手写，不含真实玩家数据），采集用假客户端。
+
 ### 模块与 CLI（B01，B03 / B08 更新）
 - 模块：继承 `TaskModule` / `AssistantModule`，放到 `e7helper/modules/<id>/` 就会被自动发现。参考 `modules/hello/`。
-- CLI：`doctor`、`bench`、`screenshot`、`tap`、`modules`、`run <id> [-c JSON] [-t 超时]`（经 runtime）、`scene [-f 图片] [--dismiss] [--watch]`、`capture`（新增 `--tap`）、`match`、`ocr`、`serve`（B08）、`heroes [词] [--update [--bundled]]`（B13）。
+- CLI：`doctor`、`bench`、`screenshot`、`tap`、`modules`、`run <id> [-c JSON] [-t 超时]`（经 runtime）、`scene [-f 图片] [--dismiss] [--watch]`、`capture`（新增 `--tap`）、`match`、`ocr`、`serve`（B08）、`heroes [词] [--update [--bundled]]`（B13）、`rta probe|crawl|report`（B14a，子命令组）。
 
 ## 关键决策
 - 基准分辨率 1600×900。本机 MuMu 已经是 1600×900（平板模式 tablet.2）。
@@ -274,10 +285,24 @@
   - 只有食人魔只有异界（用户纠正），GUI 选食人魔时难度锁定成异界，引擎收到别的难度直接停止并提示；
   - 「托管最多几份」放进表单（默认 0 = 不限，持有多少就全部拿来开托管）。
 
-## 下一块（B14+ 扩展模块）要做
-ROADMAP「B14+ 扩展模块」：RTA BP 助手（assistant）→ 装备扫描 → GVG 作业查询 → 兑换码 → 资源统计，每个单独立项和审核。
-- RTA BP 助手可以直接用 B13 的 `heroes()`：OCR 读到的名字用 `db.find`，头像用 `db.icon`（Fribbels 的 112×112 小图，和游戏里 BP 画面的构图、边框可能不一样，开工时先截真实 BP 画面再定识别方法）；配装 / 技能数据也在。
-- 要读游戏界面时先征得用户同意，只截图、不点击。
+- B14（RTA BP 助手，2026-10-22 / 23，均为用户意见 / 选择）：
+  - 功能对齐 e7rtabot.com/draft（五步：准备 → 预禁 → 选秀 → 后禁 → 结果），附加功能全要：先手概率、站位建议、快速分析、英雄统计；
+  - **拆成 B14a 数据 → B14b 模型 → B14c 选秀推荐 → B14d 分析功能 → B14e 页面 → B14f 画面识别，每块一个会话**（「引擎工程量比较大，不要尝试直接在一个会话里做完」）；
+  - 训练数据**国服 + 海外一起用、直接合并**，不用考虑两服版本不同步（国服很快同步国际服）；
+  - 开战规则（优胜者以上）作为模型输入；国服接口没有这个字段，记为「未知」；
+  - 每个空位推荐 **5–8 名**（e7rtabot 是 1 + 2）；计算时间可以放宽（定为 advise p95 ≤ 2 秒、预禁 ≤ 5 秒）；
+  - 不管游戏内的「禁用助手」，推荐全权按我们的模型；
+  - 英雄池：在英雄图鉴里勾选「我有的英雄」（可填速度），勾了只推荐这些，没勾不限制；
+  - 采集只存选秀数据，不存昵称，玩家编号只在本机队列表里（我的决定，审核没有异议）。
+
+## 下一块：B14b RTA 胜率 / 选人模型
+设计草案在 reviews/B14a.md「后续块的设计草案」，开工时细化、和用户确认后再动手。要点：
+- 数据：`crawl.iter_battles()` + `parse_battle()`；本赛季 `pvp_rta_ss21` 为主，国服以前赛季（ss20 / ss20f 约 7 万场）是否降权或去掉要定；含 `m` 开头英雄（愚人节怪物英雄）的对局去掉；选秀阶段退出的对局本来就解析失败。
+- 共用特征编码 `core/rta/encode.py`（训练和运行同一份 + parity 样例）；每场 12 个局面（n=0…9 带选人标签、n=10 选完、n=11 后禁后）；按日期切分（最后 7 天测试）。
+- 基线（段位 + 先手、英雄强度逻辑回归、反对称因子分解机）→ 小 Transformer（胜率头 + 选人头，开战规则 / 段位档 / 先手 / 预禁作为上下文）→ 打不过因子分解机就随包因子分解机。
+- 训练用 torch 放新依赖组 `train`（只在开发机装，spec 的 `excludes` 加 torch / onnx），导出 ONNX，引擎用现成的 onnxruntime 推理；模型随包放 `engine/assets/data/rta/`。
+- 采集库在 `%LOCALAPPDATA%\e7helper\dev\rta\crawl.sqlite`；开工时先 `rta report` 看现在有多少，需要的话 `rta crawl` 再补（海外每人只有最近 100 场，隔天采才会积累）。
+- 后续 B14c–B14f 见 ROADMAP；B14f 要读游戏界面时先征得用户同意，只截图、不点击。B13 的 `heroes()`（`db.find` 查 OCR 名字、`db.icon` 头像）给 B14f 用。
 
 ## 坑
 - **从游戏截图裁图标**（B13）：脚本在 `engine/tools/`（`cut_icons.py` 彩色图标、`cut_flat_icons.py` 单色白图标、`make_team_icons.py` 群阵图示；用 `.venv/Scripts/python.exe engine/tools/<脚本> <截图> <输出目录> 名字:x,y,w,h ...`）——按和按钮底色的差距算透明度；宽的图标（SS / SSS）不要补成正方形，否则等高显示时会变小；选中行是白底黑图标，统一成白色再用；群阵图示是用一张「34」的截图按位置重新上色生成 7 种。截图时用户可能需要先点开筛选框，我只截图（用户允许时可以在列表文字区慢拖）。
@@ -374,3 +399,11 @@ ROADMAP「B14+ 扩展模块」：RTA BP 助手（assistant）→ 装备扫描 �
 - **商店购买框有三种布局**（有数量条 / 只能买 1 个 / 越买越贵），标题「购买商品」字号不同，要两个模板；秘密商店的购买框也是同一种框。
 - **同名商品**：一般页有两张「光谱核心」（行动力买 / 生命之叶买），按「剩余/上限」和价格图标区分。
 - **worktree 里没有 `.venv` 和 `node_modules`**：先 `python -m uv sync`（设 `UV_DEFAULT_INDEX`）；`pnpm typecheck` 会自动装依赖。
+- **官方战绩站的坑**（B14a）：
+  - 国服 `getBattleList` **不按 `season_code` 过滤**，往前翻页会翻到以前的赛季（对局本身带正确的赛季）；采集已改成翻到别的赛季就停。
+  - 对手的数字编号是 `matchPlayerNicknameno`；`enemy_nick_no` 是**昵称**，拿它查接口会 405。
+  - 海外 `getBattleList` 每人只返回最近 100 场（`page_no` 无效），`total_count` 也是 100；海外接口一次要 3–4 秒，要带 `Content-Type: application/json`。
+  - 海外有一方低于优胜者时 `opening_rule_*` 是占位符 `_`；国服完全没有这两个字段。
+  - 选秀阶段有人退出的对局双方 0 名英雄、0 回合（约 1%），解析时归为「没有选秀」。
+  - `battle_day` 是 UTC，`battleCompletedate` 是韩国时间（晚 9 小时）。
+- **Git Bash 里的 `/c/...` 路径 Windows 的 python 不认**：传给 python 的路径用 `cygpath -w` 转一下（B14a 踩过）。

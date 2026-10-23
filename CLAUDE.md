@@ -38,6 +38,7 @@ python -m uv run pytest                        # 单元测试
 E7_DEVICE_TESTS=1 python -m uv run pytest -m device   # 真机测试（需 MuMu 运行）
 python -m uv run e7helper doctor | bench | screenshot | tap X Y | modules | run <id> | heroes [词]
 python -m uv run e7helper serve [--no-connect]       # API 服务（B08），端口和 token 见 %LOCALAPPDATA%\e7helper\api.json
+python -m uv run e7helper rta probe | crawl | report # RTA 对局采集（B14a，开发用），库在 %LOCALAPPDATA%\e7helper\dev\rta\crawl.sqlite
 ```
 
 ## GUI（在 `app/` 下，B09）

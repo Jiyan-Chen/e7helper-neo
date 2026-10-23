@@ -611,5 +611,137 @@ def heroes_cmd(
     console.print(f"[dim]{len(found)} 条[/]")
 
 
+rta_app = typer.Typer(help="RTA 选秀助手（B14 起）：对局采集、数据报告（开发用）", no_args_is_help=True)
+app.add_typer(rta_app, name="rta")
+ServerOpt = Annotated[str, typer.Option("--server", "-s", help="cn（国服）/ global（海外）")]
+
+
+@rta_app.command("probe")
+def rta_probe(server: ServerOpt = "cn") -> None:
+    """取一名种子玩家的一页对局，打印字段概况（不含昵称），确认接口格式没变。"""
+    from collections import Counter
+
+    from e7helper.core.rta.battle import STORE_KEYS, BadBattle, parse_battle
+    from e7helper.core.rta.official import CN_WORLD, OfficialClient, OfficialError
+    from e7helper.core.rta.rules import rule_label
+
+    client = OfficialClient(server)
+    try:
+        season = client.current_season()
+        seeds = client.recommend() or client.ranking(season)
+        if not seeds:
+            _fail("没有种子玩家")
+            raise typer.Exit(1)
+        seed = seeds[0]
+        rows = client.battles(seed["nick_no"], seed.get("world_code") or CN_WORLD, season)
+    except OfficialError as e:
+        _fail(str(e))
+        raise typer.Exit(1) from None
+    console.print(f"{server} · 当前赛季 {season} · 种子 {len(seeds)} 名 · 一页 {len(rows)} 场 · 请求 {client.requests} 次")
+    keys = Counter(k for r in rows for k in r)
+    console.print(f"字段（{len(keys)}）：{', '.join(sorted(keys))}")
+    console.print(f"[dim]不在 STORE_KEYS 里（采集时丢掉）：{', '.join(sorted(set(keys) - set(STORE_KEYS)))}[/]")
+    ok, bad = [], Counter()
+    for r in rows:
+        try:
+            ok.append(parse_battle(r, server))  # type: ignore[arg-type]
+        except BadBattle as e:
+            bad[e.reason] += 1
+    console.print(f"解析：成功 {len(ok)}，失败 {sum(bad.values())} {dict(bad) if bad else ''}")
+    if ok:
+        console.print(f"时间：{min(m.day for m in ok)} ~ {max(m.day for m in ok)}")
+        console.print(f"段位：{dict(Counter(f'{m.first.grade}/{m.second.grade}' for m in ok).most_common(6))}")
+        console.print(f"开战规则：{dict(Counter(rule_label(m.rule) for m in ok))}")
+        console.print(f"先手胜：{sum(m.winner == 'F' for m in ok)} / {len(ok)}")
+        pos = Counter((p.position, p.banned) for m in ok for side in (m.first, m.second) for p in side.picks)
+        console.print(f"站位（位置, 被禁）：{dict(sorted(pos.items()))}")
+    ids = sum(1 for r in rows if str(r.get("matchPlayerNicknameno", "")).isdigit())
+    console.print(f"带对手数字编号的对局：{ids} / {len(rows)}")
+
+
+@rta_app.command("crawl")
+def rta_crawl(
+    server: Annotated[str, typer.Option("--server", "-s", help="cn / global / both")] = "both",
+    season: Annotated[Optional[list[str]], typer.Option("--season", help="赛季代码（可多次），默认各服的当前赛季")] = None,
+    min_grade: Annotated[str, typer.Option("--min-grade", help="对手段位不低于这个才入队")] = "champion",
+    interval: Annotated[float, typer.Option("--interval", help="两次请求至少隔几秒")] = 1.0,
+    max_requests: Annotated[Optional[int], typer.Option("--max-requests", help="这次每个服最多发几次请求")] = None,
+    daily_cap: Annotated[int, typer.Option("--daily-cap", help="每个服每天最多发几次请求")] = 20000,
+    max_pages: Annotated[int, typer.Option("--max-pages", help="国服每名玩家最多往前翻几页")] = 10,
+    refresh_hours: Annotated[float, typer.Option("--refresh-hours", help="采过的玩家隔多久再采")] = 20.0,
+    db: Annotated[Optional[Path], typer.Option("--db", help="sqlite 路径，默认 <数据目录>/dev/rta/crawl.sqlite")] = None,
+) -> None:
+    """采集世界竞技场对局（开发用，给模型训练）。Ctrl+C 安全退出，下次接着采。"""
+    from e7helper.core.rta import rules
+    from e7helper.core.rta.crawl import CrawlConfig, Crawler, ServerStats
+
+    servers = ("cn", "global") if server == "both" else (server,)
+    if any(s not in ("cn", "global") for s in servers) or min_grade not in rules.GRADES:
+        _fail("--server 只能是 cn / global / both；--min-grade 是 champion 这种段位代码")
+        raise typer.Exit(2)
+    config = CrawlConfig(servers=servers, seasons={s: list(season) for s in servers} if season else None,
+                         min_grade=min_grade, interval=interval, max_requests=max_requests, daily_cap=daily_cap,
+                         max_pages=max_pages, refresh_hours=refresh_hours)
+    started = time.time()
+
+    def progress(st: ServerStats) -> None:
+        mins = max((time.time() - started) / 60, 1e-6)
+        console.print(f"[dim]{datetime.now():%H:%M:%S}[/] {st.server}：请求 {st.requests}，新对局 {st.battles_new}"
+                      f"（{st.battles_new / mins:.0f}/分钟），重复 {st.battles_seen}，新玩家 {st.players_new}，出错 {st.errors}")
+
+    crawler = Crawler(db, config, progress=progress)
+    console.print(f"采集 {', '.join(servers)} → {crawler.db_path}（Ctrl+C 停止）")
+    results = crawler.run()
+    for st in results.values():
+        console.print(f"{st.server} {st.seasons}：请求 {st.requests}，新对局 {st.battles_new}，重复 {st.battles_seen}，"
+                      f"新玩家 {st.players_new}，出错 {st.errors} · {st.stopped}")
+    summary = crawler.summary()
+    console.print(f"库里的对局：{summary['battles']}")
+    console.print(f"玩家（总数, 没采过的）：{summary['players']}")
+
+
+@rta_app.command("report")
+def rta_report(
+    as_json: Annotated[bool, typer.Option("--json", help="输出 JSON")] = False,
+    db: Annotated[Optional[Path], typer.Option("--db", help="sqlite 路径，默认 <数据目录>/dev/rta/crawl.sqlite")] = None,
+) -> None:
+    """采集数据的概况：场数、解析通过率、段位 / 开战规则分布、英雄覆盖。"""
+    from e7helper.core.data import heroes
+    from e7helper.core.rta.report import build_report
+
+    db_heroes = heroes()
+    rep = build_report(db, known_codes={h.code for h in db_heroes})
+    if as_json:
+        console.print_json(data=rep)
+        return
+
+    def name(code: str) -> str:
+        h = db_heroes.get(code)
+        return h.name if h else code
+
+    console.print(f"对局 {rep['total']} 场，解析成功 {rep['parsed']}（{(rep['parse_rate'] or 0):.2%}）")
+    table = Table("服务器", "场数", "通过率", "赛季", "时间范围", "先手胜率", "回合中位", "时长中位", "段位（较低一方）",
+                  "开战规则", "失败原因")
+    for server, s in rep["servers"].items():
+        seasons = "\n".join(f"{k} {v}" for k, v in s["seasons"].items())
+        if s["irregular"]:
+            seasons += f"\n含 m 开头英雄 {s['irregular']}"
+        table.add_row(server, str(s["total"]), f"{(s['parse_rate'] or 0):.2%}", seasons,
+                      f"{s['days'][0]}\n{s['days'][1]}",
+                      f"{(s['first_win_rate'] or 0):.1%}", str(s["median_turns"]), f"{s['median_seconds']} 秒",
+                      "\n".join(f"{k} {v}" for k, v in s["grades"].items()),
+                      "\n".join(f"{k} {v}" for k, v in s["rules"].items()),
+                      "\n".join(f"{k} {v}" for k, v in s["failed"].items()) or "—")
+    console.print(table)
+    h = rep["heroes"]
+    console.print(f"英雄：出场过 {h['picked']} 名，选过 ≥30 次 {h['picked_30']} 名，≥300 次 {h['picked_300']} 名"
+                  + (f"；数据库里没有：{', '.join(h['unknown'])}" if h.get("unknown") else ""))
+    console.print("选取最多：" + "、".join(f"{name(c)} {n}" for c, n in h["top_picks"]))
+    console.print("预禁最多：" + "、".join(f"{name(c)} {n}" for c, n in h["top_prebans"]))
+    console.print("后禁最多：" + "、".join(f"{name(c)} {n}" for c, n in h["top_bans"]))
+    console.print("开战规则：" + "、".join(f"{tid}（{v['label']}）{v['count']}" for tid, v in rep["rules_seen"].items()))
+    console.print(f"玩家队列（总数, 没采过的）：{rep['queue']}")
+
+
 if __name__ == "__main__":
     app()

@@ -29,6 +29,10 @@
   - 模型覆盖约 120 个常用英雄，**所有英雄都要手动输入**。
 - [SamTheCoder777/E7-RTA-Helper](https://github.com/SamTheCoder777/E7-RTA-Helper)：用 SIFT 识别屏幕上的英雄头像，自动读取 BP 局面，然后推荐英雄、预测胜率。
 - 我们的切入点：已经有 MuMu 实时帧，**可以自动识别 BP 界面再叠加推荐**，并且全程只读。
+- **B14 开工调研（2026-10-22，详见 reviews/B14a.md）**：
+  - e7rtabot Live Draft 五步：准备 → 预禁（双方各 2）→ 选秀（每个空位 1 主推荐 + 2 备选、实时胜率、速度估计和先手概率）→ 后禁（4×4 胜率矩阵取 maximin）→ 结果（胜率、谁先手、站位建议）。服务器端深度学习，「胜率模型 + 选秀树搜索」，约 120 名常用英雄，本赛季 28 万场。
+  - 国服（`e7stats.qyzlgame.com`）和海外（`e7api.onstove.com`）官方战绩站是同一套系统，`getBattleList` 每场有完整的预禁、选人顺序、后禁、站位、神器、套装、胜负；海外还有每局的开战规则。可以从种子玩家顺着对手滚雪球采集（海外另有排行榜前 100）。接口细节见 architecture.md「RTA 选秀」。
+  - 其他开源：faifan/e7_rta_auto（国服，Transformer 选秀模型 + NCC 认头像）、K3R0/E7_RTA_Data（爬海外官方战绩）。
 
 **[e7.wiki](https://e7.wiki/)（国服社区站，v1.13.2）**
 - 角色和神器图鉴、角色配装&简评。

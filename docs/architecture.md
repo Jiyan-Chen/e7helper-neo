@@ -183,6 +183,42 @@ db.artifacts()                # 神器编号 → {name（中文）, name_en}
 | `GET /api/artifacts/{code}/icon` | 神器图标（官方指南站 → e7.wiki）；都失败 502 `icon_failed` |
 | `POST /api/heroes/update` | 联网更新；正在更新 409 `busy`，下载失败 502 `update_failed` |
 
+## RTA 选秀 `e7helper.core.rta`（B14 起）
+世界竞技场选秀助手的引擎部分，不依赖设备。B14 拆成 a–f 六块（数据 → 模型 → 选秀推荐 → 分析功能 → 页面 → 画面识别），B14a 只有对局数据这一层。
+```python
+from e7helper.core.rta import rules, parse_battle
+rules.PICK_ORDER                     # ("F","S","S","F","F","S","S","F","F","S")，F = 先手方
+rules.mover(3), rules.left_in_turn(3)  # 选了 3 手后下一手是 F，这一轮还要连选 2 名
+rules.validate(prebans, picks, banned, complete=True)  # 局面检查，返回中文问题列表
+m = parse_battle(raw, "global")      # 官方战绩站的一场 → Match（先手方 / 后手方、10 手顺序、后禁、站位、开战规则、胜方）
+m.sequence()                         # [(F/S, 编号), ...] 共 10 手
+```
+| 文件 | 职责 |
+|---|---|
+| `rules.py` | 选秀规则：1-2-2-2-2-1、每边第 3 手是保护位（不能被后禁）、预禁每边 2 名（可以和对方重复）；`validate()`；段位（铜牌 … 传说）和段位档（金牌及以下合成一档）；开战规则对照表（`opening_rule_desc_tid` → 攻击 / 防御 / 抵抗 / 特殊，不认识的按类别 `opening_rule_title` 给名字） |
+| `battle.py` | `parse_battle(raw, server) → Match`，不合格抛 `BadBattle(reason)`（`reason` 用来归类统计）；`strip(raw)` 采集时只留 `STORE_KEYS`（不含昵称、玩家编号） |
+| `official.py` | 国服 / 海外官方战绩站客户端 `OfficialClient(server)`：两种返回包装统一成 `result_body`；限速（最小间隔 + 抖动）、429 / 5xx / 网络错误退避重试、其他 4xx 和非 0 返回码抛 `OfficialError`；`fetch` / 时钟可注入 |
+| `crawl.py` | 开发用的采集：sqlite `<数据目录>/dev/rta/crawl.sqlite`（`players` 队列 + `battles` + `meta`），滚雪球、两个服各一个线程并行、断点续采 |
+| `report.py` | 采集数据报告：场数、解析失败原因、段位 / 开战规则分布、英雄覆盖、先手胜率 |
+
+**官方战绩站**（两个站是同一套系统，接口同名，都是非公开接口）：`POST <地址>/gameApi/<名字>?<参数>`，没有请求体。
+| | 国服 | 海外 |
+|---|---|---|
+| 地址 | `https://e7stats.qyzlgame.com/gameApi/` | `https://e7api.onstove.com/gameApi/`（要 `Content-Type: application/json`） |
+| 返回 | `{return_code, result_body}` | `{code, message, value: {result_body, total_count}}` |
+| 种子 | `getRecommendList`（5 名），没有排行榜 | `getWorldUserRankingDetail?season_code&world_code=all&current_page`（前 100 名，每页 10）+ `getRecommendList` |
+| `getBattleList?nick_no&world_code&season_code` | `list_count=100&page_no=N` 能往前翻 | 只返回最近 100 场（翻页还是同一页） |
+| 牌组 `my_deck` / `enemy_deck` | 对象 | JSON 字符串 |
+| 开战规则 | 没有（2026-10 国服优胜者以上的对局也没有） | `opening_rule_title` / `opening_rule_desc_tid`，优胜者以上每局随机一条；有一方低于优胜者时是占位符 `_`（解析成没有规则） |
+
+- 一场对局：`battle_seq`（**两边视角相同**，去重键）、`battle_day`（UTC）、`iswin`（1 胜 / 2 负）、`grade_code` / `enemy_grade_code`、牌组的 `preban_list` 和 `hero_list[{hero_code, first_pick, ban, mvp}]`（先手方第一手的英雄 `first_pick=1`）、字符串化的 `teamBettleInfo(enemy)`（`"my_team":[...]`，`pick_order` 1–5、`position` 1–4（被后禁的是 0）、神器、套装、伤害、击杀）。
+- 对手的数字编号是 `matchPlayerNicknameno`（`enemy_nick_no` 是昵称，拿它查会 405）。
+- 选秀阶段有人退出的对局双方都没有英雄、0 回合（约 0.9%），解析时归为「没有选秀」。
+- 另有 `getSeasonList`、`getPopularHero?season_code&grade_code`（每名英雄 pick / win / ban 率、搭档 3、难对付 3、套装）、`getHeroAnalysis`（属性直方图只有「+1…+10」相对档位，没有绝对速度）。
+
+**采集**（`e7helper rta crawl`，开发用）：种子 → 采他们的对局 → 对手段位 ≥ `--min-grade`（默认优胜者）就入队。国服一名玩家往前翻到这个赛季的头（最多 `--max-pages` 页，一页里没有新对局也停）；海外每人只有最近 100 场，隔 `--refresh-hours`（默认 20）再采；国服翻完的玩家也按这个间隔回来看第 1 页。没采过的、段位高的、离种子近的优先。每个服默认 1 次 / 秒（另加 0–0.3 秒抖动）、每天 2 万次上限、连续出错 10 次就停；取不到的玩家（多半是 405）隔一段时间再试，失败 3 次不再采。对局表只存 `strip()` 后的字段，**玩家编号只在队列表里**，采集库不进 git、不随包。
+- CLI：`e7helper rta probe -s cn|global`（采一页看字段，不打印昵称）、`rta crawl [--server both] [--season …] [--max-requests N]`、`rta report [--json]`。
+
 ## API 层 `e7helper.api`（B08）
 ```
 python -m uv run e7helper serve [--port 47800] [--index N] [--no-connect] [--paused] [--no-auth] [--token X] [--allow-host H]
