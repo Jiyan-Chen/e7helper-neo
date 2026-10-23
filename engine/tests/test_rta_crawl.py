@@ -184,6 +184,17 @@ def test_stop_event(db):
     assert crawler.run_server("cn", stop).stopped == "手动停止"
 
 
+def test_default_db_path(tmp_path, monkeypatch):
+    from e7helper.core.rta import crawl
+
+    target = tmp_path / "x" / "crawl.sqlite"
+    monkeypatch.setenv("E7_RTA_DB", str(target))
+    assert crawl.default_db_path() == target and target.parent.is_dir()
+    monkeypatch.delenv("E7_RTA_DB")
+    monkeypatch.setattr(crawl, "DEFAULT_DB", tmp_path / "d" / "crawl.sqlite")
+    assert crawl.default_db_path() == tmp_path / "d" / "crawl.sqlite"
+
+
 def test_run_threads_and_iter(db):
     cn = FakeClient("cn", {"1": [game(1, "2")]})
     gl = FakeClient("global", {"7": [game(1, "8", fmt="global")]}, seeds=("7",))

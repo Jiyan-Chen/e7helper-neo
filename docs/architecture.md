@@ -198,7 +198,7 @@ m.sequence()                         # [(F/S, 编号), ...] 共 10 手
 | `rules.py` | 选秀规则：1-2-2-2-2-1、每边第 3 手是保护位（不能被后禁）、预禁每边 2 名（可以和对方重复）；`validate()`；段位（铜牌 … 传说）和段位档（金牌及以下合成一档）；开战规则对照表（`opening_rule_desc_tid` → 攻击 / 防御 / 抵抗 / 特殊，不认识的按类别 `opening_rule_title` 给名字） |
 | `battle.py` | `parse_battle(raw, server) → Match`，不合格抛 `BadBattle(reason)`（`reason` 用来归类统计）；`strip(raw)` 采集时只留 `STORE_KEYS`（不含昵称、玩家编号） |
 | `official.py` | 国服 / 海外官方战绩站客户端 `OfficialClient(server)`：两种返回包装统一成 `result_body`；限速（最小间隔 + 抖动）、429 / 5xx / 网络错误退避重试、其他 4xx 和非 0 返回码抛 `OfficialError`；`fetch` / 时钟可注入 |
-| `crawl.py` | 开发用的采集：sqlite `<数据目录>/dev/rta/crawl.sqlite`（`players` 队列 + `battles` + `meta`），滚雪球、两个服各一个线程并行、断点续采 |
+| `crawl.py` | 开发用的采集：sqlite `F:\e7helper-data\rta\crawl.sqlite`（环境变量 `E7_RTA_DB` 可改；不放 AppData，因为 Claude 桌面版会把会话里写进 AppData 的文件重定向走）；`players` 队列 + `battles` + `meta`，滚雪球、两个服各一个线程并行、断点续采 |
 | `report.py` | 采集数据报告：场数、解析失败原因、段位 / 开战规则分布、英雄覆盖、先手胜率 |
 
 **官方战绩站**（两个站是同一套系统，接口同名，都是非公开接口）：`POST <地址>/gameApi/<名字>?<参数>`，没有请求体。

@@ -212,7 +212,7 @@
   - `rules`：`PICK_ORDER`（F S S F F S S F F S，F = 先手方）、`mover(n)` / `left_in_turn(n)` / `side_counts(n)` / `interleave()`、保护位 = 每边第 3 手、`validate(prebans, picks, banned, complete=)`（中文问题列表）、段位和段位档（金牌及以下合一档）、开战规则对照表 `OPENING_RULES` + 类别兜底 `rule_label(tid, category)`；
   - `parse_battle(raw, "cn"|"global") → Match`（`first` / `second` 两个 `Side`：段位、预禁、按顺序的 5 个 `Pick`（被禁、站位、神器、套装、伤害）；`winner`、`rule`、`rule_category`、`sequence()`），不合格抛 `BadBattle(reason)`。
 - `official.OfficialClient("cn"|"global")`：限速（默认 1 秒 + 抖动）、429 / 5xx 退避重试；`seasons / current_season / recommend / ranking（海外） / battles / popular_hero / hero_analysis`。
-- 采集库 `<数据目录>/dev/rta/crawl.sqlite`（不进 git）：`players`（队列，玩家编号只在这里）、`battles`（`key = 服务器:battle_seq`，`raw` 是去掉昵称 / 编号后的原始字段）、`meta`（每天请求数）。读法：`crawl.iter_battles(server=, season=)` → (服务器, raw)，再 `parse_battle`。
+- 采集库 `F:\e7helper-data\rta\crawl.sqlite`（开发机上的固定位置，环境变量 `E7_RTA_DB` 可改；不进 git、不随包；不放 AppData 的原因见「坑」里 MSIX 那条）：`players`（队列，玩家编号只在这里）、`battles`（`key = 服务器:battle_seq`，`raw` 是去掉昵称 / 编号后的原始字段）、`meta`（每天请求数）。读法：`crawl.iter_battles(server=, season=)` → (服务器, raw)，再 `parse_battle`。
 - CLI（开发用）：`e7helper rta probe -s cn|global`（采一页看字段）、`rta crawl [--server both] [--season …] [--min-grade champion] [--max-requests N]`（Ctrl+C / 关掉后接着采）、`rta report [--json]`。
 - 实测：国服约 4000 场 / 分钟（一页 100 场约 80 场是新的），海外约 1400 场 / 分钟（接口一次 3–4 秒）。国服优胜者以上约 2000 名玩家，几个小时就采完；海外玩家多，滚雪球到近 1 万名。
 - 测试：`tests/test_rta_*.py`（53 个），合成对局在 `tests/rta_fakes.py`（照官方格式手写，不含真实玩家数据），采集用假客户端。
@@ -301,7 +301,7 @@
 - 共用特征编码 `core/rta/encode.py`（训练和运行同一份 + parity 样例）；每场 12 个局面（n=0…9 带选人标签、n=10 选完、n=11 后禁后）；按日期切分（最后 7 天测试）。
 - 基线（段位 + 先手、英雄强度逻辑回归、反对称因子分解机）→ 小 Transformer（胜率头 + 选人头，开战规则 / 段位档 / 先手 / 预禁作为上下文）→ 打不过因子分解机就随包因子分解机。
 - 训练用 torch 放新依赖组 `train`（只在开发机装，spec 的 `excludes` 加 torch / onnx），导出 ONNX，引擎用现成的 onnxruntime 推理；模型随包放 `engine/assets/data/rta/`。
-- 采集库在 `%LOCALAPPDATA%\e7helper\dev\rta\crawl.sqlite`；开工时先 `rta report` 看现在有多少，需要的话 `rta crawl` 再补（海外每人只有最近 100 场，隔天采才会积累）。
+- 采集库在 `F:\e7helper-data\rta\crawl.sqlite`（2026-10-23 挪过来时国服 160455 场、海外 479096 场，约 2.8 GB）；开工时先 `rta report` 看现在有多少，需要的话 `rta crawl` 再补（海外每人只有最近 100 场，隔天采才会积累）。
 - 后续 B14c–B14f 见 ROADMAP；B14f 要读游戏界面时先征得用户同意，只截图、不点击。B13 的 `heroes()`（`db.find` 查 OCR 名字、`db.icon` 头像）给 B14f 用。
 
 ## 坑
@@ -406,4 +406,5 @@
   - 海外有一方低于优胜者时 `opening_rule_*` 是占位符 `_`；国服完全没有这两个字段。
   - 选秀阶段有人退出的对局双方 0 名英雄、0 回合（约 1%），解析时归为「没有选秀」。
   - `battle_day` 是 UTC，`battleCompletedate` 是韩国时间（晚 9 小时）。
+- **Claude 桌面版是 MSIX 打包应用，会重定向 `AppData`**（B14a 发现）：从 Claude 会话里跑的命令往 `%LOCALAPPDATA%` 写的文件，实际落在 `%LOCALAPPDATA%\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Local\` 下（会话里读写看起来路径正常，资源管理器和会话外启动的程序在原路径找不到）。采集库原来就落在那里，用户在资源管理器里找不到，已挪到 `F:\e7helper-data\rta\`（用户指定）并改了默认路径。以前会话里写的 `e7helper\data`、`debug`、`modules` 等也在那个私有目录里。要让外面看得到，就写到 `AppData` 以外的路径（`--db`、`E7_RTA_DB`、`E7_DATA_DIR`）。
 - **Git Bash 里的 `/c/...` 路径 Windows 的 python 不认**：传给 python 的路径用 `cygpath -w` 转一下（B14a 踩过）。

@@ -1,6 +1,7 @@
 """开发用：从国服 / 海外官方战绩站采集世界竞技场对局，给 B14b 训练模型（B14a）。
 
-存在 sqlite `<数据目录>/dev/rta/crawl.sqlite`（不进 git、不随包）：
+存在 sqlite `F:\\e7helper-data\\rta\\crawl.sqlite`（开发机上的固定位置，环境变量 `E7_RTA_DB` 可以改；不进 git、不随包）。
+不放 `%LOCALAPPDATA%`：Claude 桌面版是 MSIX 打包应用，会话里写进 AppData 的文件会被重定向到它的私有目录，外面找不到。
 - `players`：待采 / 已采的玩家队列。**玩家编号只存在这里**；
 - `battles`：每场对局一行，`key = <服务器>:<battle_seq>`（两边视角相同，天然去重），
   `raw` 是 `battle.strip()` 之后的原始字段（不含昵称、玩家编号），解析交给 `battle.parse_battle`；
@@ -16,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sqlite3
 import threading
 import time
@@ -23,8 +25,6 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-
-from e7helper.core.paths import data_dir
 
 from . import rules
 from .battle import strip
@@ -48,12 +48,14 @@ CREATE INDEX IF NOT EXISTS battles_server_season ON battles (server, season);
 CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT);
 """
 MAX_PLAYER_FAILS = 3
+DEFAULT_DB = Path(r"F:\e7helper-data\rta\crawl.sqlite")
 
 
 def default_db_path() -> Path:
-    path = data_dir() / "dev" / "rta"
-    path.mkdir(parents=True, exist_ok=True)
-    return path / "crawl.sqlite"
+    """采集库路径：环境变量 E7_RTA_DB，没设就用 DEFAULT_DB。"""
+    path = Path(os.environ["E7_RTA_DB"]) if os.environ.get("E7_RTA_DB") else DEFAULT_DB
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def connect(path: Path) -> sqlite3.Connection:

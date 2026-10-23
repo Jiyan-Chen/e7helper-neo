@@ -669,7 +669,7 @@ def rta_crawl(
     daily_cap: Annotated[int, typer.Option("--daily-cap", help="每个服每天最多发几次请求")] = 20000,
     max_pages: Annotated[int, typer.Option("--max-pages", help="国服每名玩家最多往前翻几页")] = 10,
     refresh_hours: Annotated[float, typer.Option("--refresh-hours", help="采过的玩家隔多久再采")] = 20.0,
-    db: Annotated[Optional[Path], typer.Option("--db", help="sqlite 路径，默认 <数据目录>/dev/rta/crawl.sqlite")] = None,
+    db: Annotated[Optional[Path], typer.Option("--db", help="sqlite 路径，默认 F:\\e7helper-data\\rta\\crawl.sqlite（环境变量 E7_RTA_DB 可改）")] = None,
 ) -> None:
     """采集世界竞技场对局（开发用，给模型训练）。Ctrl+C 安全退出，下次接着采。"""
     from e7helper.core.rta import rules
@@ -703,7 +703,7 @@ def rta_crawl(
 @rta_app.command("report")
 def rta_report(
     as_json: Annotated[bool, typer.Option("--json", help="输出 JSON")] = False,
-    db: Annotated[Optional[Path], typer.Option("--db", help="sqlite 路径，默认 <数据目录>/dev/rta/crawl.sqlite")] = None,
+    db: Annotated[Optional[Path], typer.Option("--db", help="sqlite 路径，默认 F:\\e7helper-data\\rta\\crawl.sqlite（环境变量 E7_RTA_DB 可改）")] = None,
 ) -> None:
     """采集数据的概况：场数、解析通过率、段位 / 开战规则分布、英雄覆盖。"""
     from e7helper.core.data import heroes
