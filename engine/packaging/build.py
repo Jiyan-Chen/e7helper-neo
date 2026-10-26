@@ -99,6 +99,15 @@ def smoke() -> None:
             sys.exit(f"OCR 异常：\n{text}")
         print(f"[ok] 模板匹配；OCR 模型加载并识别出 {found.group(1)} 条文字")
 
+        # B14b：随包的 RTA 模型能加载、和 parity 样例一致；训练用的 torch / onnx 不进产物
+        text = _run(["rta", "model", "--check"], env)
+        if "parity 通过" not in text:
+            sys.exit(f"RTA 模型核对失败：\n{text}")
+        leaked = [p.name for p in (DIST / "_internal").iterdir() if p.name.split(".")[0] in ("torch", "onnx", "onnxscript")]
+        if leaked:
+            sys.exit(f"产物里不该有训练依赖：{leaked}")
+        print("[ok] RTA 模型加载并通过 parity 核对；产物里没有 torch / onnx")
+
         _smoke_serve(env, Path(tmp))
 
 

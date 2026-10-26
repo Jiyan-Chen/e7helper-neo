@@ -216,6 +216,32 @@ m.sequence()                         # [(F/S, 编号), ...] 共 10 手
 - 选秀阶段有人退出的对局双方都没有英雄、0 回合（约 0.9%），解析时归为「没有选秀」。
 - 另有 `getSeasonList`、`getPopularHero?season_code&grade_code`（每名英雄 pick / win / ban 率、搭档 3、难对付 3、套装）、`getHeroAnalysis`（属性直方图只有「+1…+10」相对档位，没有绝对速度）。
 
+### 胜率 / 选人模型（B14b）
+```python
+from e7helper.core.rta import model
+from e7helper.core.rta.encode import DraftState
+m = model.load()                                   # 随包 assets/data/rta/（onnxruntime，不要 torch）
+st = DraftState(prebans={"F": [...], "S": [...]}, picks={"F": [...], "S": [...]}, grades=("legend", "emperor"), rule="unknown")
+m.win([st])                                        # 「先手方赢」的概率（后手方 = 1 − p）
+m.next_picks(st, k=8)                              # 下一手（轮到的一方）最可能选的 [(编号, 概率)]
+m.evaluate(states)                                 # 一批局面一次前向：win [B] + picks [B, V]（B14c 搜索用）
+```
+| 文件 | 职责 |
+|---|---|
+| `encode.py` | 训练和运行共用的编码：一场 = 17 个 token（0 CTX、1–4 预禁、5–14 选秀、15–16 双方被禁的），类型 / 位置编号、注意力掩码（0–4 互相可见、之后因果）、12 个局面的读出位置（已选 n 手读 4 + n，后禁后读 16）、选人标签（连选 2 名的回合两名各 0.5）；`Vocab`（英雄词表 + 开战规则表，没见过的规则按类别兜底）、`DraftState`（运行时的局面）、`pick_mask` |
+| `dataset.py` | 训练数据快照：采集库一个赛季 → 多进程解析、过滤（解析失败 / `m` 开头英雄 / 0 回合 / 截止日之后）、编码 → `F:\e7helper-data\rta\datasets\<赛季>-<截止日>.npz`；按日期切分（最后 7 天测试、再前 7 天验证）；`state(row, n)` 还原某场在局面 n 的 `DraftState` |
+| `metrics.py` | log loss、Brier、AUC、ECE / 校准表、选人命中前 k |
+| `model.py` | 运行时：读 `model.onnx` + `meta.json`（词表、温度、训练数据、测试指标）+ `parity.json`；`win` / `next_picks` / `evaluate` / `check()`（parity 核对，冻结引擎的冒烟测试用） |
+| `train/`（不随包，要 torch） | `nets.py`（混合结构 `HybridTransformer`、纯 Transformer 和三个基线：只看段位的逻辑回归、英雄强度、因子分解机）、`fit.py`（训练循环、按验证集的胜率保存最好的一轮、可选早停、恒定 / 余弦学习率、每轮在训练子集上同口径评估、Platt 校准，过程写进 run 目录）、`evaluate.py`（按局面 / 子集的指标、热度基线）、`export.py`（ONNX + parity）、`watch.py`（训练曲线页） |
+
+- 输入：一场选秀的 17 个 token，每个 = 英雄嵌入 + 类型嵌入（7 种）+ 位置嵌入；CTX 再加双方段位档 + 开战规则（海外四条 / 无 / 国服「未知」）。胜率一律是**先手方**赢的概率。
+- 网络（随包的是混合结构，d = 128、3 层、λ = 1，66.5 万参数）：胜率 logit = 因子分解机（强度 + 搭档 + 克制，显式去掉被禁的英雄）+ Pre-LN Transformer（手写注意力）的 `Linear(d→1)`；选人头 `Linear(d→d)` 后乘英雄嵌入的转置（共享权重）。损失 = 12 个局面胜率 BCE 平均 + λ × 10 个局面选人交叉熵平均；默认跑满整个余弦周期、按验证集的胜率损失保存最好的一轮（`--patience N` 打开早停，学习率降到峰值三成以下才计数）；验证集上每个局面拟合 Platt 校准（σ(a · logit + b)，存在 `meta.json` 的 `calibration`）。纯 Transformer 打不过因子分解机、也几乎用不上后禁信息，所以加了宽部分（B14b 审核记录）。架构图：[reviews/B14b-architecture.html](reviews/B14b-architecture.html)。
+- 测试集（10-17 ~ 10-23，22.3 万场，后禁后）：log loss 0.6166、AUC 0.717、ECE 0.005（因子分解机 0.6236 / 0.708）；选人前 5 命中 0.601（热度 0.411）。
+- 训练数据：只用本赛季（ss21，两服合并），全段位（段位作为输入）。随包模型 = 用切分选好结构和轮数后、全量数据重训的那个。
+- 训练（开发机）：`python -m uv sync --group train`（CPU 版 torch，测试和导出用）；GPU 训练环境 `engine/.venv-rocm`（`tools/setup_rocm_venv.ps1`：AMD 官方 Windows ROCm 版 torch 2.9，只有 Python 3.12，装在 `engine/.python`），本机 RX 7700 XT 比 CPU 快约 16 倍。网格 `tools/rta_grid.ps1`。
+- CLI（开发用）：`rta dataset [--until]`、`rta train -m lr0|lr|fm|transformer|hybrid [--d --layers --lambda] [--full --calibration-from <run>]`、`rta watch`（曲线页 `http://127.0.0.1:47900/`）、`rta eval <run>...`、`rta export <run> [--metrics-from]`、`rta model [--check]`、`rta predict --first ... --second ...`（中文名试算）、`rta sim [--side F|S] [--opponent ai|manual]`（终端里模拟 BP：一层估算的推荐 + 后禁矩阵；候选按选人头先验筛，见 B14b 审核记录「冷门英雄外推」）。run 目录 `F:\e7helper-data\rta\runs\<名字>\`。
+- 冻结：`e7engine.spec` 的 `collect_submodules` 跳过 `e7helper.core.rta.train`，`excludes` 加 torch / onnx / onnxscript；冒烟测试跑 `rta model --check` 并检查产物里没有 torch。
+
 **采集**（`e7helper rta crawl`，开发用）：种子 → 采他们的对局 → 对手段位 ≥ `--min-grade`（默认优胜者）就入队。国服一名玩家往前翻到这个赛季的头（最多 `--max-pages` 页，一页里没有新对局也停）；海外每人只有最近 100 场，隔 `--refresh-hours`（默认 20）再采；国服翻完的玩家也按这个间隔回来看第 1 页。没采过的、段位高的、离种子近的优先。每个服默认 1 次 / 秒（另加 0–0.3 秒抖动）、每天 2 万次上限、连续出错 10 次就停；取不到的玩家（多半是 405）隔一段时间再试，失败 3 次不再采。对局表只存 `strip()` 后的字段，**玩家编号只在队列表里**，采集库不进 git、不随包。
 - CLI：`e7helper rta probe -s cn|global`（采一页看字段，不打印昵称）、`rta crawl [--server both] [--season …] [--max-requests N]`、`rta report [--json]`。
 

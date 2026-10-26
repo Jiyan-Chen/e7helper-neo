@@ -743,5 +743,498 @@ def rta_report(
     console.print(f"玩家队列（总数, 没采过的）：{rep['queue']}")
 
 
+DatasetOpt = Annotated[Optional[Path], typer.Option("--dataset", "-d", help="快照路径，默认 datasets/ 里最新的")]
+
+
+def _latest_dataset(path: Path | None) -> Path:
+    from e7helper.core.rta.dataset import default_dir
+
+    if path:
+        return path
+    found = sorted(default_dir().glob("*.npz"), key=lambda p: p.stat().st_mtime)
+    if not found:
+        _fail(f"{default_dir()} 里没有快照，先跑 e7helper rta dataset")
+        raise typer.Exit(1)
+    return found[-1]
+
+
+@rta_app.command("dataset")
+def rta_dataset(
+    until: Annotated[Optional[str], typer.Option("--until", help="只要这一天（UTC，含）以前的对局，例如 2026-10-23")] = None,
+    season: Annotated[str, typer.Option("--season", help="赛季代码")] = "pvp_rta_ss21",
+    out: Annotated[Optional[Path], typer.Option("--out", "-o", help="快照路径，默认 datasets/<赛季>-<截止日>.npz")] = None,
+    db: Annotated[Optional[Path], typer.Option("--db", help="采集库路径，默认 F:\\e7helper-data\\rta\\crawl.sqlite")] = None,
+    show: Annotated[Optional[Path], typer.Option("--show", help="不建新的，只看这个快照的概况")] = None,
+) -> None:
+    """建训练数据快照（B14b）：解析、过滤、编码采集库里一个赛季的对局，存成 npz。"""
+    from e7helper.core.rta import dataset as rds
+
+    if show:
+        ds = rds.Dataset.load(show)
+        path = show
+    else:
+        path = out or rds.default_dir() / f"{season.removeprefix('pvp_rta_')}-{until or time.strftime('%Y-%m-%d')}.npz"
+        last = [0.0]
+
+        def progress(read: int, kept: int) -> None:
+            if time.time() - last[0] > 5:
+                last[0] = time.time()
+                console.print(f"[dim]{datetime.now():%H:%M:%S}[/] 已读 {read}，收下 {kept}")
+
+        ds = rds.build(db, season=season, until=until, progress=progress)
+        ds.save(path)
+    info = rds.summary(ds)
+    meta = info["meta"]
+    console.print(f"快照 {path}（{path.stat().st_size / 1e6:.1f} MB）：{meta['season']}，{meta['first_day']} ~ "
+                  f"{meta['last_day']}，读 {meta['read']} 场、收下 {meta['kept']}，用时 {meta['seconds']} 秒")
+    console.print(f"去掉的：{meta['dropped']}")
+    console.print(f"每服：{meta['per_server']} · 较低一方的段位：{info['grade_mix']}")
+    table = Table("份", "场数", "双方 ≥ 优胜者", "日期", "先手胜率", "每服")
+    for name, s in info["splits"].items():
+        table.add_row(name, str(s["matches"]), str(s["champion_plus"]), f"{s['from']} ~ {s['to']}",
+                      f"{s['first_win_rate']:.2%}", str(s["per_server"]))
+    console.print(table)
+    console.print(f"英雄 {info['heroes']} 名，词表（训练集选过 ≥ 30 次）{info['vocab']} 名；开战规则 {info['rules']}")
+
+
+def _cal(cal) -> str:
+    """校准参数：后禁后（n = 11）的斜率 / 截距。"""
+    if not cal:
+        return "—"
+    from e7helper.core.rta.model import calibration_arrays
+
+    scale, bias = calibration_arrays(cal)
+    return f"{scale[-1]:.2f} / {bias[-1]:+.3f}"
+
+
+def _train_mod(name: str):
+    """导入 e7helper.core.rta.train 的子模块；没装 torch 时提示装依赖组。"""
+    import importlib
+
+    from e7helper.core.rta.train import require_torch
+
+    try:
+        require_torch()
+    except RuntimeError as e:
+        _fail(str(e))
+        raise typer.Exit(1) from None
+    return importlib.import_module(f"e7helper.core.rta.train.{name}")
+
+
+@rta_app.command("train")
+def rta_train(
+    model: Annotated[str, typer.Option("--model", "-m", help="lr0（先手 + 段位）/ lr（英雄强度）/ fm（因子分解机）/ transformer / hybrid（Transformer + 因子分解机）")] = "transformer",
+    d: Annotated[int, typer.Option("--d", help="Transformer 宽度")] = 64,
+    layers: Annotated[int, typer.Option("--layers", help="Transformer 层数")] = 2,
+    lam: Annotated[float, typer.Option("--lambda", help="选人损失的权重")] = 1.0,
+    k: Annotated[int, typer.Option("--k", help="因子分解机的隐向量维度")] = 16,
+    epochs: Annotated[int, typer.Option("--epochs", help="最多几轮")] = 30,
+    patience: Annotated[int, typer.Option("--patience", help="早停：学习率降到峰值三成以下后，验证连续几轮没变好就停；0 = 跑满整个周期（默认）")] = 0,
+    weight_decay: Annotated[float, typer.Option("--weight-decay", help="AdamW 权重衰减")] = 0.01,
+    schedule: Annotated[str, typer.Option("--schedule", help="cosine（余弦退火）/ constant（预热后恒定，grokking 实验用）")] = "cosine",
+    batch: Annotated[int, typer.Option("--batch", help="每批几场")] = 512,
+    lr: Annotated[float, typer.Option("--lr", help="学习率")] = 2e-3,
+    device: Annotated[str, typer.Option("--device", help="auto / cuda / cpu")] = "auto",
+    full: Annotated[bool, typer.Option("--full", help="全量重训：不留验证 / 测试，跑满 --epochs（校准用 --calibration-from）")] = False,
+    calibration_from: Annotated[Optional[str], typer.Option("--calibration-from", help="全量重训时用这个 run（切分训练的）在验证集上拟合的校准参数")] = None,
+    name: Annotated[Optional[str], typer.Option("--name", help="run 名字，默认按模型和参数生成")] = None,
+    max_steps: Annotated[int, typer.Option("--max-steps", help="只跑这么多步（测速用）")] = 0,
+    dataset: DatasetOpt = None,
+) -> None:
+    """训练 RTA 模型（B14b，开发用）：进度在终端，曲线在 e7helper rta watch。Ctrl+C 停下并保留最好的一轮。"""
+    from rich.progress import BarColumn, Progress, TextColumn, TimeRemainingColumn
+
+    from e7helper.core.rta.dataset import Dataset
+
+    fit = _train_mod("fit")
+    path = _latest_dataset(dataset)
+    ds = Dataset.load(path)
+    calibration = None
+    if calibration_from:
+        src = _run_dir(calibration_from)
+        calibration = json.loads((src / "result.json").read_text(encoding="utf-8")).get("calibration")
+        if not calibration and (src / "eval-test.json").exists():  # 早期的 run 只存了温度：用 rta eval 从验证集拟合的
+            calibration = json.loads((src / "eval-test.json").read_text(encoding="utf-8")).get("calibration")
+        if not isinstance(calibration, dict):
+            _fail(f"{src.name} 没有校准参数，先跑 e7helper rta eval {src.name}")
+            raise typer.Exit(1)
+    cfg = fit.TrainConfig(name=name or "", model=model, d=d, layers=layers, lam=lam, k=k, epochs=epochs,
+                          patience=patience, weight_decay=weight_decay, schedule=schedule, batch=batch, lr=lr, device=device, full=full, calibration=calibration,
+                          max_steps=max_steps, dataset=str(path))
+    run = fit.runs_dir() / cfg.run_name()
+    console.print(f"训练 {cfg.run_name()} · 数据 {path.name}（{len(ds)} 场）· 设备 {fit.pick_device(device)} → {run}")
+    with Progress(TextColumn("[bold]{task.description}"), BarColumn(), TextColumn("{task.percentage:>4.0f}%"),
+                  TextColumn("{task.fields[info]}"), TimeRemainingColumn(), console=console) as progress:
+        task = progress.add_task(cfg.run_name(), total=None, info="准备数据…")
+
+        def on_step(rec: dict) -> None:
+            pick = f" / 选人 {rec['pick']:.3f}" if rec.get("pick") is not None else ""
+            progress.update(task, total=cfg.epochs, completed=rec["frac"],
+                            info=f"第 {rec['epoch']} 轮 · loss {rec['loss']:.4f}（胜率 {rec['win']:.4f}{pick}）· "
+                                 f"{rec['speed'] / 1e4:.1f} 万场/秒")
+
+        def on_epoch(v: dict) -> None:
+            if "n11" not in v:
+                progress.console.print(f"第 {v['epoch']} 轮完成")
+                return
+            pick = v.get("pick")
+            ptxt = f" · 选人前5 {pick['top5']:.3f} 前8 {pick['top8']:.3f}" if pick else ""
+            mark = "[green]↓[/]" if v["improved"] else (f"[dim]早停计数 {v['bad_epochs']}[/]" if patience else "")
+            if "train_win_loss" in v:
+                ptxt += f" · 训练集 {v['train_win_loss']:.4f} / 验证 {v['win_loss']:.4f}"
+            progress.console.print(
+                f"第 {v['epoch']} 轮验证：loss {v['loss']:.4f} · n11 log loss {v['n11']['log_loss']:.4f} "
+                f"AUC {v['n11']['auc']:.4f} ECE {v['n11']['ece']:.4f}（≥优胜者 AUC {v['n11_champ']['auc']:.4f}）{ptxt} {mark}")
+
+        result = fit.train(ds, cfg, on_step=on_step, on_epoch=on_epoch)
+    console.print(f"{result['status']}：最佳第 {result['best_epoch']} 轮，校准 {_cal(result['calibration'])}，"
+                  f"用时 {result['seconds'] / 60:.1f} 分钟 · {result['run']}")
+
+
+def _run_dir(name: str) -> Path:
+    from e7helper.core.rta.train import runs_dir
+
+    path = Path(name) if Path(name).is_absolute() else runs_dir() / name
+    if not (path / "best.pt").exists():
+        _fail(f"{path} 里没有 best.pt")
+        raise typer.Exit(1)
+    return path
+
+
+@rta_app.command("eval")
+def rta_eval(
+    runs: Annotated[list[str], typer.Argument(help="run 名字（runs/ 下的目录名）或路径")],
+    split: Annotated[str, typer.Option("--split", help="test / val")] = "test",
+    device: Annotated[str, typer.Option("--device", help="cpu / cuda")] = "cpu",
+    as_json: Annotated[bool, typer.Option("--json", help="输出 JSON")] = False,
+    dataset: DatasetOpt = None,
+) -> None:
+    """在快照的测试集上评估、对比多个 run（B14b）：胜率按局面 / 子集、选人对比热度基线。结果另存 run/eval-<split>.json。"""
+    from e7helper.core.rta.dataset import Dataset
+
+    ev = _train_mod("evaluate")
+    ds = Dataset.load(_latest_dataset(dataset))
+    results = [ev.evaluate_run(_run_dir(r), ds, split, device) for r in runs]
+    if as_json:
+        console.print_json(data=results)
+        return
+    table = Table("run", "参数", "n10 log loss", "n10 AUC", "n11 log loss", "n11 AUC", "n11 ECE", "n11 Brier",
+                  "≥优胜者 n11 log loss", "≥优胜者 n11 AUC", "选人 前1/前5/前8", "校准 n11（斜率 / 截距）")
+    for r in results:
+        a, c = r["win"]["all"], r["win"].get("champion+", {})
+        pk = r.get("pick")
+        table.add_row(r["run"], f"{(r['params'] or 0) / 1000:.0f}k", f"{a['10']['log_loss']:.4f}", f"{a['10']['auc']:.4f}",
+                      f"{a['11']['log_loss']:.4f}", f"{a['11']['auc']:.4f}", f"{a['11']['ece']:.4f}", f"{a['11']['brier']:.4f}",
+                      f"{c['11']['log_loss']:.4f}" if c else "—", f"{c['11']['auc']:.4f}" if c else "—",
+                      f"{pk['top1']:.3f}/{pk['top5']:.3f}/{pk['top8']:.3f}" if pk else "—", _cal(r["calibration"]))
+    pop = results[0]["pop"]
+    table.add_row("选人热度基线", "—", "", "", "", "", "", "", "", "", f"{pop['top1']:.3f}/{pop['top5']:.3f}/{pop['top8']:.3f}", "")
+    console.print(f"{split}：{results[0]['n']} 场")
+    console.print(table)
+    curve = Table("run", *[f"n={n}" for n in range(12)], title="各局面的 AUC（全部）")
+    for r in results:
+        curve.add_row(r["run"], *[f"{r['win']['all'][str(n)]['auc']:.3f}" for n in range(12)])
+    console.print(curve)
+
+
+@rta_app.command("export")
+def rta_export(
+    run: Annotated[str, typer.Argument(help="要导出的 run（transformer / hybrid）")],
+    out: Annotated[Optional[Path], typer.Option("--out", "-o", help="输出目录，默认随包的 assets/data/rta/")] = None,
+    metrics_from: Annotated[Optional[str], typer.Option("--metrics-from", help="测试指标取自这个 run 的 eval-test.json（全量重训的模型自己没有测试集）")] = None,
+    parity: Annotated[int, typer.Option("--parity", help="parity 样例几个局面")] = 48,
+    dataset: DatasetOpt = None,
+) -> None:
+    """导出随包模型（B14b）：model.onnx + meta.json + parity.json，并核对 onnxruntime 和 torch 一致。"""
+    import numpy as np
+
+    from e7helper.core.rta.dataset import Dataset
+    from e7helper.core.rta.model import bundled_dir
+
+    fit = _train_mod("fit")
+    export = _train_mod("export")
+    path = _latest_dataset(dataset)
+    ds = Dataset.load(path)
+    run_dir = _run_dir(run)
+    model, vocab, ckpt = fit.load_run(run_dir)
+    cfg = ckpt["config"]
+    if cfg["model"] not in ("transformer", "hybrid"):
+        _fail("只有 transformer / hybrid 能导出 ONNX")
+        raise typer.Exit(2)
+    parts = ds.split(7, 7)
+    rng = np.random.default_rng(0)
+    rows = rng.choice(parts["test"], parity, replace=False)
+    states = [ds.state(int(r), int(n)) for r, n in zip(rows, np.resize(np.arange(12), parity))]
+    check_rows = rng.choice(parts["test"], 2000, replace=False)
+    x = ds.encode(vocab, check_rows)
+    src = _run_dir(metrics_from) if metrics_from else run_dir
+    ev_file = src / "eval-test.json"
+    test_metrics = json.loads(ev_file.read_text(encoding="utf-8")) if ev_file.exists() else None
+    info = {"run": run_dir.name, "trained_on": {k: int(len(v)) for k, v in ds.split(0 if cfg["full"] else 7, 7).items()},
+            "dataset": {k: ds.meta.get(k) for k in ("season", "until", "first_day", "last_day", "kept")},
+            "test_metrics_from": src.name if test_metrics else None,
+            "test_metrics": {k: test_metrics[k] for k in ("n", "win", "pick", "pop")} if test_metrics else None}
+    out = out or bundled_dir()
+    check = export.write_bundle(model, vocab, ckpt, out, states=states, check_inputs=(x["heroes"], x["ctx"]), info=info)
+    sizes = {p.name: p.stat().st_size for p in out.iterdir() if p.is_file()}
+    console.print(f"导出到 {out}：{', '.join(f'{k} {v / 1e6:.2f} MB' for k, v in sizes.items())}")
+    console.print(f"onnxruntime vs torch（{check['n']} 场 × 17 个位置）：胜率 logit 最大差 {check['win_logit']:.2e}，"
+                  f"选人 logit 最大差 {check['pick_logit']:.2e}，胜率概率最大差 {check['win_prob']:.2e}")
+
+
+@rta_app.command("model")
+def rta_model(
+    check: Annotated[bool, typer.Option("--check", help="用 parity.json 核对编码和推理，并测推理耗时")] = False,
+    folder: Annotated[Optional[Path], typer.Option("--dir", help="模型目录，默认随包的")] = None,
+) -> None:
+    """随包的 RTA 模型信息（B14b）；--check 核对一致性（冻结引擎的冒烟测试用它）。"""
+    import numpy as np
+
+    from e7helper.core.rta import model as rmodel
+
+    folder = folder or rmodel.bundled_dir()
+    if not rmodel.available(folder):
+        _fail(f"{folder} 里没有模型")
+        raise typer.Exit(1)
+    m = rmodel.RtaModel(folder)
+    meta = m.meta
+    arch = meta.get("arch", {})
+    console.print(f"模型 {folder}：{meta['kind']} d={arch.get('d')} L={arch.get('layers')} · {meta.get('params')} 参数 · "
+                  f"词表 {m.vocab.size} · 校准 n11 {_cal(m.calibration)} · 导出于 {meta.get('built')} · 加载 {m.load_seconds * 1000:.0f} ms")
+    ds = meta.get("dataset") or {}
+    console.print(f"训练数据：{ds.get('season')} {ds.get('first_day')} ~ {ds.get('last_day')}，{meta.get('trained_on')}")
+    tm = meta.get("test_metrics")
+    if tm:
+        a = tm["win"]["all"]["11"]
+        console.print(f"测试指标（{meta.get('test_metrics_from')}，{tm['n']} 场）：n11 log loss {a['log_loss']:.4f} AUC {a['auc']:.4f} "
+                      f"ECE {a['ece']:.4f}；选人前 5 {tm['pick']['top5']:.3f}（热度 {tm['pop']['top5']:.3f}）")
+    if not check:
+        return
+    res = m.check()
+    color = "green" if res["ok"] else "red"
+    console.print(f"[{color}]parity {'通过' if res['ok'] else '不通过'}[/]：{res['cases']} 个局面，编码一致 {res['encode_ok']}，"
+                  f"胜率最大差 {res['win_diff']:.2e}，下一手最大差 {res['pick_diff']:.2e}（容差 {res['tolerance']:g}）")
+    rng = np.random.default_rng(0)
+    heroes = rng.integers(2, m.vocab.size, (256, 17))
+    ctx = np.zeros((256, 3), dtype=np.int64)
+    m.run(heroes, ctx)
+    times = []
+    for _ in range(10):
+        t = time.perf_counter()
+        m.run(heroes, ctx)
+        times.append(time.perf_counter() - t)
+    console.print(f"推理：一批 256 场（每场 12 个局面）中位 {statistics.median(times) * 1000:.1f} ms")
+    if not res["ok"]:
+        raise typer.Exit(1)
+
+
+@rta_app.command("predict")
+def rta_predict(
+    first: Annotated[str, typer.Option("--first", "-f", help="先手方按顺序选的英雄（中文名 / 昵称，逗号分隔）")] = "",
+    second: Annotated[str, typer.Option("--second", "-s", help="后手方按顺序选的英雄")] = "",
+    pre_first: Annotated[str, typer.Option("--pre-first", help="先手方的预禁")] = "",
+    pre_second: Annotated[str, typer.Option("--pre-second", help="后手方的预禁")] = "",
+    ban_first: Annotated[str, typer.Option("--ban-first", help="先手方被禁的那名")] = "",
+    ban_second: Annotated[str, typer.Option("--ban-second", help="后手方被禁的那名")] = "",
+    grades: Annotated[str, typer.Option("--grades", help="双方段位，如 legend,emperor")] = "",
+    rule: Annotated[str, typer.Option("--rule", help="开战规则：unknown（国服）/ none / opening_rule_desc_tid")] = "unknown",
+    k: Annotated[int, typer.Option("--top", help="下一手列几名")] = 8,
+) -> None:
+    """用随包模型试算一个局面（B14b）：先手方胜率 + 下一手最可能的英雄。"""
+    from e7helper.core.data import heroes as hero_db
+    from e7helper.core.rta import model as rmodel
+    from e7helper.core.rta.encode import UNKNOWN_RULE, DraftState
+
+    db = hero_db()
+
+    def codes(text: str) -> list[str]:
+        out = []
+        for name in filter(None, (s.strip() for s in text.replace("，", ",").split(","))):
+            h = db.find(name) or next(iter(db.search(name, limit=1)), None)
+            if not h:
+                _fail(f"找不到英雄：{name}")
+                raise typer.Exit(2)
+            out.append(h.code)
+        return out
+
+    def name(code: str | None) -> str:
+        h = db.get(code) if code else None
+        return h.name if h else (code or "—")
+
+    g = [x.strip() or None for x in grades.split(",")] if grades else [None, None]
+    st = DraftState(prebans={"F": codes(pre_first), "S": codes(pre_second)}, picks={"F": codes(first), "S": codes(second)},
+                    banned={"F": (codes(ban_first) or [None])[0], "S": (codes(ban_second) or [None])[0]},
+                    grades=(g[0], g[1] if len(g) > 1 else None),
+                    rule=UNKNOWN_RULE if rule == "unknown" else None if rule == "none" else rule)
+    problems = st.problems()
+    if problems:
+        _fail("；".join(problems))
+        raise typer.Exit(2)
+    m = rmodel.load()
+    ev = m.evaluate([st])
+    console.print(f"局面 {st.state}（已选 {st.n_picks} 手）：先手方胜率 [bold]{ev.win[0]:.1%}[/]，后手方 {1 - ev.win[0]:.1%}")
+    if st.state < 10:
+        side = "先手方" if st.mover() == "F" else "后手方"
+        top = m.next_picks(st, k)
+        console.print(f"下一手（{side}）：" + "、".join(f"{name(c)} {p:.1%}" for c, p in top))
+
+
+@rta_app.command("sim")
+def rta_sim(
+    side: Annotated[Optional[str], typer.Option("--side", help="你是 F（先手）还是 S（后手），默认随机")] = None,
+    grades: Annotated[str, typer.Option("--grades", help="我方,对方 的段位，如 emperor,warlord")] = "emperor,emperor",
+    rule: Annotated[str, typer.Option("--rule", help="开战规则：unknown（国服）/ none / opening_rule_desc_tid")] = "unknown",
+    opponent: Annotated[str, typer.Option("--opponent", help="ai（模型按常见选法选）/ manual（对手也由你输入，复盘用）")] = "ai",
+    seed: Annotated[Optional[int], typer.Option("--seed", help="随机种子（对手的预禁和选人）")] = None,
+    dataset: DatasetOpt = None,
+) -> None:
+    """模拟 BP（B14b，审核时试用模型）：你选一方，模型给胜率和候选；输入中文名或昵称，直接回车 = 选第一个推荐。"""
+    import numpy as np
+
+    from e7helper.core.data import heroes as hero_db
+    from e7helper.core.rta import model as rmodel
+    from e7helper.core.rta import rules, sim
+    from e7helper.core.rta.encode import UNK, UNKNOWN_RULE, DraftState
+
+    db = hero_db()
+    m = rmodel.load()
+    rng = np.random.default_rng(seed)
+    side = (side or str(rng.choice(["F", "S"]))).upper()
+    if side not in ("F", "S") or opponent not in ("ai", "manual"):
+        _fail("--side 只能是 F / S；--opponent 只能是 ai / manual")
+        raise typer.Exit(2)
+    foe = sim.other(side)
+
+    def name(code: str | None) -> str:
+        h = db.get(code) if code else None
+        return h.name if h else (code or "—")
+
+    def resolve(text: str) -> str | None:
+        text = text.strip()
+        h = db.get(text) or db.find(text) or next(iter(db.search(text, limit=1)), None)
+        if not h:
+            console.print(f"[red]找不到英雄：{text}[/]")
+            return None
+        if m.vocab.hero(h.code) == UNK:
+            console.print(f"[yellow]{h.name} 不在模型词表里（训练数据里选得太少），按「其他英雄」算[/]")
+        return h.code
+
+    def ask_heroes(prompt: str, k: int, default: list[str] | None = None) -> list[str]:
+        while True:
+            text = console.input(prompt).replace("，", ",").strip()
+            if not text and default:
+                return default
+            names = [s for s in text.split(",") if s.strip()]
+            codes = [resolve(s) for s in names]
+            if len(codes) == k and all(codes) and len(set(codes)) == k:
+                return codes  # type: ignore[return-value]
+            console.print(f"[red]要 {k} 名不重复的英雄[/]")
+
+    me_label = "先手" if side == "F" else "后手"
+    g = [x.strip() or None for x in grades.split(",")] + [None]
+    grade = {side: g[0], foe: g[1]}
+    rule_tid = UNKNOWN_RULE if rule == "unknown" else None if rule == "none" else rule
+    console.print(f"[bold]模拟 BP[/]：你是 [bold]{me_label}[/] · 段位 我方 {grade[side]} / 对方 {grade[foe]} · "
+                  f"开战规则 {rules.rule_label(rule_tid) if rule_tid != UNKNOWN_RULE else '未知（国服）'} · "
+                  f"对手 {'模型' if opponent == 'ai' else '你输入'}")
+    console.print("[dim]胜率都是「我方」的；推荐只往前看一步（选了这名之后的胜率），没考虑对手怎么回应，完整搜索在 B14c。[/]")
+
+    weights = None
+    if opponent == "ai":
+        try:
+            weights = sim.preban_weights(_latest_dataset(dataset))
+        except typer.Exit:
+            console.print("[yellow]没有训练快照，对手的预禁也由你输入[/]")
+    my_pre = ask_heroes("你的 2 名预禁（逗号分隔，回车 = 按热度随机）：", 2,
+                        default=sim.sample_prebans(weights, rng) if weights else None)
+    if weights:
+        foe_pre = sim.sample_prebans(weights, rng)
+    else:
+        foe_pre = ask_heroes("对手的 2 名预禁：", 2)
+    console.print(f"预禁：你 {'、'.join(map(name, my_pre))}；对手 {'、'.join(map(name, foe_pre))}")
+
+    state = DraftState(prebans={side: my_pre, foe: foe_pre}, picks={"F": [], "S": []},
+                       grades=(grade["F"], grade["S"]), rule=rule_tid)
+    curve: list[tuple[str, float]] = [("预禁后", float(sim.my_win(m.win([state])[0], side)))]
+    console.print(f"当前你的胜率 [bold]{curve[-1][1]:.1%}[/]")
+
+    for n in range(len(rules.PICK_ORDER)):
+        mover = rules.mover(n)
+        slot = len(state.picks[mover]) + 1
+        tag = "（保护位）" if slot - 1 == rules.PROTECTED_SLOT else ""
+        if mover == side:
+            sugg = sim.suggest(m, state, side, k=8)
+            table = Table("推荐", "选了之后你的胜率", "这一手的常见度", title=f"第 {n + 1} 手 · 你的第 {slot} 名{tag}")
+            for s in sugg:
+                table.add_row(name(s.code), f"{s.win:.1%}（{s.win - curve[-1][1]:+.1%}）", f"{s.common:.1%}")
+            console.print(table)
+            console.print("[dim]这一手大家常选：" + "、".join(f"{name(c)} {p:.0%}" for c, p in m.next_picks(state, 5)) + "[/]")
+            while True:
+                text = console.input("你选：").strip()
+                code = sugg[0].code if not text else resolve(text)
+                if code and not sim.with_pick(state, side, code).problems():
+                    break
+                if code:
+                    console.print(f"[red]{name(code)} 不能选（被预禁或已经选了）[/]")
+        elif opponent == "manual":
+            while True:
+                code = resolve(console.input(f"第 {n + 1} 手 · 对手选："))
+                if code and not sim.with_pick(state, foe, code).problems():
+                    break
+        else:
+            code, p = sim.opponent_pick(m, state, rng)
+            console.print(f"第 {n + 1} 手 · 对手选了 [bold]{name(code)}[/]{tag}（模型认为这一手 {p:.0%} 的人会选它）")
+        state = sim.with_pick(state, mover, code)
+        curve.append((f"{'你' if mover == side else '对手'}：{name(code)}", float(sim.my_win(m.win([state])[0], side))))
+        console.print(f"当前你的胜率 [bold]{curve[-1][1]:.1%}[/]")
+
+    rows, cols, mat = sim.ban_matrix(m, state, side)
+    rec = sim.maximin_row(mat)
+    table = Table("你禁 ↓ / 对方禁 →", *[name(c) for c in cols], "最坏情况", title="后禁：你的胜率（对方的保护位不能禁）")
+    for i, r in enumerate(rows):
+        table.add_row(("★ " if i == rec else "") + name(r), *[f"{v:.1%}" for v in mat[i]], f"{mat[i].min():.1%}")
+    console.print(table)
+    while True:
+        text = console.input(f"你禁对方哪名（回车 = 推荐的 {name(rows[rec])}）：").strip()
+        mine = rows[rec] if not text else resolve(text)
+        if mine in rows:
+            break
+        console.print("[red]只能禁对方选的、不是保护位的英雄[/]")
+    if opponent == "manual":
+        while True:
+            theirs = resolve(console.input("对手禁了你哪名："))
+            if theirs in cols:
+                break
+    else:
+        theirs = cols[sim.minimax_col(mat)]
+        console.print(f"对手禁了你的 [bold]{name(theirs)}[/]（对它最稳妥的选择）")
+    state = sim.with_bans(state, {foe: mine, side: theirs})
+    curve.append(("后禁后", float(sim.my_win(m.win([state])[0], side))))
+
+    console.print(f"\n[bold]最终你的胜率 {curve[-1][1]:.1%}[/]")
+    console.print(f"你（{me_label}）：" + "、".join(name(c) + ("（被禁）" if c == theirs else "") for c in state.picks[side]))
+    console.print("对手：" + "、".join(name(c) + ("（被禁）" if c == mine else "") for c in state.picks[foe]))
+    console.print("胜率变化：" + " → ".join(f"{label} {p:.0%}" for label, p in curve))
+
+
+@rta_app.command("watch")
+def rta_watch(
+    port: Annotated[int, typer.Option("--port", help="端口")] = 47900,
+    root: Annotated[Optional[Path], typer.Option("--root", help="runs 目录，默认 F:\\e7helper-data\\rta\\runs")] = None,
+) -> None:
+    """训练曲线页（B14b）：浏览器打开 http://127.0.0.1:<端口>/，每 5 秒刷新。"""
+    import uvicorn
+
+    from e7helper.core.rta.train import runs_dir
+    from e7helper.core.rta.train.watch import create_app
+
+    root = root or runs_dir()
+    root.mkdir(parents=True, exist_ok=True)
+    config = server_config(create_app(root))
+    config.host, config.port = "127.0.0.1", port
+    console.print(f"训练曲线：http://127.0.0.1:{port}/ · 读 {root}（Ctrl+C 停止）")
+    uvicorn.Server(config).run()
+
+
 if __name__ == "__main__":
     app()

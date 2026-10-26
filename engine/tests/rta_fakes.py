@@ -60,3 +60,32 @@ def battle(seq: int | str = 1, *, me_first: bool = True, my=MY, enemy=ENEMY, my_
         raw["opening_rule_desc_tid"] = rule
     raw.update(extra)
     return raw
+
+
+def synthetic_dataset(n: int = 1500, heroes: int = 40, days: int = 30, seed: int = 0):
+    """B14b：合法选秀的合成快照（不用采集库）。c0 / c1 / c2 是强英雄（在哪边哪边大概率赢），给训练测试一个能学到的信号。"""
+    import numpy as np
+
+    from e7helper.core.rta import encode, rules
+    from e7helper.core.rta.dataset import Dataset
+
+    rng = np.random.default_rng(seed)
+    tokens = np.full((n, encode.SEQ_LEN), -1, dtype=np.int16)
+    first_wins = np.zeros(n, dtype=np.int8)
+    for i in range(n):
+        drawn = rng.choice(heroes, 14, replace=False)
+        tokens[i, 1:5] = drawn[:4]
+        tokens[i, 5:15] = drawn[4:]
+        f = [drawn[4 + k] for k, s in enumerate(rules.PICK_ORDER) if s == "F"]
+        s_ = [drawn[4 + k] for k, s in enumerate(rules.PICK_ORDER) if s == "S"]
+        tokens[i, 15] = f[rng.choice([0, 1, 3, 4])]  # 保护位（第 3 手）不能被禁
+        tokens[i, 16] = s_[rng.choice([0, 1, 3, 4])]
+        score = sum(h in f for h in (0, 1, 2)) - sum(h in s_ for h in (0, 1, 2))
+        first_wins[i] = rng.random() < 1 / (1 + np.exp(-1.5 * score))
+    grades = rng.integers(4, encode.N_GRADES, size=(n, 2)).astype(np.int8)
+    return Dataset(
+        codes=[f"c{i}" for i in range(heroes)], rule_table=[("rta_cs_dodge_down_desc", "rta_openingrule_category_6")],
+        tokens=tokens, grades=grades, rule=rng.choice([-2, -1, 0], n).astype(np.int16),
+        server=rng.integers(0, 2, n).astype(np.int8), day=np.sort(rng.integers(739900, 739900 + days, n)).astype(np.int32),
+        first_wins=first_wins, turns=np.full(n, 10, dtype=np.int16), meta={"season": "test", "kept": n},
+    )

@@ -9,3 +9,8 @@ engine/screenshots/
 node_modules/
 app/src-tauri/target/
 *.tsbuildinfo
+
+# B14b：GPU 训练环境（engine/tools/setup_rocm_venv.ps1）
+.venv-rocm/
+.python/
+.archify/

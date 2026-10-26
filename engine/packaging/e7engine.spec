@@ -7,8 +7,8 @@ from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 ENGINE = Path(SPECPATH).parent
 
 hiddenimports = (
-    # 模块按 pkgutil 自动发现，静态分析看不到
-    collect_submodules("e7helper")
+    # 模块按 pkgutil 自动发现，静态分析看不到；RTA 模型训练（要 torch）只在开发机用，不进产物（B14b）
+    collect_submodules("e7helper", filter=lambda name: not name.startswith("e7helper.core.rta.train"))
     # uvicorn 按字符串导入协议实现（ws="websockets-sansio"、lifespan="on" 等）
     + collect_submodules("uvicorn")
     + collect_submodules("websockets")
@@ -24,7 +24,7 @@ a = Analysis(
     pathex=[str(ENGINE)],
     datas=datas,
     hiddenimports=hiddenimports,
-    excludes=["tkinter", "pytest", "_pytest", "httpx"],
+    excludes=["tkinter", "pytest", "_pytest", "httpx", "torch", "onnx", "onnxscript", "e7helper.core.rta.train"],
     noarchive=False,
 )
 pyz = PYZ(a.pure)

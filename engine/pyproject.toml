@@ -30,6 +30,13 @@ dev = [
 build = [
     "pyinstaller>=6.22",
 ]
+# RTA 模型训练（B14b，只在开发机装）：python -m uv run --group train e7helper rta train ...
+# 注意：之后再跑不带 --group train 的 uv sync 会把 torch 删掉。GPU 训练另见 tools/setup_rocm_venv.ps1
+train = [
+    "torch>=2.9",
+    "onnx>=1.19",
+    "onnxscript>=0.5",
+]
 
 [build-system]
 requires = ["hatchling"]

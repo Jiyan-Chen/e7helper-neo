@@ -39,7 +39,10 @@ E7_DEVICE_TESTS=1 python -m uv run pytest -m device   # 真机测试（需 MuMu 
 python -m uv run e7helper doctor | bench | screenshot | tap X Y | modules | run <id> | heroes [词]
 python -m uv run e7helper serve [--no-connect]       # API 服务（B08），端口和 token 见 %LOCALAPPDATA%\e7helper\api.json
 python -m uv run e7helper rta probe | crawl | report # RTA 对局采集（B14a，开发用），库在 F:\e7helper-data\rta\crawl.sqlite（E7_RTA_DB 可改）
+python -m uv run e7helper rta dataset | model --check | predict | sim   # RTA 模型（B14b）：建快照、随包模型核对、试算、终端模拟 BP
+python -m uv run --group train e7helper rta train | eval | export | watch   # 训练（要 torch；GPU 用 .venv-rocm，见 tools/setup_rocm_venv.ps1）
 ```
+- 装了 `--group train` 后，再跑不带它的 `uv sync` 会把 torch 删掉。
 
 ## GUI（在 `app/` 下，B09）
 ```

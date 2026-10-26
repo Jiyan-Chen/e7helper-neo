@@ -1,6 +1,6 @@
 # HANDOFF
 
-> 新会话从这里读起。上次更新：2026-10-23（B14a 已通过；B14 RTA BP 助手拆成 B14a–B14f）
+> 新会话从这里读起。上次更新：2026-10-26（B14b 已通过）
 
 ## 当前进度
 - **B01 骨架 + 模块契约 + MuMu 设备层**：✅ 已通过，记录见 [reviews/B01.md](reviews/B01.md)。
@@ -22,7 +22,8 @@
 - **发布 0.2.0**（B12c 审核后用户要求）：五处版本号改成 0.2.0，重新冻结引擎、打 NSIS 安装包（见「打包」）。**这个安装包不含 B13**（B13 之后才合进 main），下次发版再带上。
 - **B13 英雄数据库**：✅ 已通过，记录见 [reviews/B13.md](reviews/B13.md)。`core/data`：389 名英雄（Fribbels 数据 + e7.wiki 的国服中文名 / 昵称 / 技能 / 角色奉献 / 专属装备 / 发布日期），随包内置 + 联网更新；Fribbels 配装库实时汇总（中位数，速度套看前 10% / 前 25%，其他按速度分快中慢）；GUI「英雄图鉴」（按发布日期排、筛选、详情三个页签），属性 / 职业 / 套装 / 刻印 / 等级 / 属性类型图标都从游戏截图裁。审核改了 12 轮。全量 `1004 passed, 7 skipped`，前端 22 个。用户先开了 B13（在 B12c 之前的 main 上做），2026-10-21 合进 main。
 - **B14a RTA：对局数据**：✅ 已通过，记录见 [reviews/B14a.md](reviews/B14a.md)。RTA BP 助手（对齐 e7rtabot.com/draft）按用户意见拆成 B14a–B14f，每块一个会话。本块：`core/rta`（选秀规则、国服 + 海外官方战绩站客户端、对局解析、sqlite 滚雪球采集、数据报告）+ CLI `rta probe / crawl / report`。审核通过时采集库国服 16.0 万场、海外 42.7 万场（本赛季 ss21 为主），解析通过率约 98.5%（失败的全是选秀阶段有人退出）。全量 `1060 passed, 7 skipped`，之后 RTA 测试 53 个。
-- 下一块：**B14b RTA：胜率 / 选人模型**（见下面「下一块」）。
+- **B14b RTA：胜率 / 选人模型**：✅ 已通过，记录见 [reviews/B14b.md](reviews/B14b.md)。ss21 两服 91.1 万场快照 → 随包 Transformer + 因子分解机的混合结构（d = 128、3 层，66.5 万参数，ONNX 3 MB）：测试集后禁后 log loss 0.6166、AUC 0.717、ECE 0.005（最强基线因子分解机 0.6236 / 0.708），选人前 5 命中 0.601（热度 0.411）。AMD 显卡 + Windows ROCm 版 torch 训练（比 CPU 快约 16 倍）、训练曲线页、Platt 校准、终端模拟 BP（`rta sim`）。审核中发现模型对冷门英雄会外推出极端胜率，用户决定留给 B14c 的搜索挡住。全量 `1116 passed, 7 skipped`。
+- 下一块：**B14c RTA：选秀推荐**（见下面「下一块」）。
 
 ## 已有能力
 ### 设备（B01）
@@ -217,9 +218,18 @@
 - 实测：国服约 4000 场 / 分钟（一页 100 场约 80 场是新的），海外约 1400 场 / 分钟（接口一次 3–4 秒）。国服优胜者以上约 2000 名玩家，几个小时就采完；海外玩家多，滚雪球到近 1 万名。
 - 测试：`tests/test_rta_*.py`（53 个），合成对局在 `tests/rta_fakes.py`（照官方格式手写，不含真实玩家数据），采集用假客户端。
 
+### RTA 胜率 / 选人模型（B14b，详见 architecture.md「RTA 选秀」的「胜率 / 选人模型」和 reviews/B14b.md）
+- 运行时（只要 onnxruntime）：`from e7helper.core.rta import model; m = model.load()` → `m.win(states)`（先手方赢的概率）/ `m.next_picks(state, k)`（下一手轮到的一方最可能选谁）/ `m.evaluate(states)`（一批局面一次前向：win [B] + picks [B, V]）/ `m.check()`（parity）。局面用 `encode.DraftState(prebans, picks, banned, grades, rule)`：F = 先手方，picks 按这一方的选人顺序，rule：None = 没有规则、`"unknown"` = 国服不知道、其余是 `opening_rule_desc_tid`。
+- 编码：一场 = 17 个 token（0 CTX、1–4 预禁、5–14 选秀、15–16 双方被禁的），一次前向读出 12 个局面（已选 n 手读位置 4 + n，后禁后读 16）。胜率一律是**先手方**的。
+- 随包 `engine/assets/data/rta/`：`model.onnx`（输出每个位置的 win_logit / pick_logits）、`meta.json`（词表 265 名、开战规则 4 条、每个局面一组 Platt 校准、训练数据、切分模型的测试指标）、`parity.json`。推理一批 256 场 33–45 ms（门槛 50 ms，用户同意放宽）。
+- **冷门英雄外推**：带冷门英雄（训练集里被选 < 1000 次）的局面模型过度自信，一层贪心会专挑冷门英雄把胜率推到 100%。**用户决定留给 B14c 的搜索挡住**：候选和对手回应只从选人头先验里取（参考 `sim.suggest`：这一手常见度 ≥ 0.5% 或排前 40）。
+- 开发用（要 torch：`python -m uv sync --group train`；GPU 用 `engine/.venv-rocm`，`tools/setup_rocm_venv.ps1`）：`rta dataset [--until]`（快照 `F:\e7helper-data\rta\datasets\ss21-2026-10-23.npz`）、`rta train -m lr0|lr|fm|transformer|hybrid`（默认跑满整个余弦周期、按验证集保存最好的一轮；`--patience` 可选早停）、`rta eval`、`rta export <run> --metrics-from <切分 run>`、`rta watch`（曲线页 `http://127.0.0.1:47900/`）、网格 `tools/rta_grid.ps1`。run 在 `F:\e7helper-data\rta\runs\`。
+- 不要 torch 的：`rta model --check`（冻结引擎冒烟测试也跑它）、`rta predict --first 艾丝黛 ...`（中文名试算）、`rta sim [--side F|S] [--opponent ai|manual]`（终端模拟 BP：一层估算的推荐 + 后禁 4 × 4 矩阵）。
+- 测试：`tests/test_rta_encode.py` / `dataset` / `metrics` / `train` / `export` / `model` / `sim` / `watch`（新增 61 个，`train` / `export` 要 torch；RTA 共 114 个）；合成快照 `rta_fakes.synthetic_dataset`。
+
 ### 模块与 CLI（B01，B03 / B08 更新）
 - 模块：继承 `TaskModule` / `AssistantModule`，放到 `e7helper/modules/<id>/` 就会被自动发现。参考 `modules/hello/`。
-- CLI：`doctor`、`bench`、`screenshot`、`tap`、`modules`、`run <id> [-c JSON] [-t 超时]`（经 runtime）、`scene [-f 图片] [--dismiss] [--watch]`、`capture`（新增 `--tap`）、`match`、`ocr`、`serve`（B08）、`heroes [词] [--update [--bundled]]`（B13）、`rta probe|crawl|report`（B14a，子命令组）。
+- CLI：`doctor`、`bench`、`screenshot`、`tap`、`modules`、`run <id> [-c JSON] [-t 超时]`（经 runtime）、`scene [-f 图片] [--dismiss] [--watch]`、`capture`（新增 `--tap`）、`match`、`ocr`、`serve`（B08）、`heroes [词] [--update [--bundled]]`（B13）、`rta probe|crawl|report`（B14a，子命令组）、`rta dataset|train|eval|export|model|predict|sim|watch`（B14b）。
 
 ## 关键决策
 - 基准分辨率 1600×900。本机 MuMu 已经是 1600×900（平板模式 tablet.2）。
@@ -294,15 +304,22 @@
   - 不管游戏内的「禁用助手」，推荐全权按我们的模型；
   - 英雄池：在英雄图鉴里勾选「我有的英雄」（可填速度），勾了只推荐这些，没勾不限制；
   - 采集只存选秀数据，不存昵称，玩家编号只在本机队列表里（我的决定，审核没有异议）。
+- B14b（2026-10-25 / 26 审核通过）：
+  - 训练数据只用本赛季 ss21、两服合并、全段位（段位作为输入，主指标看双方 ≥ 优胜者）；随包模型用切分选好结构和轮数后全量数据重训（均为用户选择）；
+  - 训练过程要能实时看（终端进度条 + 自己做的曲线页，用户选）；GPU 能用就用（用户要求；AMD 官方 Windows ROCm 版 torch，比 CPU 快约 16 倍）；
+  - 纯 Transformer 打不过因子分解机、也用不上后禁信息 → 随包「Transformer + 因子分解机」混合结构；早停只看胜率；Platt 校准（都是我按数据改的，审核没有异议）；
+  - 速度门槛从 30 ms 放宽到 50 ms，换取 d = 128（用户选）；
+  - 默认跑满整个周期、按验证集保存最好一轮（用户问 grokking 后改；重跑没有更好，grokking 实验也没出现）；
+  - 冷门英雄外推留给 B14c 的搜索用选人头先验挡住，不在模型里修（用户决定）；
+  - 用户是高端 RTA 玩家，判断对局会结合技能机制（开战套开局冷却、任务 / 额外伤害 / 推条等）：用户按实战判断模型对那局全手动模拟的 67.3% 是准确的。
 
-## 下一块：B14b RTA 胜率 / 选人模型
-设计草案在 reviews/B14a.md「后续块的设计草案」，开工时细化、和用户确认后再动手。要点：
-- 数据：`crawl.iter_battles()` + `parse_battle()`；本赛季 `pvp_rta_ss21` 为主，国服以前赛季（ss20 / ss20f 约 7 万场）是否降权或去掉要定；含 `m` 开头英雄（愚人节怪物英雄）的对局去掉；选秀阶段退出的对局本来就解析失败。
-- 共用特征编码 `core/rta/encode.py`（训练和运行同一份 + parity 样例）；每场 12 个局面（n=0…9 带选人标签、n=10 选完、n=11 后禁后）；按日期切分（最后 7 天测试）。
-- 基线（段位 + 先手、英雄强度逻辑回归、反对称因子分解机）→ 小 Transformer（胜率头 + 选人头，开战规则 / 段位档 / 先手 / 预禁作为上下文）→ 打不过因子分解机就随包因子分解机。
-- 训练用 torch 放新依赖组 `train`（只在开发机装，spec 的 `excludes` 加 torch / onnx），导出 ONNX，引擎用现成的 onnxruntime 推理；模型随包放 `engine/assets/data/rta/`。
-- 采集库在 `F:\e7helper-data\rta\crawl.sqlite`（2026-10-23 挪过来时国服 160455 场、海外 479096 场，约 2.8 GB）；开工时先 `rta report` 看现在有多少，需要的话 `rta crawl` 再补（海外每人只有最近 100 场，隔天采才会积累）。
-- 后续 B14c–B14f 见 ROADMAP；B14f 要读游戏界面时先征得用户同意，只截图、不点击。B13 的 `heroes()`（`db.find` 查 OCR 名字、`db.icon` 头像）给 B14f 用。
+## 下一块：B14c RTA 选秀推荐
+设计草案在 reviews/B14a.md「后续块的设计草案 / B14c」，开工时细化、和用户确认后再动手。要点：
+- 用 B14b 的 `core/rta/model.py`：`m.evaluate(states)` 一次前向给一批局面的胜率和下一手分布；局面 `encode.DraftState`；胜率是先手方的，换成「我方」要看先后手（参考 `sim.my_win`）。推理一批 256 场 33–45 ms。
+- **必须做**（B14b 用户决定）：我方候选和对手回应都只从选人头先验里取（参考 `sim.suggest`：这一手常见度 ≥ 0.5% 或排前 40；英雄池里勾选的冷门英雄另说），验收时加「会不会专挑冷门英雄、把胜率推到极端」的检查。B14b 的 `rta sim` 一层贪心里就踩过：不筛候选时推的全是常见度 0% 的英雄、胜率推到 100%。
+- 还要注意：英雄单个常用、组合少见时，后禁后那一步同结构的两个模型能差 9 个百分点（67.3% vs 58.7%），展示胜率时可以考虑给出不确定性。
+- 每个空位推荐 5–8 名（带胜率、和第一名的差距、对手最可能的回应），两手回合按对评估；预禁推荐（候选两两组合、用选人头模拟）；后禁 4 × 4 矩阵（`sim.ban_matrix` 已有一层版本）；`/api/rta/advise` 等接口、CLI；advise p95 ≤ 2 秒、预禁 ≤ 5 秒。
+- 只做推荐搜索和接口，不做页面（B14e）和画面识别（B14f）；后续块见 ROADMAP。
 
 ## 坑
 - **从游戏截图裁图标**（B13）：脚本在 `engine/tools/`（`cut_icons.py` 彩色图标、`cut_flat_icons.py` 单色白图标、`make_team_icons.py` 群阵图示；用 `.venv/Scripts/python.exe engine/tools/<脚本> <截图> <输出目录> 名字:x,y,w,h ...`）——按和按钮底色的差距算透明度；宽的图标（SS / SSS）不要补成正方形，否则等高显示时会变小；选中行是白底黑图标，统一成白色再用；群阵图示是用一张「34」的截图按位置重新上色生成 7 种。截图时用户可能需要先点开筛选框，我只截图（用户允许时可以在列表文字区慢拖）。
@@ -408,3 +425,11 @@
   - `battle_day` 是 UTC，`battleCompletedate` 是韩国时间（晚 9 小时）。
 - **Claude 桌面版是 MSIX 打包应用，会重定向 `AppData`**（B14a 发现）：从 Claude 会话里跑的命令往 `%LOCALAPPDATA%` 写的文件，实际落在 `%LOCALAPPDATA%\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Local\` 下（会话里读写看起来路径正常，资源管理器和会话外启动的程序在原路径找不到）。采集库原来就落在那里，用户在资源管理器里找不到，已挪到 `F:\e7helper-data\rta\`（用户指定）并改了默认路径。以前会话里写的 `e7helper\data`、`debug`、`modules` 等也在那个私有目录里。要让外面看得到，就写到 `AppData` 以外的路径（`--db`、`E7_RTA_DB`、`E7_DATA_DIR`）。
 - **Git Bash 里的 `/c/...` 路径 Windows 的 python 不认**：传给 python 的路径用 `cygpath -w` 转一下（B14a 踩过）。
+- **RTA 模型训练的坑**（B14b）：
+  - AMD 的 Windows ROCm 版 torch 只有 Python 3.12；`uv python install` 默认装进 AppData，Claude 桌面版（MSIX）会重定向，用户自己的终端找不到 → `setup_rocm_venv.ps1` 把 Python 装在 `engine/.python`。
+  - ROCm 进程出异常后、或 Ctrl+C 停下后，退出时可能卡住、杀不掉（`Stop-Process` 报找不到进程，`tasklist` 里还在占 CPU），要关掉跑它的终端标签 / 停掉后台任务才释放；每个新形状的算子第一次要编译，前几步慢。
+  - 曲线页正好在读 `status.json` 时，「写临时文件再改名」会被 Windows 拒绝（WinError 5），训练进程整个崩掉 → 已加重试。以后别的地方用这种写法、又有别的进程在读，也要注意。
+  - `nn.Module` 的子模块别叫 `type`（会被 `Module.type()` 方法挡住，前向时报「dtype must be a type」）；`Dataset` 类里有 `encode` 方法，类体里的默认参数写 `encode.POSTBAN` 会拿到方法而不是模块。
+  - 装了 `--group train` 后，再跑不带它的 `uv sync` 会把 torch 删掉；`uv run --group build` 不会删（不是精确同步）。
+  - `F:\e7rta_backend`（用户的另一个项目，和这里无关）有时在用 DirectML 跑训练，会和我们抢 GPU / CPU，测速前先看一眼。
+  - 用户终端面板里用户输入过的标签，Claude 不能再往里发命令或关掉它，要新开标签。

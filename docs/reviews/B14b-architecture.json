@@ -1,0 +1,297 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "B14b RTA 胜率 / 选人模型（Transformer + 因子分解机）",
+    "locale": "zh-CN",
+    "output": ".archify/dataflow-rta-model-20261025-144140/rta-model.html",
+    "quality_profile": "showcase",
+    "legend": {
+      "mode": "auto",
+      "entries": {
+        "default": {
+          "label": "编号 / 读出"
+        },
+        "emphasis": {
+          "label": "主干张量 [B,17,d]"
+        },
+        "security": {
+          "label": "注意力掩码"
+        },
+        "dashed": {
+          "label": "共享权重"
+        },
+        "database": {
+          "label": "嵌入查表"
+        }
+      }
+    },
+    "viewBox": [
+      1068,
+      580
+    ]
+  },
+  "stages": [
+    {
+      "label": "输入：17 个 token"
+    },
+    {
+      "label": "嵌入"
+    },
+    {
+      "label": "Transformer"
+    },
+    {
+      "label": "输出头"
+    },
+    {
+      "label": "读出"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "ctx",
+      "type": "external",
+      "label": "CTX",
+      "sublabel": "双方段位档 + 开战规则",
+      "stage": 0,
+      "row": 0,
+      "tag": "位置 0"
+    },
+    {
+      "id": "heroes",
+      "type": "external",
+      "label": "英雄位置 1–16",
+      "sublabel": "预禁 4 · 选秀 10 · 后禁 2",
+      "stage": 0,
+      "row": 2,
+      "tag": "F S S F F S S F F S"
+    },
+    {
+      "id": "ctxemb",
+      "type": "database",
+      "label": "上下文嵌入",
+      "sublabel": "段位 F + 段位 S + 规则",
+      "stage": 1,
+      "row": 0,
+      "tag": "只加在 CTX"
+    },
+    {
+      "id": "tokemb",
+      "type": "database",
+      "label": "token 嵌入",
+      "sublabel": "英雄 E + 类型 + 位置",
+      "stage": 1,
+      "row": 2,
+      "tag": "V≈250+PAD/UNK"
+    },
+    {
+      "id": "blocks",
+      "type": "backend",
+      "label": "L × Pre-LN Block",
+      "sublabel": "4 头注意力 + FFN 4d → LN",
+      "stage": 2,
+      "row": 1,
+      "tag": "d 64/128 · L 2/3"
+    },
+    {
+      "id": "mask",
+      "type": "security",
+      "label": "注意力掩码",
+      "sublabel": "0–4 互相可见，之后因果",
+      "stage": 2,
+      "row": 0,
+      "tag": "[17,17]"
+    },
+    {
+      "id": "winhead",
+      "type": "backend",
+      "label": "胜率头",
+      "sublabel": "Linear(d→1) + 宽部分",
+      "stage": 3,
+      "row": 0,
+      "tag": "每个位置"
+    },
+    {
+      "id": "pickhead",
+      "type": "backend",
+      "label": "选人头",
+      "sublabel": "Linear(d→d)·Eᵀ + b",
+      "stage": 3,
+      "row": 2,
+      "tag": "[V] logits"
+    },
+    {
+      "id": "winout",
+      "type": "frontend",
+      "label": "12 个局面胜率",
+      "sublabel": "读位置 4+n（n=0…10）、16",
+      "stage": 4,
+      "row": 0,
+      "tag": "P(先手赢)"
+    },
+    {
+      "id": "pickout",
+      "type": "frontend",
+      "label": "下一手概率",
+      "sublabel": "局面 0…9 的读出位置",
+      "stage": 4,
+      "row": 2,
+      "tag": "前 5–8 名"
+    },
+    {
+      "id": "fm",
+      "type": "database",
+      "label": "因子分解机（宽）",
+      "sublabel": "强度 + 搭档 + 克制",
+      "stage": 3,
+      "row": 1,
+      "tag": "自己的嵌入 k"
+    }
+  ],
+  "flows": [
+    {
+      "id": "ctx-ids",
+      "from": "ctx",
+      "to": "ctxemb",
+      "label": "段位 / 规则编号",
+      "variant": "default"
+    },
+    {
+      "id": "hero-ids",
+      "from": "heroes",
+      "to": "tokemb",
+      "label": "英雄编号 ×16",
+      "variant": "default"
+    },
+    {
+      "id": "ctx-add",
+      "from": "ctxemb",
+      "to": "blocks",
+      "label": "加到位置 0",
+      "variant": "default",
+      "toSide": "left"
+    },
+    {
+      "id": "tok-x",
+      "from": "tokemb",
+      "to": "blocks",
+      "label": "x [B,17,d]",
+      "variant": "emphasis",
+      "toSide": "left"
+    },
+    {
+      "id": "mask-bias",
+      "from": "mask",
+      "to": "blocks",
+      "label": "attn_bias",
+      "variant": "security",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "route": "straight",
+      "labelAt": [
+        530,
+        214
+      ]
+    },
+    {
+      "id": "h-win",
+      "from": "blocks",
+      "to": "winhead",
+      "label": "h [B,17,d]",
+      "variant": "emphasis",
+      "labelAt": [
+        663,
+        119
+      ]
+    },
+    {
+      "id": "h-pick",
+      "from": "blocks",
+      "to": "pickhead",
+      "label": "h [B,17,d]",
+      "variant": "emphasis",
+      "labelAt": [
+        663,
+        429
+      ]
+    },
+    {
+      "id": "tied-emb",
+      "from": "tokemb",
+      "to": "pickhead",
+      "label": "共享英雄嵌入 Eᵀ",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "bottom",
+      "route": "bottom-channel"
+    },
+    {
+      "id": "win-read",
+      "from": "winhead",
+      "to": "winout",
+      "label": "Platt 校准",
+      "variant": "default"
+    },
+    {
+      "id": "pick-read",
+      "from": "pickhead",
+      "to": "pickout",
+      "label": "屏蔽后 softmax",
+      "variant": "default"
+    },
+    {
+      "id": "fm-add",
+      "from": "fm",
+      "to": "winhead",
+      "label": "加到胜率 logit",
+      "variant": "default",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "route": "straight"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "一场 = 一条序列",
+      "items": [
+        "每个 token = 英雄嵌入 + 类型嵌入（7 种）+ 位置嵌入（同一方两个预禁共用一个位置）",
+        "0–4 互相可见、之后因果：一次前向读出 12 个局面，不用每场拆 12 条样本",
+        "胜率一律是先手方赢的概率，后手方 = 1 − p",
+        "每边第 3 手是保护位，由位置嵌入区分"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "训练",
+      "items": [
+        "损失 = 12 个局面胜率 BCE 平均 + λ × 10 个局面选人交叉熵平均；早停只看胜率",
+        "选人标签：连选 2 名的回合两名各 0.5；PAD、被预禁、已选的屏蔽",
+        "ss21 两服合并 91 万场：训练 49.6 万 / 验证 19.2 万 / 测试 22.3 万（按日期）",
+        "GPU：ROCm torch 2.9（RX 7700 XT，比 CPU 快约 16 倍）；验证集上每个局面拟合 Platt 校准"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "对比的基线",
+      "items": [
+        "B0：先手 + 段位 + 开战规则（逻辑回归）",
+        "B1：B0 + 每名英雄一个强度",
+        "B2：因子分解机（强度 + 搭档 + 克制，先后手反对称）——混合结构的宽部分就是它",
+        "纯 Transformer（没有宽部分）：学得慢，后禁信息几乎用不上",
+        "选人：每个局面的英雄热度"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "部署",
+      "items": [
+        "torch.onnx.export（opset 18，批次维动态）→ engine/assets/data/rta/model.onnx",
+        "meta.json（词表、规则编号、温度 T、测试指标）+ parity.json（一致性样例）",
+        "运行时 core/rta/model.py 用 onnxruntime 推理，不需要 torch",
+        "给 B14c 选秀搜索：一次前向给一批局面的胜率和下一手分布"
+      ]
+    }
+  ]
+}
