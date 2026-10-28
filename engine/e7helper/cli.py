@@ -961,6 +961,9 @@ def rta_export(
     if cfg["model"] not in ("transformer", "hybrid"):
         _fail("只有 transformer / hybrid 能导出 ONNX")
         raise typer.Exit(2)
+    if not isinstance(ckpt.get("calibration"), dict) and (run_dir / "eval-test.json").exists():
+        # 早期的 run 只存了温度：用 rta eval 从验证集拟合的 Platt 参数（B14c 导出切分模型时补）
+        ckpt["calibration"] = json.loads((run_dir / "eval-test.json").read_text(encoding="utf-8")).get("calibration")
     parts = ds.split(7, 7)
     rng = np.random.default_rng(0)
     rows = rng.choice(parts["test"], parity, replace=False)
@@ -980,6 +983,26 @@ def rta_export(
     console.print(f"导出到 {out}：{', '.join(f'{k} {v / 1e6:.2f} MB' for k, v in sizes.items())}")
     console.print(f"onnxruntime vs torch（{check['n']} 场 × 17 个位置）：胜率 logit 最大差 {check['win_logit']:.2e}，"
                   f"选人 logit 最大差 {check['pick_logit']:.2e}，胜率概率最大差 {check['win_prob']:.2e}")
+
+
+@rta_app.command("priors")
+def rta_priors(
+    out: Annotated[Optional[Path], typer.Option("--out", "-o", help="输出文件，默认随包的 assets/data/rta/priors.json")] = None,
+    dataset: DatasetOpt = None,
+) -> None:
+    """生成选秀推荐用的数据先验（B14c）：英雄被选次数、预禁组合频率、后禁率。重训后和 rta export 一起跑。"""
+    from e7helper.core.rta import priors as rpriors
+    from e7helper.core.rta.dataset import Dataset
+
+    path = _latest_dataset(dataset)
+    data = rpriors.build(Dataset.load(path), source=path.name)
+    out = out or rpriors.bundled_path()
+    out.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    p = rpriors.Priors.from_dict(data)
+    rare = sum(1 for n in p.picks.values() if n < 1000)
+    console.print(f"写入 {out}（{out.stat().st_size / 1e3:.0f} KB）：{data['matches']} 场（双方 ≥ 优胜者 {data['champion_plus']}），"
+                  f"英雄 {len(p.picks)} 名（被选 < 1000 次的 {rare} 名），预禁组合 先手 {len(p.preban['F']['pairs'])} / 后手 "
+                  f"{len(p.preban['S']['pairs'])} 组，后禁率 {len(p.postban)} 名（平均 {p.mean_ban_rate():.1%}）")
 
 
 @rta_app.command("model")
@@ -1079,35 +1102,306 @@ def rta_predict(
         console.print(f"下一手（{side}）：" + "、".join(f"{name(c)} {p:.1%}" for c, p in top))
 
 
+def _rta_codes(db, text: str | None) -> list[str]:
+    """中文名 / 昵称 / 编号（逗号分隔）→ 英雄编号；找不到就报错退出。"""
+    out = []
+    for name in filter(None, (s.strip() for s in (text or "").replace("，", ",").split(","))):
+        h = db.get(name) or db.find(name) or next(iter(db.search(name, limit=1)), None)
+        if not h:
+            _fail(f"找不到英雄：{name}")
+            raise typer.Exit(2)
+        out.append(h.code)
+    return out
+
+
+def _rta_name(db, code: str | None) -> str:
+    h = db.get(code) if code else None
+    return h.name if h else (code or "—")
+
+
+def _rta_rule(rule: str):
+    from e7helper.core.rta.encode import UNKNOWN_RULE
+
+    return UNKNOWN_RULE if rule == "unknown" else None if rule == "none" else rule
+
+
+def _rta_grades(text: str) -> tuple[str | None, str | None]:
+    g = [x.strip() or None for x in text.split(",")] if text else []
+    g += [None, None]
+    return g[0], g[1]
+
+
+def _rta_advisor():
+    from e7helper.core.rta import search
+
+    if not search.available():
+        _fail("没有随包的 RTA 模型或 priors.json")
+        raise typer.Exit(1)
+    return search.load()
+
+
+def _print_advice(out: dict, db) -> None:
+    """advise 的结果打成表（胜率都是我方的）。"""
+    nm = lambda c: _rta_name(db, c)  # noqa: E731
+    names = lambda cs: "+".join(map(nm, cs))  # noqa: E731
+    pct = lambda x: f"{x:.1%}"  # noqa: E731
+    sec = f"（另一个模型 {out['second_win']:.1%}）" if out.get("second_win") is not None else ""
+    phase = {"pick": "选秀", "ban": "后禁", "done": "结束"}[out["phase"]]
+    head = f"{phase} · 已选 {out['n']} 手 · 当前我方胜率 [bold]{out['win']:.1%}[/]{sec}"
+    if out["phase"] == "pick":
+        head += f" · 轮到{'我方' if out['turn'] == 'mine' else '对手'}（这一轮 {out['slots']} 名）"
+    console.print(head)
+    if out.get("unknown"):
+        console.print(f"[yellow]英雄池里这些模型没有数据，不推荐：{'、'.join(map(nm, out['unknown']))}[/]")
+    recs = out.get("recommend") or []
+    if recs:
+        t = Table("#", "推荐", "分数", "预期", "被针对时", "差距", "这一手常见度", "两模型差", "对手最可能的回应", "最坏的回应",
+                  title="推荐（分数 = ½ 预期 + ½ 被针对时）")
+        for i, r in enumerate(recs):
+            heroes = "+".join(nm(c) + ("（保护位）" if c == r["protected"] else "") for c in r["heroes"])
+            flags = [f for f, on in (("差距不明显", r["close"]), ("数据少", r["rare"]), ("不确定", r.get("uncertain"))) if on]
+            resp = r["responses"][0] if r["responses"] else None
+            th = r["threat"]
+            th_txt = "后禁（矩阵）" if r["end"] and not th else "—"
+            if th:
+                th_txt = f"{names(th['heroes'])} {pct(th['win'])}"
+                if "reply" in th:
+                    th_txt += f" → 你再选 {names(th['reply'])} {pct(th['reply_win'])}"
+            t.add_row(str(i + 1), heroes + (f" [dim]{'、'.join(flags)}[/]" if flags else ""), pct(r["score"]), pct(r["win"]),
+                      pct(r["worst"]), f"{r['gap']:+.1%}", " / ".join(f"{x:.1%}" for x in r["common"]),
+                      f"{r['second']['spread']:+.1%}" if r.get("second") else "—",
+                      f"{names(resp['heroes'])} {resp['prob']:.0%} → {pct(resp['win'])}" if resp else "—", th_txt)
+        console.print(t)
+        if out.get("heroes"):
+            console.print("按英雄：" + "、".join(f"{nm(h['code'])}（配 {nm(h['partner'])}）{pct(h['score'])}" for h in out["heroes"]))
+    opp = out.get("opponent")
+    if opp:
+        t = Table("对手可能选", "这一手的概率", "之后我方胜率", title="轮到对手")
+        for x in opp["likely"]:
+            t.add_row(names(x["heroes"]), f"{x['prob']:.1%}", pct(x["win"]))
+        console.print(t)
+        console.print("对我方威胁最大：" + "、".join(f"{names(x['heroes'])} → {pct(x['win'])}（{x['prob']:.1%}）"
+                                         for x in opp["threats"]))
+    b = out.get("ban")
+    if b:
+        t = Table("我方禁 ↓ / 对方禁 →", *[nm(c) for c in b["cols"]], "最坏", "预期", "分数", "两模型差",
+                  title="后禁：我方胜率（保护位不能禁；★ = 推荐）")
+        for i, code in enumerate(b["rows"]):
+            s = b["row_stats"][i]
+            t.add_row(("★ " if code == b["recommend"] else "") + nm(code), *[pct(v) for v in b["matrix"][i]], pct(s["worst"]),
+                      pct(s["win"]), pct(s["score"]), f"{s['second']['spread']:+.1%}" if s.get("second") else "—")
+        console.print(t)
+        console.print("对方可能禁（按后禁率）：" + "、".join(f"{nm(x['code'])} {x['prob']:.0%}" for x in b["their_likely"]))
+        nash = b["nash"]
+        mix = lambda codes, ps: "、".join(f"{nm(c)} {p:.0%}" for c, p in zip(codes, ps) if p > 0.005)  # noqa: E731
+        console.print(f"[dim]均衡混合策略：我方 {mix(b['rows'], nash['mine'])}；对方 {mix(b['cols'], nash['theirs'])}；"
+                      f"值 {pct(nash['value'])}[/]")
+    s = out["stats"]
+    console.print(f"[dim]用时 {s['ms']} ms · {s['states']} 个局面 · 搜了 {s.get('depth', 1)} 层"
+                  f"{' · 时间到了，没算完' if s['truncated'] else ''}{' · 缓存' if s.get('cached') else ''}[/]")
+
+
+@rta_app.command("advise")
+def rta_advise(
+    side: Annotated[str, typer.Option("--side", help="我方是 F（先手）还是 S（后手）")],
+    pre_mine: Annotated[str, typer.Option("--pre-mine", help="我方的预禁（中文名 / 昵称，逗号分隔）")] = "",
+    pre_theirs: Annotated[str, typer.Option("--pre-theirs", help="对方的预禁")] = "",
+    mine: Annotated[str, typer.Option("--mine", help="我方按顺序选的英雄")] = "",
+    theirs: Annotated[str, typer.Option("--theirs", help="对方按顺序选的英雄")] = "",
+    ban_mine: Annotated[str, typer.Option("--ban-mine", help="我方禁了对方哪名")] = "",
+    ban_theirs: Annotated[str, typer.Option("--ban-theirs", help="对方禁了我方哪名")] = "",
+    grades: Annotated[str, typer.Option("--grades", help="我方,对方 的段位，如 legend,emperor")] = "",
+    rule: Annotated[str, typer.Option("--rule", help="开战规则：unknown（国服）/ none / opening_rule_desc_tid")] = "unknown",
+    pool: Annotated[str, typer.Option("--pool", help="我的英雄池（逗号分隔；不填 = 不限制）")] = "",
+    top: Annotated[int, typer.Option("--top", help="推荐几个")] = 8,
+    budget: Annotated[float, typer.Option("--budget", help="最多算几秒")] = 5.0,
+    as_json: Annotated[bool, typer.Option("--json", help="输出 JSON（和 /api/rta/advise 一样）")] = False,
+) -> None:
+    """选秀推荐（B14c）：轮到我方 → 推荐 + 对手的回应；轮到对手 → 对手可能怎么选；选完 → 后禁矩阵。胜率是我方的。"""
+    from e7helper.core.data import heroes as hero_db
+    from e7helper.core.rta.encode import DraftState
+
+    db = hero_db()
+    side = side.upper()
+    if side not in ("F", "S"):
+        _fail("--side 只能是 F / S")
+        raise typer.Exit(2)
+    foe = "S" if side == "F" else "F"
+    g = dict(zip((side, foe), _rta_grades(grades)))
+    first = lambda xs: xs[0] if xs else None  # noqa: E731
+    st = DraftState(prebans={side: _rta_codes(db, pre_mine), foe: _rta_codes(db, pre_theirs)},
+                    picks={side: _rta_codes(db, mine), foe: _rta_codes(db, theirs)},
+                    banned={foe: first(_rta_codes(db, ban_mine)), side: first(_rta_codes(db, ban_theirs))},
+                    grades=(g["F"], g["S"]), rule=_rta_rule(rule))
+    adv = _rta_advisor()
+    try:
+        out = adv.advise(st, side, pool=_rta_codes(db, pool) if pool else None, top=top, budget=budget)
+    except ValueError as e:
+        _fail("；".join(e.args[0]))
+        raise typer.Exit(2) from None
+    if as_json:
+        print(json.dumps(out, ensure_ascii=False, indent=1))
+        return
+    _print_advice(out, db)
+
+
+@rta_app.command("preban")
+def rta_preban(
+    side: Annotated[Optional[str], typer.Option("--side", help="我方是 F（先手）/ S（后手）；不知道就不填")] = None,
+    grades: Annotated[str, typer.Option("--grades", help="我方,对方 的段位")] = "",
+    rule: Annotated[str, typer.Option("--rule", help="开战规则：unknown（国服）/ none / opening_rule_desc_tid")] = "unknown",
+    fixed: Annotated[str, typer.Option("--fixed", help="固定预禁这一名，只推荐另一名")] = "",
+    top: Annotated[int, typer.Option("--top", help="推荐几组")] = 8,
+    budget: Annotated[float, typer.Option("--budget", help="最多算几秒")] = 4.0,
+    as_json: Annotated[bool, typer.Option("--json", help="输出 JSON（和 /api/rta/preban 一样）")] = False,
+) -> None:
+    """预禁推荐（B14c）：候选是数据里常见的组合，对手按数据里最常见的 100 组加权。"""
+    from e7helper.core.data import heroes as hero_db
+
+    db = hero_db()
+    side = side.upper() if side else None
+    adv = _rta_advisor()
+    try:
+        out = adv.preban(side, grades=_rta_grades(grades), rule=_rta_rule(rule),
+                         fixed=(_rta_codes(db, fixed) or [None])[0], top=top, budget=budget)
+    except ValueError as e:
+        _fail("；".join(e.args[0]))
+        raise typer.Exit(2) from None
+    if as_json:
+        print(json.dumps(out, ensure_ascii=False, indent=1))
+        return
+    nm = lambda c: _rta_name(db, c)  # noqa: E731
+    role = {"F": "先手", "S": "后手"}
+    t = Table("#", "预禁", "分数", "预期", "最坏", "最坏时对手禁的", "差距", "数据里占比", "两模型差",
+              title=f"预禁推荐（我方{role[side] if side else '先后手不知道'}；分数 = ½ 预期 + ½ 最坏）")
+    for i, r in enumerate(out["recommend"]):
+        flags = [f for f, on in (("差距不明显", r["close"]), ("不确定", r.get("uncertain"))) if on]
+        t.add_row(str(i + 1), "+".join(map(nm, r["heroes"])) + (f" [dim]{'、'.join(flags)}[/]" if flags else ""),
+                  f"{r['score']:.1%}", f"{r['win']:.1%}", f"{r['worst']:.1%}",
+                  " / ".join(f"{role[k]} {'+'.join(map(nm, v))}" for k, v in r["worst_vs"].items()), f"{r['gap']:+.1%}",
+                  " / ".join(f"{role[k]} {v:.2%}" for k, v in r["share"].items()),
+                  f"{r['second']['spread']:+.1%}" if r.get("second") else "—")
+    console.print(t)
+    for k, v in out["theirs"].items():
+        console.print(f"我方{role[k]}时，对手最常见的预禁：" + "、".join(f"{'+'.join(map(nm, x['heroes']))} {x['share']:.1%}" for x in v))
+    s = out["stats"]
+    console.print(f"[dim]用时 {s['ms']} ms · {s['states']} 个局面 · 候选 {s['candidates']} 组{' · 时间到了，没算完' if s['truncated'] else ''}[/]")
+
+
+@rta_app.command("audit")
+def rta_audit(
+    matches: Annotated[int, typer.Option("--matches", help="冷门比例 / 用时：多少场真实对局（每场 6 个回合开头）")] = 100,
+    games: Annotated[int, typer.Option("--selfplay", help="自对弈几局（先后手各一半）")] = 100,
+    follow: Annotated[int, typer.Option("--follow", help="跟着推荐：多少场真实对局（用切分模型）")] = 200,
+    budget: Annotated[float, typer.Option("--budget", help="advise 的预算（秒）")] = 5.0,
+    follow_budget: Annotated[float, typer.Option("--follow-budget", help="跟着推荐那项的预算（秒）")] = 1.0,
+    parts: Annotated[str, typer.Option("--parts", help="跑哪几项：rare,selfplay,follow")] = "rare,selfplay,follow",
+    seed: Annotated[int, typer.Option("--seed", help="随机种子")] = 0,
+    out: Annotated[Optional[Path], typer.Option("--out", "-o", help="结果 JSON，默认 F:\\e7helper-data\\rta\\audit\\<时间>.json")] = None,
+    dataset: DatasetOpt = None,
+) -> None:
+    """选秀推荐的验收统计（B14c，开发用，要训练快照）：冷门比例、用时、自对弈会不会推到极端、跟着推荐的实际胜率。"""
+    from rich.progress import BarColumn, Progress, TextColumn, TimeRemainingColumn
+
+    from e7helper.core.data import heroes as hero_db
+    from e7helper.core.rta import audit, search
+    from e7helper.core.rta import model as rmodel
+    from e7helper.core.rta.dataset import Dataset
+
+    ds = Dataset.load(_latest_dataset(dataset))
+    adv = _rta_advisor()
+    rows = audit.test_rows(ds, max(matches, games, follow), np.random.default_rng(seed))
+    want = {p.strip() for p in parts.split(",")}
+    results: dict = {"dataset": ds.meta.get("until"), "seed": seed}
+    with Progress(TextColumn("[bold]{task.description}"), BarColumn(), TextColumn("{task.completed}/{task.total}"),
+                  TimeRemainingColumn(), console=console) as bar:
+        tasks: dict = {}
+
+        def progress(label: str, done: int, total: int) -> None:
+            if label not in tasks:
+                tasks[label] = bar.add_task(label, total=total)
+            bar.update(tasks[label], completed=done)
+
+        if "rare" in want:
+            results["rare"] = audit.rare_check(adv, ds, rows[:matches], budget, progress)
+        if "selfplay" in want:
+            results["selfplay"] = audit.selfplay(adv, ds, rows[:games], seed, progress)
+        if "follow" in want:
+            split = rmodel.load(rmodel.bundled_dir() / search.SECOND_DIR)
+            results["follow"] = audit.follow_check(search.Advisor(split, adv.priors), ds, rows[:follow], follow_budget, progress)
+    path = out or Path(r"F:\e7helper-data\rta\audit") / f"{time.strftime('%Y%m%d-%H%M%S')}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(results, ensure_ascii=False, indent=1), encoding="utf-8")
+    ok = lambda b: "[green]✓[/]" if b else "[red]✗[/]"  # noqa: E731
+    r = results.get("rare")
+    if r:
+        s, p = r["seconds"], r["preban_seconds"]
+        console.print(f"冷门比例（{r['states']} 个回合开头）：推荐第一名有冷门英雄 {r['top1_rare']:.1%} {ok(r['top1_rare'] <= 0.02)}"
+                      f"（前 8 名里有 {r['top8_rare']:.1%}；真实玩家实际选的 {r['real_rare']:.1%}）")
+        console.print(f"  第一名这一手的常见度：中位 {r['top1_common']['median']:.1%}，< 0.5% 的 {r['top1_common']['below_0.5%']:.1%}、"
+                      f"< 1% 的 {r['top1_common']['below_1%']:.1%}（真实玩家 {r['real_common']['median']:.1%} / "
+                      f"{r['real_common']['below_0.5%']:.1%} / {r['real_common']['below_1%']:.1%}）；第一名标「不确定」的 {r['top1_uncertain']:.1%}")
+        console.print(f"用时：advise p50 {s['p50']:.2f} s、p95 {s['p95']:.2f} s {ok(s['p95'] <= 6)}、最长 {s['max']:.2f} s；"
+                      f"搜满 3 层 {r['depth3']:.0%}、截断 {r['truncated']:.1%}；"
+                      + "、".join(f"第 {n + 1} 手 {v['p95']:.2f}" for n, v in s["by_n"].items()))
+        console.print("  预禁：" + "、".join(f"{'先后手已知' if k == 'known' else '不知道'} p95 {v['p95']:.2f} s {ok(v['p95'] <= 5)}"
+                                         for k, v in p.items()))
+    sp = results.get("selfplay")
+    if sp:
+        for label, v in (("自对弈（按推荐）", sp["advise"]), ("对照：不筛的一层贪心", sp["greedy"])):
+            console.print(f"{label}（{v['games']} 局）：最终胜率中位 {v['median']:.1%}、p95 {v['p95']:.1%}、最高 {v['max']:.1%}、最低 {v['min']:.1%}；"
+                          f"≥ 90% 的 {v['ge90']} 局、≥ 95% 的 {v['ge95']} 局；每局我方冷门英雄 {v['rare_heroes_per_game']:.2f} 名")
+        a, db = sp["advise"], hero_db()
+        console.print(f"  门槛：没有一局 ≥ 95% {ok(a['ge95'] == 0)}，≥ 90% 的不超过 2% {ok(a['ge90'] <= 0.02 * a['games'])}")
+        for g in sorted(a.get("lineups", []), key=lambda g: -g["final"]):
+            if g["final"] < 0.9:
+                break
+            lu, me = g["lineup"], g["side"]
+            foe = "S" if me == "F" else "F"
+            names = lambda cs: "、".join(_rta_name(db, c) for c in cs)  # noqa: E731
+            console.print(f"    {g['final']:.1%} · 我方{'先手' if me == 'F' else '后手'} · 预禁 {names(lu['prebans'][me])} | "
+                          f"{names(lu['prebans'][foe])} · 我方 {names(lu['picks'][me])}（被禁 {_rta_name(db, lu['banned'][me])}）"
+                          f" · 对手 {names(lu['picks'][foe])}（被禁 {_rta_name(db, lu['banned'][foe])}）")
+    f = results.get("follow")
+    if f:
+        console.print("跟着推荐（切分模型，没见过测试期；提升 = 相对选之前的模型胜率，出手方视角）：")
+        for label, key in (("全部", "all"), ("选的在推荐前 8 名里", "in_top8"), ("不在", "not_in_top8"), ("正好是第一名", "top1")):
+            v = f[key]
+            if not v.get("n"):
+                continue
+            adv_txt = f"，推荐给的提升 {v['advised_gain']:+.3f}（兑现 {v['realized_advised']:.2f}）" if "advised_gain" in v else ""
+            console.print(f"  {label} {v['n']} 手：实际 {v['real_gain']:+.3f}（±{1.96 * v['se']:.3f}），模型原始 {v['model_gain']:+.3f}"
+                          f"（兑现 {v['realized']:.2f}）{adv_txt}")
+    console.print(f"[dim]结果写入 {path}[/]")
+
+
 @rta_app.command("sim")
 def rta_sim(
     side: Annotated[Optional[str], typer.Option("--side", help="你是 F（先手）还是 S（后手），默认随机")] = None,
     grades: Annotated[str, typer.Option("--grades", help="我方,对方 的段位，如 emperor,warlord")] = "emperor,emperor",
     rule: Annotated[str, typer.Option("--rule", help="开战规则：unknown（国服）/ none / opening_rule_desc_tid")] = "unknown",
     opponent: Annotated[str, typer.Option("--opponent", help="ai（模型按常见选法选）/ manual（对手也由你输入，复盘用）")] = "ai",
+    pool: Annotated[str, typer.Option("--pool", help="我的英雄池（逗号分隔；不填 = 不限制）")] = "",
     seed: Annotated[Optional[int], typer.Option("--seed", help="随机种子（对手的预禁和选人）")] = None,
-    dataset: DatasetOpt = None,
 ) -> None:
-    """模拟 BP（B14b，审核时试用模型）：你选一方，模型给胜率和候选；输入中文名或昵称，直接回车 = 选第一个推荐。"""
-    import numpy as np
-
+    """模拟 BP（B14b 加的，B14c 起用正式的推荐搜索）：你选一方，推荐 + 对手的回应 + 后禁矩阵；
+    输入中文名或昵称，直接回车 = 第一个推荐（两手回合回车 = 推荐的那一对）。"""
     from e7helper.core.data import heroes as hero_db
-    from e7helper.core.rta import model as rmodel
     from e7helper.core.rta import rules, sim
-    from e7helper.core.rta.encode import UNK, UNKNOWN_RULE, DraftState
+    from e7helper.core.rta.audit import sample_preban
+    from e7helper.core.rta.encode import UNK, DraftState
 
     db = hero_db()
-    m = rmodel.load()
+    adv = _rta_advisor()
+    m = adv.model
     rng = np.random.default_rng(seed)
     side = (side or str(rng.choice(["F", "S"]))).upper()
     if side not in ("F", "S") or opponent not in ("ai", "manual"):
         _fail("--side 只能是 F / S；--opponent 只能是 ai / manual")
         raise typer.Exit(2)
     foe = sim.other(side)
-
-    def name(code: str | None) -> str:
-        h = db.get(code) if code else None
-        return h.name if h else (code or "—")
+    nm = lambda c: _rta_name(db, c)  # noqa: E731
+    my_pool = _rta_codes(db, pool) if pool else None
 
     def resolve(text: str) -> str | None:
         text = text.strip()
@@ -1119,101 +1413,72 @@ def rta_sim(
             console.print(f"[yellow]{h.name} 不在模型词表里（训练数据里选得太少），按「其他英雄」算[/]")
         return h.code
 
-    def ask_heroes(prompt: str, k: int, default: list[str] | None = None) -> list[str]:
+    def ask(prompt: str, k: int, default: list[str] | None = None, ok=lambda codes: True) -> list[str]:
         while True:
             text = console.input(prompt).replace("，", ",").strip()
             if not text and default:
                 return default
-            names = [s for s in text.split(",") if s.strip()]
-            codes = [resolve(s) for s in names]
-            if len(codes) == k and all(codes) and len(set(codes)) == k:
+            codes = [resolve(s) for s in text.split(",") if s.strip()]
+            if 1 <= len(codes) <= k and all(codes) and len(set(codes)) == len(codes) and ok(codes):
                 return codes  # type: ignore[return-value]
-            console.print(f"[red]要 {k} 名不重复的英雄[/]")
+            console.print(f"[red]要 {k} 名以内、不重复、能选的英雄[/]")
 
     me_label = "先手" if side == "F" else "后手"
-    g = [x.strip() or None for x in grades.split(",")] + [None]
-    grade = {side: g[0], foe: g[1]}
-    rule_tid = UNKNOWN_RULE if rule == "unknown" else None if rule == "none" else rule
-    console.print(f"[bold]模拟 BP[/]：你是 [bold]{me_label}[/] · 段位 我方 {grade[side]} / 对方 {grade[foe]} · "
-                  f"开战规则 {rules.rule_label(rule_tid) if rule_tid != UNKNOWN_RULE else '未知（国服）'} · "
-                  f"对手 {'模型' if opponent == 'ai' else '你输入'}")
-    console.print("[dim]胜率都是「我方」的；推荐只往前看一步（选了这名之后的胜率），没考虑对手怎么回应，完整搜索在 B14c。[/]")
+    mine_g, theirs_g = _rta_grades(grades)
+    grade = {side: mine_g, foe: theirs_g}
+    rule_tid = _rta_rule(rule)
+    console.print(f"[bold]模拟 BP[/]：你是 [bold]{me_label}[/] · 段位 我方 {mine_g} / 对方 {theirs_g} · 对手 "
+                  f"{'模型（按常见选法）' if opponent == 'ai' else '你输入'}{' · 英雄池 ' + str(len(my_pool)) + ' 名' if my_pool else ''}")
+    pre = adv.preban(side, grades=(mine_g, theirs_g), rule=rule_tid)
+    console.print("预禁推荐：" + "、".join(f"{'+'.join(map(nm, r['heroes']))} {r['score']:.1%}" for r in pre["recommend"][:5]))
+    my_pre = ask("你的 2 名预禁（逗号分隔，回车 = 第一个推荐）：", 2, default=pre["recommend"][0]["heroes"],
+                 ok=lambda c: len(c) == 2)
+    foe_pre = sample_preban(adv, foe, rng) if opponent == "ai" else ask("对手的 2 名预禁：", 2, ok=lambda c: len(c) == 2)
+    console.print(f"预禁：你 {'、'.join(map(nm, my_pre))}；对手 {'、'.join(map(nm, foe_pre))}")
+    state = DraftState(prebans={side: my_pre, foe: foe_pre}, grades=(grade["F"], grade["S"]), rule=rule_tid)
+    curve = [("预禁后", float(sim.my_win(m.win([state])[0], side)))]
 
-    weights = None
-    if opponent == "ai":
-        try:
-            weights = sim.preban_weights(_latest_dataset(dataset))
-        except typer.Exit:
-            console.print("[yellow]没有训练快照，对手的预禁也由你输入[/]")
-    my_pre = ask_heroes("你的 2 名预禁（逗号分隔，回车 = 按热度随机）：", 2,
-                        default=sim.sample_prebans(weights, rng) if weights else None)
-    if weights:
-        foe_pre = sim.sample_prebans(weights, rng)
-    else:
-        foe_pre = ask_heroes("对手的 2 名预禁：", 2)
-    console.print(f"预禁：你 {'、'.join(map(name, my_pre))}；对手 {'、'.join(map(name, foe_pre))}")
+    def legal(codes: list[str], who: str) -> bool:
+        st = state
+        for c in codes:
+            st = sim.with_pick(st, who, c)
+        return not st.problems() and (who != side or my_pool is None or all(c in my_pool for c in codes))
 
-    state = DraftState(prebans={side: my_pre, foe: foe_pre}, picks={"F": [], "S": []},
-                       grades=(grade["F"], grade["S"]), rule=rule_tid)
-    curve: list[tuple[str, float]] = [("预禁后", float(sim.my_win(m.win([state])[0], side)))]
-    console.print(f"当前你的胜率 [bold]{curve[-1][1]:.1%}[/]")
-
-    for n in range(len(rules.PICK_ORDER)):
+    while state.n_picks < len(rules.PICK_ORDER):
+        n = state.n_picks
         mover = rules.mover(n)
-        slot = len(state.picks[mover]) + 1
-        tag = "（保护位）" if slot - 1 == rules.PROTECTED_SLOT else ""
         if mover == side:
-            sugg = sim.suggest(m, state, side, k=8)
-            table = Table("推荐", "选了之后你的胜率", "这一手的常见度", title=f"第 {n + 1} 手 · 你的第 {slot} 名{tag}")
-            for s in sugg:
-                table.add_row(name(s.code), f"{s.win:.1%}（{s.win - curve[-1][1]:+.1%}）", f"{s.common:.1%}")
-            console.print(table)
-            console.print("[dim]这一手大家常选：" + "、".join(f"{name(c)} {p:.0%}" for c, p in m.next_picks(state, 5)) + "[/]")
-            while True:
-                text = console.input("你选：").strip()
-                code = sugg[0].code if not text else resolve(text)
-                if code and not sim.with_pick(state, side, code).problems():
-                    break
-                if code:
-                    console.print(f"[red]{name(code)} 不能选（被预禁或已经选了）[/]")
+            out = adv.advise(state, side, pool=my_pool)
+            _print_advice(out, db)
+            left = rules.left_in_turn(n)
+            codes = ask(f"第 {n + 1} 手 · 你选（{left} 名以内，回车 = 第一个推荐）：", left,
+                        default=out["recommend"][0]["heroes"] if out["recommend"] else None, ok=lambda c: legal(c, side))
         elif opponent == "manual":
-            while True:
-                code = resolve(console.input(f"第 {n + 1} 手 · 对手选："))
-                if code and not sim.with_pick(state, foe, code).problems():
-                    break
+            codes = ask(f"第 {n + 1} 手 · 对手选：", rules.left_in_turn(n), ok=lambda c: legal(c, foe))
         else:
             code, p = sim.opponent_pick(m, state, rng)
-            console.print(f"第 {n + 1} 手 · 对手选了 [bold]{name(code)}[/]{tag}（模型认为这一手 {p:.0%} 的人会选它）")
-        state = sim.with_pick(state, mover, code)
-        curve.append((f"{'你' if mover == side else '对手'}：{name(code)}", float(sim.my_win(m.win([state])[0], side))))
+            console.print(f"第 {n + 1} 手 · 对手选了 [bold]{nm(code)}[/]（模型认为这一手 {p:.0%} 的人会选它）")
+            codes = [code]
+        for code in codes:
+            state = sim.with_pick(state, mover, code)
+            curve.append((f"{'你' if mover == side else '对手'}：{nm(code)}", float(sim.my_win(m.win([state])[0], side))))
         console.print(f"当前你的胜率 [bold]{curve[-1][1]:.1%}[/]")
 
-    rows, cols, mat = sim.ban_matrix(m, state, side)
-    rec = sim.maximin_row(mat)
-    table = Table("你禁 ↓ / 对方禁 →", *[name(c) for c in cols], "最坏情况", title="后禁：你的胜率（对方的保护位不能禁）")
-    for i, r in enumerate(rows):
-        table.add_row(("★ " if i == rec else "") + name(r), *[f"{v:.1%}" for v in mat[i]], f"{mat[i].min():.1%}")
-    console.print(table)
-    while True:
-        text = console.input(f"你禁对方哪名（回车 = 推荐的 {name(rows[rec])}）：").strip()
-        mine = rows[rec] if not text else resolve(text)
-        if mine in rows:
-            break
-        console.print("[red]只能禁对方选的、不是保护位的英雄[/]")
+    out = adv.advise(state, side)
+    _print_advice(out, db)
+    b = out["ban"]
+    mine = ask(f"你禁对方哪名（回车 = 推荐的 {nm(b['recommend'])}）：", 1, default=[b["recommend"]],
+               ok=lambda c: c[0] in b["rows"])[0]
     if opponent == "manual":
-        while True:
-            theirs = resolve(console.input("对手禁了你哪名："))
-            if theirs in cols:
-                break
+        theirs = ask("对手禁了你哪名：", 1, ok=lambda c: c[0] in b["cols"])[0]
     else:
-        theirs = cols[sim.minimax_col(mat)]
-        console.print(f"对手禁了你的 [bold]{name(theirs)}[/]（对它最稳妥的选择）")
+        theirs = b["cols"][sim.minimax_col(np.array(b["matrix"]))]
+        console.print(f"对手禁了你的 [bold]{nm(theirs)}[/]（对它最稳妥的选择）")
     state = sim.with_bans(state, {foe: mine, side: theirs})
     curve.append(("后禁后", float(sim.my_win(m.win([state])[0], side))))
-
     console.print(f"\n[bold]最终你的胜率 {curve[-1][1]:.1%}[/]")
-    console.print(f"你（{me_label}）：" + "、".join(name(c) + ("（被禁）" if c == theirs else "") for c in state.picks[side]))
-    console.print("对手：" + "、".join(name(c) + ("（被禁）" if c == mine else "") for c in state.picks[foe]))
+    console.print(f"你（{me_label}）：" + "、".join(nm(c) + ("（被禁）" if c == theirs else "") for c in state.picks[side]))
+    console.print("对手：" + "、".join(nm(c) + ("（被禁）" if c == mine else "") for c in state.picks[foe]))
     console.print("胜率变化：" + " → ".join(f"{label} {p:.0%}" for label, p in curve))
 
 

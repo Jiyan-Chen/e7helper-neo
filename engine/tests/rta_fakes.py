@@ -89,3 +89,65 @@ def synthetic_dataset(n: int = 1500, heroes: int = 40, days: int = 30, seed: int
         server=rng.integers(0, 2, n).astype(np.int8), day=np.sort(rng.integers(739900, 739900 + days, n)).astype(np.int32),
         first_wins=first_wins, turns=np.full(n, 10, dtype=np.int16), meta={"season": "test", "kept": n},
     )
+
+
+class FakeModel:
+    """B14c 搜索测试用的假模型（和 `model.RtaModel` 一样有 vocab / calibration / run）：
+    胜率 logit = 先手方已选英雄的强度之和 − 后手方的（被禁的减掉），按位置累加（因果）；
+    选人头 = 每名英雄固定的热度（logit），不看局面。校准是恒等的，所以胜率 = σ(logit)，结果能手算。
+    order 不为 0 时，每一手再加 order × 位置编号 × 强度（让同一对英雄换顺序结果不一样）；
+    preban 不为 0 时，先手方预禁的英雄按 +preban × 强度算（后手方的是 −），让预禁也有影响。"""
+
+    def __init__(self, strength: dict[str, float], pop: dict[str, float], order: float = 0.0, preban: float = 0.0):
+        import numpy as np
+
+        from e7helper.core.rta import encode, rules
+
+        codes = list(strength)
+        self.vocab = encode.Vocab(heroes=codes)
+        self.calibration = {"scale": [1.0] * encode.N_STATES, "bias": [0.0] * encode.N_STATES}
+        self.meta = {"kind": "fake", "run": "fake"}
+        v = self.vocab.size
+        self.s = np.zeros(v)
+        self.pop = np.full(v, -30.0)
+        for c, x in strength.items():
+            self.s[self.vocab.hero(c)] = x
+            self.pop[self.vocab.hero(c)] = pop.get(c, -30.0)
+        sign = np.zeros(encode.SEQ_LEN)
+        for k, side in enumerate(rules.PICK_ORDER):
+            sign[encode.PICK_POS + k] = (1 if side == "F" else -1) * (1 + order * k)
+        sign[encode.BAN_POS["F"]], sign[encode.BAN_POS["S"]] = -1, 1
+        sign[list(encode.PREBAN_POS["F"])], sign[list(encode.PREBAN_POS["S"])] = preban, -preban
+        self.sign = sign
+        self.calls = 0
+
+    def run(self, heroes, ctx):
+        import numpy as np
+
+        self.calls += 1
+        w = np.cumsum(self.s[heroes] * self.sign[None, :], axis=1)
+        p = np.broadcast_to(self.pop, (len(heroes), heroes.shape[1], len(self.pop)))
+        return w.astype(np.float32), p.astype(np.float32)
+
+
+    # 和 RtaModel 一样的几个高层方法（只用到 vocab / run / calibration），audit 和 sim 要用
+    def evaluate(self, states):
+        from e7helper.core.rta.model import RtaModel
+
+        return RtaModel.evaluate(self, states)
+
+    def win(self, states):
+        return self.evaluate(states).win
+
+    def next_picks(self, state, k: int = 8):
+        from e7helper.core.rta.model import RtaModel
+
+        return RtaModel.next_picks(self, state, k)
+
+def fake_priors(picks: dict[str, int], preban: dict[str, list] | None = None, postban: dict[str, list] | None = None):
+    """B14c：假数据先验。preban = {"F": [[a, b, 次数], ...], "S": [...]}；postban = {编号: [被禁, 可被禁]}。"""
+    from e7helper.core.rta.priors import Priors
+
+    pre = {s: {"total": sum(x[2] for x in v), "pairs": v} for s, v in (preban or {"F": [], "S": []}).items()}
+    return Priors(picks=dict(picks), preban=pre, postban=dict(postban or {}), meta={"built": "fake"})
+

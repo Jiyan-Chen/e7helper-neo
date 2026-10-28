@@ -184,7 +184,7 @@ db.artifacts()                # 神器编号 → {name（中文）, name_en}
 | `POST /api/heroes/update` | 联网更新；正在更新 409 `busy`，下载失败 502 `update_failed` |
 
 ## RTA 选秀 `e7helper.core.rta`（B14 起）
-世界竞技场选秀助手的引擎部分，不依赖设备。B14 拆成 a–f 六块（数据 → 模型 → 选秀推荐 → 分析功能 → 页面 → 画面识别），B14a 只有对局数据这一层。
+世界竞技场选秀助手的引擎部分，不依赖设备。B14 拆成 a–f 六块（数据 → 模型 → 选秀推荐 → 分析功能 → 页面 → 画面识别），目前有对局数据（B14a）、胜率 / 选人模型（B14b）、选秀推荐（B14c）。
 ```python
 from e7helper.core.rta import rules, parse_battle
 rules.PICK_ORDER                     # ("F","S","S","F","F","S","S","F","F","S")，F = 先手方
@@ -242,6 +242,35 @@ m.evaluate(states)                                 # 一批局面一次前向：
 - CLI（开发用）：`rta dataset [--until]`、`rta train -m lr0|lr|fm|transformer|hybrid [--d --layers --lambda] [--full --calibration-from <run>]`、`rta watch`（曲线页 `http://127.0.0.1:47900/`）、`rta eval <run>...`、`rta export <run> [--metrics-from]`、`rta model [--check]`、`rta predict --first ... --second ...`（中文名试算）、`rta sim [--side F|S] [--opponent ai|manual]`（终端里模拟 BP：一层估算的推荐 + 后禁矩阵；候选按选人头先验筛，见 B14b 审核记录「冷门英雄外推」）。run 目录 `F:\e7helper-data\rta\runs\<名字>\`。
 - 冻结：`e7engine.spec` 的 `collect_submodules` 跳过 `e7helper.core.rta.train`，`excludes` 加 torch / onnx / onnxscript；冒烟测试跑 `rta model --check` 并检查产物里没有 torch。
 
+### 选秀推荐（B14c）
+```python
+from e7helper.core.rta import search
+adv = search.load()                                   # 随包主模型 + 第二个模型（assets/data/rta/second/）+ priors.json
+adv.advise(state, "F", pool=None, budget=5.0)         # 当前局面：轮到我方 → recommend；轮到对手 → opponent；选完 → ban
+adv.preban(None, grades=("legend", "emperor"))        # 预禁推荐（先后手不知道传 None；grades = (我方, 对方)）
+```
+| 文件 | 职责 |
+|---|---|
+| `search.py` | 推荐搜索：`Advisor`（`advise` / `preban` / `info`、按局面缓存、同一时间只跑一个）、`SearchConfig`（所有门槛和规模）、`nash`（零和矩阵博弈的混合策略，支撑集枚举）、`correction`（少见选择的高估修正）、`protected_index` |
+| `priors.py` | 数据先验 `priors.json`：每名英雄训练时被选的次数（冷门 = < 1000 次）、双方 ≥ 优胜者时先手方 / 后手方的预禁组合频率（各前 300 组）、后禁率（可被禁时被禁的比例）；`e7helper rta priors` 从训练快照生成 |
+| `audit.py` | 验收统计（开发用，要训练快照）：冷门比例和用时、自对弈 + 不筛的一层贪心对照（每局阵容留在 JSON 里，终端列出 ≥ 90% 的那几局）、跟着推荐的实际兑现（用切分模型） |
+
+- **轮到我方**：
+  1. 候选只从选人头先验里取：这一手常见度 ≥ 0.5%，或常见度前 40 且训练时被选 ≥ 1000 次；英雄池（请求里传）里过不了筛的冷门英雄也进候选。
+  2. 三层：我方这一轮（所有候选；两手回合是所有两两组合）→ 前 24 个算对手回应（先验前 12 名 ∪ 威胁前 4 名；对手连选两名时是两两组合，组合先验 q(a)·q(b|a) + q(b)·q(a|b)）→ 前 8 个再算我方再回应（回应取先验前 10 + 最坏 2，我方取先验前 12 名）。分数 = ½ 预期（按回应先验加权）+ ½ 最坏；算得深的排前面。
+  3. 两手回合：没有保护位的回合两个顺序取平均；含保护位的（先手第 4–5 手、后手第 6–7 手）取对出手方好的顺序，`protected` 给出放保护位的那名；对手的普通两手回合只算先验高的在前的顺序。
+  4. 选秀最后几手（先手第 8–9 手、后手第 10 手，以及后手第 6–7 手的第 3 层）搜到后禁：叶子 = 后禁博弈的值。
+  5. **少见选择的高估修正**：一手的单步变化里对出手方有利的部分，有 (1 − 可信度) 当成高估，从这一手之后的所有结果里扣掉；可信度 = q / (q + 1.5%) × min(1, 被选次数 / 1000)，q = 这一手的常见度；我方后面几手的可信度不超过候选那一手的。依据见 reviews/B14c.md「少见选择的高估」。
+  6. 截止时间（默认 5 秒）：第 2 / 3 层按名次一个个算，时间不够就停（`stats.truncated`），没算到的按浅一层排在后面。
+- **第二个模型**（切分训练的 hy-d128-L3-lam1，没见过最后 14 天）：列出的推荐重算到第 2 层（同样的回应和修正），`second.spread` = 两个模型的预期之差，|差| ≥ 5 个百分点标 `uncertain`。两个模型词表不同（265 / 248 名），局面统一按主模型编号拼、推理时换成各自的。
+- **轮到对手**：对手可能的选择（两手回合 = 先验前 16 名两两组合）按先验排，带之后我方胜率；威胁 = 之后我方胜率最低的 3 个。
+- **后禁**（10 手选完）：4 × 4 矩阵（行 = 我方禁对方哪名，列 = 对方禁我方哪名，保护位除外）；每行 最坏 / 预期（对方按后禁率）/ 分数（½ / ½），推荐分数最高的行；另给纳什均衡混合策略。
+- **预禁**：我方候选 = 数据里（我方这个先后手）占比 ≥ 0.2% 的组合或前 60 组（可以 `fixed` 一名）；对手 = 对方那个先后手最常见的 100 组按频率加权；胜率读模型「已选 0 手」的局面（不用选人头模拟）；分数 = ½ 预期 + ½ 最坏（对手最常见的 10 组里最差的）；先后手不知道时两种各算一半。
+- 返回的胜率一律是**我方**的；`close` = 和第一名差 < 1 个百分点（差距不明显）；`rare` = 训练时被选 < 1000 次；`pool_only` = 只因为英雄池才放进来的冷门英雄；`trust` = 这一手的可信度。
+- 接口（`api/rta.py`，要 token）：`GET /api/rta/model`、`POST /api/rta/advise {side, state, pool?, top?, budget?}`（局面不合法 422 `invalid_state`，detail 是中文问题列表）、`POST /api/rta/preban {side?, grades, rule, fixed?, top?, budget?}`；没有模型 503 `no_model`。
+- CLI：`rta advise --side F --pre-mine … --pre-theirs … --mine … --theirs … [--ban-mine/--ban-theirs] [--grades 我方,对方] [--pool …] [--json]`、`rta preban [--side] [--fixed]`、`rta sim`（B14c 起用这里的搜索）、`rta priors`、`rta audit`（开发用）。
+- 每次重训（新赛季）：`rta export` 主模型 + 切分模型（`--out assets/data/rta/second`）→ `rta priors`；可信度的常数要用新的切分模型在测试期重新量一次（审核记录里的脚本做法）。
+
 **采集**（`e7helper rta crawl`，开发用）：种子 → 采他们的对局 → 对手段位 ≥ `--min-grade`（默认优胜者）就入队。国服一名玩家往前翻到这个赛季的头（最多 `--max-pages` 页，一页里没有新对局也停）；海外每人只有最近 100 场，隔 `--refresh-hours`（默认 20）再采；国服翻完的玩家也按这个间隔回来看第 1 页。没采过的、段位高的、离种子近的优先。每个服默认 1 次 / 秒（另加 0–0.3 秒抖动）、每天 2 万次上限、连续出错 10 次就停；取不到的玩家（多半是 405）隔一段时间再试，失败 3 次不再采。对局表只存 `strip()` 后的字段，**玩家编号只在队列表里**，采集库不进 git、不随包。
 - CLI：`e7helper rta probe -s cn|global`（采一页看字段，不打印昵称）、`rta crawl [--server both] [--season …] [--max-requests N]`、`rta report [--json]`。
 
@@ -280,6 +309,7 @@ python -m uv run e7helper serve [--port 47800] [--index N] [--no-connect] [--pau
 | `/capture/...`（B09，开发工具） | 模板采集，见下文 |
 | `/flows/...`、`/user-templates/...`（B11） | 自定义流程和玩家模板，见下文 |
 | `/heroes/...`（B13） | 英雄数据库，见「游戏数据」 |
+| `/rta/...`（B14c） | RTA 选秀推荐，见「RTA 选秀 / 选秀推荐」 |
 
 **模块子路由**：`Module.routes()` 返回的路由挂到 `/api/modules/<id>/`，同样要 token。第一段路径不能是 `config` / `stats` / `timers` 或路径参数，否则启动时报 `ModuleRegistryError`。fastapi 在 `routes()` 里再导入。已有：`GET /api/modules/daily/ledger`、`GET /api/modules/secret_shop/report`（B12c）。
 

@@ -181,6 +181,17 @@ def _smoke_serve(env: dict[str, str], data: Path) -> None:
             assert r.read(4) == b"RIFF"
         print(f"[ok] 英雄数据库：随包 {hs['count']} 名，头像、技能详情和技能图标可读")
 
+        # B14c：选秀推荐（随包两个模型 + priors.json），预算给短一点，只看能出结果
+        _, info = call("/api/rta/model")
+        assert info["model"]["heroes"] > 200 and info["second"] and info["priors"], info
+        state = {"prebans": {"F": ["c2186", "c6005"], "S": ["c2181", "c2185"]}, "picks": {"F": [], "S": []},
+                 "grades": ["emperor", "emperor"], "rule": "unknown"}
+        _, adv = call("/api/rta/advise", "POST", {"side": "F", "state": state, "budget": 1.0})
+        assert adv["turn"] == "mine" and len(adv["recommend"]) == 8 and adv["recommend"][0].get("second"), adv
+        _, pre = call("/api/rta/preban", "POST", {"side": "S", "grades": ["emperor", "emperor"], "budget": 1.0})
+        assert len(pre["recommend"]) == 8, pre
+        print(f"[ok] RTA 选秀推荐：advise {adv['stats']['ms']} ms、preban {pre['stats']['ms']} ms，第二个模型和 priors 都在")
+
         asyncio.run(_smoke_ws(url))
         print("[ok] WebSocket：/ws hello、/ws/frames 未连接状态")
 
