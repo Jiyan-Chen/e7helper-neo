@@ -1,0 +1,188 @@
+"""B14d1：先动概率（速度表、开局规则、从开局行动条反推 290 以上、接到推荐上）。合成数据，不联网。"""
+
+import json
+
+import numpy as np
+import pytest
+
+from e7helper.core.rta import encode, speed
+from e7helper.core.rta.speed import EnergyUnit, SpeedTable, Unit
+
+
+def one_bin(k: int, n: int = 1000) -> list[int]:
+    """官方直方图：人全在第 k 档（0 = 110–130 … 9 = 290 以上）。"""
+    h = [0] * 10
+    h[k] = n
+    return h
+
+
+def table(**heroes) -> SpeedTable:
+    return SpeedTable.from_hists({c: {"legend": h} for c, h in heroes.items()}, jitter=5.0)
+
+
+def test_dist_and_quantiles():
+    t = table(a=one_bin(6), top=one_bin(9))
+    p = t.dist("a", "legend")
+    assert p.shape == (13,) and p[6] == pytest.approx(1.0)
+    assert t.quantiles(p) == pytest.approx([235, 240, 245])  # 230–250 这一档
+    # 290 以上按尾部分：没拟合时用先验
+    p = t.dist("top", "legend")
+    assert p[9:] == pytest.approx(speed.PRIOR_TAIL) and t.top_share(p) == pytest.approx(1.0)
+    t2 = SpeedTable({"heroes": {"top": {"legend": {"hist": one_bin(9), "tail": [0, 1, 0, 0]}}}})
+    assert t2.quantiles(t2.dist("top", "legend"), (0.5,)) == pytest.approx([320])
+
+
+def test_grade_fallback_and_mixture():
+    t = SpeedTable.from_hists({"a": {"legend": one_bin(7, 300), "champion": one_bin(5, 100)}})
+    assert t.dist("a", "legend")[7] == 1.0 and t.dist("a", "champion")[5] == 1.0
+    assert t.dist("a", "emperor")[7] == 1.0  # 没有王者段，用最近的传说
+    assert t.dist("a", "warlord")[5] == 1.0  # 战神离优胜者更近
+    assert t.dist("a", "gold")[5] == 1.0  # 金牌按大师算 → 最近的优胜者
+    t2 = SpeedTable.from_hists({"a": {"champion": one_bin(5), "emperor": one_bin(7)}})
+    assert t2.dist("a", "warlord")[7] == 1.0  # 一样近时取高的
+    mix = t.dist("a", None)  # 不知道段位：按人数混合
+    assert mix[7] == pytest.approx(0.75) and mix[5] == pytest.approx(0.25)
+    assert t.dist("nobody", "legend") is None
+    assert speed.analysis_grade("bronze") == "master" and speed.analysis_grade(None) is None
+
+
+def test_first_mover_basics():
+    t = table(fast=one_bin(8), slow=one_bin(3), b=one_bin(6), c=one_bin(6))
+    r = speed.first_mover(t, [Unit("mine", "fast", "legend"), Unit("theirs", "slow", "legend")])
+    assert r["sides"]["mine"] == 1.0
+    assert r["heroes"][0]["speed"] == [275, 280, 285] and r["heroes"][0]["p"] == 1.0
+    # 一样的英雄 → 各一半左右
+    r = speed.first_mover(t, [Unit("mine", "b", "legend"), Unit("theirs", "c", "legend")])
+    assert 0.45 < r["sides"]["mine"] < 0.55
+    # 填了速度的用填的
+    r = speed.first_mover(t, [Unit("mine", "slow", "legend", speed=300), Unit("theirs", "fast", "legend")])
+    assert r["sides"]["mine"] > 0.95 and r["heroes"][0]["fixed"] == 300 and r["heroes"][0]["speed"] is None
+    # 同样的输入结果一样
+    us = [Unit("mine", "b", "legend"), Unit("theirs", "c", "legend")]
+    assert speed.first_mover(t, us) == speed.first_mover(t, us)
+    # 没有数据的英雄按段位平均，标出来
+    r = speed.first_mover(t, [Unit("mine", "unknown", "legend"), Unit("theirs", "b", "legend")])
+    assert r["heroes"][0]["no_data"] and 0 < r["sides"]["mine"] < 1
+
+
+def test_opening_rules():
+    t = table(c1133=one_bin(6), c1153=one_bin(2), other=one_bin(9))
+    zio, harsetti = "c1133", "c1153"
+    # 智武开局 +30%：240 速能赢 300 速
+    r = speed.first_mover(t, [Unit("mine", zio, speed=240), Unit("theirs", "other", speed=300)])
+    assert r["sides"]["mine"] == 1.0 and "智武" in r["heroes"][0]["rule"]
+    # 用户举的例子：200 速的智武跑不过 320 速的普通英雄
+    r = speed.first_mover(t, [Unit("mine", zio, speed=200), Unit("theirs", "other", speed=320)])
+    assert r["sides"]["mine"] == 0.0
+    # 赫尔赛蒂：其他英雄速度限制在她的 90% 以下 → 150 速也先动
+    r = speed.first_mover(t, [Unit("mine", harsetti, speed=150), Unit("theirs", "other", speed=330)])
+    assert r["sides"]["mine"] > 0.95
+    assert "c6005" not in t.rules  # 天秤之主开局不触发
+
+
+# —— 从开局行动条反推 290 以上 ——
+
+ANCHORS = [f"a{i}" for i in range(8)]
+TRUE_TAIL = {"t0": [0.2, 0.5, 0.2, 0.1], "t1": [0.7, 0.2, 0.1, 0.0]}
+
+
+def synthetic(n: int = 1500, jitter: float = 5.0, seed: int = 1):
+    """合成对局：每方 1 名 290 以上的英雄 + 3 名中间档的；速度按「真实」分布抽，行动条按游戏规则算。"""
+    rng = np.random.default_rng(seed)
+    hists = {a: {"legend": one_bin(4 + i % 4)} for i, a in enumerate(ANCHORS)}
+    hists.update({t: {"legend": [0] * 8 + [200, 800]} for t in TRUE_TAIL})
+    out = []
+    for _ in range(n):
+        units = []
+        for side in "FS":
+            top = str(rng.choice(list(TRUE_TAIL)))
+            for code in [top, *rng.choice(ANCHORS, 3, replace=False)]:
+                if code in TRUE_TAIL:
+                    if rng.random() < 0.2:
+                        s = rng.uniform(270, 290)
+                    else:
+                        k = rng.choice(4, p=TRUE_TAIL[code])
+                        s = 290 + 20 * k + rng.uniform(0, 20)
+                else:
+                    lo = 110 + 20 * (4 + ANCHORS.index(code) % 4)
+                    s = rng.uniform(lo, lo + 20)
+                units.append([code, side, s])
+        r = rng.uniform(0, jitter, len(units))
+        s = np.array([u[2] for u in units])
+        t = ((100 - r) / s).min()
+        e = np.minimum(np.round(r + s * t), 99)
+        e[int(np.argmin((100 - r) / s))] = 100
+        out.append([EnergyUnit(c, side, "legend", int(x)) for (c, side, _), x in zip(units, e)])
+    return hists, out
+
+
+def test_fit_tails_recovers_synthetic_tail():
+    hists, matches = synthetic()
+    t = SpeedTable.from_hists(hists, jitter=5.0)
+    res = speed.fit_tails(t, matches)
+    assert res["used"] == len(matches)
+    for code, truth in TRUE_TAIL.items():
+        assert res["heroes"][code]["legend"] == pytest.approx(truth, abs=0.12), code
+    # 核对：反推 ≥ 290 的比例接近官方的 80%
+    for row in res["check"]:
+        if row["code"] in TRUE_TAIL:
+            assert row["implied_top"] == pytest.approx(row["official_top"], abs=0.08)
+
+
+def test_implied_speeds_skip_rules():
+    t = table(a=one_bin(6), b=one_bin(6), c=one_bin(6), c1153=one_bin(2))
+    units = [EnergyUnit("a", "F", "legend", 80), EnergyUnit("b", "F", "legend", 80), EnergyUnit("c", "S", "legend", 80),
+             EnergyUnit("x", "S", "legend", 100)]
+    est = speed.implied_speeds(t, units)
+    assert est[3] == pytest.approx((100 - 2.5) / ((80 - 2.5) / 240))  # 三名参照都是 240 速、行动条 80
+    assert speed.implied_speeds(t, units[:2] + [units[3]]) is None  # 参照不够 3 名
+    assert speed.implied_speeds(t, units + [EnergyUnit("c1153", "S", "legend", 60)]) is None  # 有限速英雄不反推
+
+
+def test_build_and_evaluate():
+    hists, matches = synthetic(n=1200)
+    res = speed.build(hists, matches, season="pvp_rta_ss21", eval_limit=400)
+    data = res["data"]
+    assert data["jitter"] == 5.0  # 各取值差不到 0.002，保留默认
+    fit = data["fit"]
+    # 双方各有一名 290 以上的英雄，先动接近五五开；拟合出尾部才分得出谁更快
+    assert fit["test"]["matches"] == 240
+    assert fit["test"]["log_loss"] < fit["test_without_tail"]["log_loss"] - 0.01
+    assert fit["test"]["accuracy"] > fit["test_without_tail"]["accuracy"]
+    assert sum(b["n"] for b in fit["test"]["calibration"]) == 240
+    tab = SpeedTable(json.loads(json.dumps(data)))  # 能存成 JSON 再读回
+    assert tab.tails["t0"]["legend"].sum() == pytest.approx(1.0) and tab.info()["heroes"] == 10
+
+
+def test_load(tmp_path):
+    assert speed.load(tmp_path / "none.json") is None
+    path = tmp_path / "speed.json"
+    path.write_text(json.dumps({"format": 1, "season": "s", "heroes": {"a": {"legend": {"hist": one_bin(6)}}}}))
+    assert speed.load(path).season == "s"
+
+
+# —— 接到推荐上 ——
+
+def test_annotate():
+    # 速度档隔开，开局随机翻不过来：f1 290 以上 > s1 250–270 > 其余 190–210
+    t = table(f1=one_bin(9), f2=one_bin(4), f3=one_bin(4), f4=one_bin(4), f5=one_bin(4),
+              s1=one_bin(7), s2=one_bin(4), s3=one_bin(4), s4=one_bin(4), s5=one_bin(4))
+    st = encode.DraftState(picks={"F": ["f1", "f2", "f3"], "S": ["s1", "s2"]}, grades=("legend", "legend"))
+    out = speed.annotate({"phase": "pick", "recommend": [{"heroes": ["f4"]}]}, st, "F", t)
+    assert out["first"]["mine"] == 1.0 and out["first"]["partial"] and out["recommend"][0]["first"] == 1.0
+    # 我方是后手：同一局面我方先动的概率是 0
+    assert speed.annotate({}, st, "S", t)["first"]["mine"] == 0.0
+    # 英雄池里填了速度
+    assert speed.annotate({}, st, "S", t, speeds={"s2": 400})["first"]["mine"] == 1.0  # f1 最快 370、开局再随机 5% 也跑不过
+    # 后禁矩阵：行 = 我方禁对方哪名，列 = 对方禁我方哪名
+    st = encode.DraftState(picks={"F": ["f1", "f2", "f3", "f4", "f5"], "S": ["s1", "s2", "s3", "s4", "s5"]},
+                           grades=("legend", "legend"))
+    ban = {"rows": ["s1", "s2", "s4", "s5"], "cols": ["f1", "f2", "f4", "f5"]}
+    out = speed.annotate({"phase": "ban", "ban": ban}, st, "F", t)
+    m = out["ban"]["first"]
+    assert len(m) == 4 and all(len(r) == 4 for r in m)
+    assert m[1][1] == 1.0  # 禁了对方 s2、对方禁我方 f2：f1 还在，我方先动
+    assert m[1][0] == 0.0  # 对方禁了我方 f1：对方 s1 最快
+    assert speed.annotate({}, st, "F", None)["first"] is None  # 没有速度表
+    st = encode.DraftState(picks={"F": ["f1"], "S": []})
+    assert speed.annotate({}, st, "F", t)["first"] is None  # 对方还没有英雄

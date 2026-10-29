@@ -1,6 +1,6 @@
 # HANDOFF
 
-> 新会话从这里读起。上次更新：2026-10-29（B14c 已通过）
+> 新会话从这里读起。上次更新：2026-10-29（B14d1 已通过）
 
 ## 当前进度
 - **B01 骨架 + 模块契约 + MuMu 设备层**：✅ 已通过，记录见 [reviews/B01.md](reviews/B01.md)。
@@ -31,7 +31,14 @@
   - 验收：第一名里冷门英雄 0.0%，advise p95 3.43 s，预禁 p95 ≤ 2.30 s。自对弈 ≥ 90% 有 4 局（超过 2% 门槛，用户接受）。
   - 审核时追加：和 e7rtabot 对抗 8 局，两边都更看好自己选的阵容。发现官方 `energyGauge` 是开局行动条、采集漏存（留给 B14d）。
   - 全量 `1144 passed, 9 skipped`；`test_scheduler.py` 的退避测试偶尔失败（和 B14c 无关，没修）。
-- 下一块：**B14d RTA：分析功能**（见下面「下一块」）。
+- **B14d1 RTA：开局行动条 / 先动概率 / 英雄池**：✅ 已通过，记录见 [reviews/B14d1.md](reviews/B14d1.md)。B14d 按用户意见拆成 B14d1 / B14d2。
+  - 采集规范：存 `energyGauge`（开局行动条），解析成每名英雄的行动条和先动方；已有对局再采到时补上，`rta crawl --backfill` 国服整季重翻；报告、训练快照带上。
+  - 官方「英雄分析」的能力值直方图其实是绝对值（速度 110–310、每档 20，按段位）；`rta herostats` 取快照。
+  - 先动概率 `core/rta/speed.py`：官方分段位速度 + 290 以上用开局行动条反推 + 开局规则（智武 +30%、赫尔赛蒂限速）+ 英雄池速度，蒙特卡洛；`POST /api/rta/first`，advise 的推荐 / 后禁矩阵旁边显示，**不改胜率**（速度进模型留给 B14g，用户意见）。
+  - 英雄池 `core/rta/pool.py`，`GET/PUT /api/rta/pool`，advise 不传 pool 时用它。
+  - **采集没跑**（用户意见「采集以后再说」）：随包还没有速度表，先动概率暂时是空的。步骤见下面「待办：B14d1 的采集和速度表」。
+  - 全量 `1173 passed, 9 skipped, 1 failed`（又是 `test_scheduler.py` 的退避测试，单独重跑 3 次都过）。
+- 下一块：**B14e RTA：选秀助手页面**（见下面「下一块」）。B14d2（站位 / 快速分析 / 英雄统计）往后放，等 ss22 赛季更新、数据重采后和 B14g 一起做（用户意见）。
 
 ## 已有能力
 ### 设备（B01）
@@ -255,9 +262,20 @@
 - 测试：`tests/test_rta_search.py`（30 个，27 个用 `rta_fakes.FakeModel` 能手算）、`test_rta_api.py`（8 个）、`test_rta_audit.py`（4 个）。
 - e7rtabot 对抗对比的脚本只在 B14c 会话里跑过（没进仓库），原始记录在 `F:\e7helper-data\rta\crosscheck\`（不进 git）。
 
+### RTA 开局行动条 / 先动概率 / 英雄池（B14d1，详见 architecture.md「RTA 选秀 / 先动概率 / 英雄池（B14d1）」和 reviews/B14d1.md）
+- 对局：`Pick.energy`（开局行动条 0–100，没有是 None）、`Match.first_mover`（F / S）/ `first_hero`；行动条不合格只是没有，`battle.energy_issue(raw, m)` 给原因。旧对局全都是「缺行动条」。
+- 采集：`rta crawl [--backfill]`（`--backfill` 开跑时把国服这些赛季的玩家重置到第 1 页）；已有、没有行动条的对局再采到时整行替换，算「补」（`ServerStats.battles_filled`），翻页时算新的。
+- 官方能力值快照 `core/rta/herostats.py`：`snapshot(client, season, codes, grades=)` → 采集库 `hero_stats` 表（原样存 result_body，-10002 没数据存空串）；`speed_histograms(season)`；`energy_matches(season, servers=)`（有行动条的对局 → 每场 8 个 `EnergyUnit`，在 Python 里按时间排）；`SCALES` 是官方页面上 8 项属性的刻度。
+- 速度 / 先动 `core/rta/speed.py`：`load()`（随包 `assets/data/rta/speed.json`，没有返回 None）、`first_mover(table, [Unit(side, code, grade, speed?)])`、`annotate(out, state, side, table, speeds)`、开局规则 `RULES`；开发用 `build` / `fit_tails` / `implied_speeds` / `residuals` / `evaluate` / `choose_jitter`。
+- 英雄池 `core/rta/pool.py`：`<数据目录>/modules/rta_draft/pool.json`，`load()` / `save()`，`Pool.limit()`（空 = 不限制）、`Pool.speeds`。
+- 接口：`POST /api/rta/first {mine, theirs, grades?, speeds?}`（没有速度表 503 `no_speed_data`）、`GET/PUT /api/rta/pool`；advise 加 `use_saved_pool`、`speeds`，结果加 `first` / 推荐的 `first` / `ban.first`（我方先动的概率）、`pool`；`/rta/model` 加 `speed`。
+- CLI：`rta first --mine … --theirs … [--grades] [--speed 名字=速度] [--table]`、`rta herostats`、`rta speed`、`rta advise --speed`、`rta report`（多一行行动条）。
+- 测试：`test_rta_speed.py`（9）、`test_rta_herostats.py`（3），以及 battle / crawl / dataset / report / api 里新加的；合成开局行动条 `rta_fakes.gauge()`。RTA 共 165 个（2 个要 torch 的跳过）。
+- 方案阶段的临时脚本和取到的数据（93 名英雄的官方传说 / 冠军速度直方图、13 名的 Fribbels 速度）只在那个会话的临时目录里，没进仓库；样本 `F:\e7helper-data\rta\energy_probe.json` 还在。
+
 ### 模块与 CLI（B01，B03 / B08 更新）
 - 模块：继承 `TaskModule` / `AssistantModule`，放到 `e7helper/modules/<id>/` 就会被自动发现。参考 `modules/hello/`。
-- CLI：`doctor`、`bench`、`screenshot`、`tap`、`modules`、`run <id> [-c JSON] [-t 超时]`（经 runtime）、`scene [-f 图片] [--dismiss] [--watch]`、`capture`（新增 `--tap`）、`match`、`ocr`、`serve`（B08）、`heroes [词] [--update [--bundled]]`（B13）、`rta probe|crawl|report`（B14a，子命令组）、`rta dataset|train|eval|export|model|predict|sim|watch`（B14b）、`rta advise|preban|priors|audit`（B14c）。
+- CLI：`doctor`、`bench`、`screenshot`、`tap`、`modules`、`run <id> [-c JSON] [-t 超时]`（经 runtime）、`scene [-f 图片] [--dismiss] [--watch]`、`capture`（新增 `--tap`）、`match`、`ocr`、`serve`（B08）、`heroes [词] [--update [--bundled]]`（B13）、`rta probe|crawl|report`（B14a，子命令组）、`rta dataset|train|eval|export|model|predict|sim|watch`（B14b）、`rta advise|preban|priors|audit`（B14c）、`rta first|herostats|speed`、`rta crawl --backfill`（B14d1）。
 
 ## 关键决策
 - 基准分辨率 1600×900。本机 MuMu 已经是 1600×900（平板模式 tablet.2）。
@@ -348,34 +366,49 @@
   - 自对弈 ≥ 90% 的 4 局（超过我定的 2%）按现状接受（审核通过，没有另提意见）；
   - 和 e7rtabot 的对抗对比：站长在 Discord 同意小规模、限频（每 3–5 秒一次请求）。网站条款原本禁止自动访问，以后要再跑，先问用户；
   - 开局行动条（`energyGauge`）的采集和用法放到 B14d 开工时定（用户决定）。
+- B14d1（2026-10-29 审核通过）：
+  - B14d 拆成 B14d1（行动条 / 先动 / 英雄池）和 B14d2（站位 / 快速分析 / 英雄统计）（按「大块拆开」的习惯，用户同意）；
+  - 速度按段位取（用户提议「像配装推荐一样按段位用不同分位」）→ 查到官方英雄分析的速度直方图就是按段位的绝对值，直接用；Fribbels 不批量取（会 403）；
+  - 开局效果要和速度分开算（用户：「即使有开局加行动条的智武，200 速也跑不过 320 速的普通角色」）；天秤之主开局不触发（用户纠正）；
+  - 290 以上（「高段位经常有 320 速以上的一速」，用户）用开局行动条反推；
+  - **速度 / 先动不在模型外修正胜率**（用户：有的阵容抢到一速胜率差几十个点，有的几乎不差）；推荐只在旁边显示先动概率；ss22 重训时把「谁先动」放进模型（新增 B14g）；
+  - **采集以后再说**（用户）：国服补采、能力值快照、随包速度表都没跑，工具和步骤保留（见「待办」）。
+  - **B14d2 往后放**（用户，审核通过后）：站位 / 快速分析 / 英雄统计等 ss22 赛季更新、数据重采后和 B14g 一起做；B14e 先做五步 BP 页面和英雄池，快速分析、英雄统计页跟着 B14d2 往后放。
 
-## 下一块：B14d RTA 分析功能
-设计草案在 reviews/B14a.md「后续块的设计草案 / B14d」，ROADMAP 的 B14d 一行也有。开工时细化、和用户确认后再动手。要做的有：
-- 先手概率（速度）；
-- 站位建议（采集的 `position` 分布）；
-- 快速分析：两队 → 胜率、每名英雄的贡献、克制 / 搭档；
-- 英雄统计：官方 `getPopularHero` + 我们的统计；
-- 英雄池接口（`<数据目录>/modules/rta_draft/pool.json`，可填速度）。
+## 下一块：B14e RTA：选秀助手页面
+设计草案在 reviews/B14a.md「后续块的设计草案 / B14e / B14f」，ROADMAP 的 B14e 一行也有。开工时细化、和用户确认后再动手（按「大块拆开」的习惯，工作量大就先拆）。要做的：
+- **五步手动模式**：准备（先后手、双方段位）/ 预禁（`POST /api/rta/preban`）/ 选秀（`POST /api/rta/advise`：轮到我方给推荐、轮到对手给对手可能怎么选）/ 后禁（advise 的 `ban`：4 × 4 矩阵、推荐、纳什）/ 结果（后禁后的胜率）。胜率一律是我方的。
+- 左侧双方阵容卡、右侧英雄网格：复用图鉴的头像和筛选（要从 `HeroesPage.tsx` 抽出来）；GUI 还不支持助手模块，菜单要加入口、`App.tsx` 的宽页面列表要加这一页。
+- **英雄池**：在英雄图鉴里勾选「我有的英雄」、可填速度 → `GET/PUT /api/rta/pool`；advise 不传 pool 时引擎用保存的。
+- **先动概率**：advise 结果里的 `first`、每个推荐的 `first`、后禁矩阵的 `ban.first`（我方先动的概率）。**随包速度表还没生成**（见「待办」），现在都是 null，页面要能不显示；有了以后在胜率旁边单独显示，不和胜率合成（用户意见）。
+- 推荐里的标记：`close`（差距不明显）、`rare`（数据少）、`uncertain`（两个模型差 ≥ 5 个百分点）、`protected`（放保护位的那名）、`pool_only`。
+- 正式版面向玩家：说明只讲功能（记忆「GUI 说明只讲功能」），开发者功能只在开发版。
+- **不做**：快速分析、英雄统计页（随 B14d2 往后放）。
 
-**开工先和用户定开局行动条怎么用**（B14c 审核时发现，用户决定放到这一块）：
-- 官方原始记录的 `energyGauge` 是开局行动条。格式是字符串 `"energy_gauge":[{hero_code, energy, team, position_no}, …]`，一场 10 名：
-  - 最快的正好 100（第一个出手）；
-  - 被后禁的两名是 0；
-  - 其余大致是「自己的速度 ÷ 场上最快的」，再加开局随机的那一点。
-  - 国服、海外各 99 场核对过，样本在 `F:\e7helper-data\rta\energy_probe.json`。
-- 它不在 `battle.STORE_KEYS` 里，采集库约 100 万场都没有。`battle.py` 注释和 B14a 审核记录说它是「结算行动条」，是错的，要改正。
-- 要定的四件事：
-  1. 补采集：`STORE_KEYS` 加上，`Match` 里解析成每名英雄的开局行动条。
-  2. 旧对局要不要重采：国服能往前翻到赛季头，海外每人只返回最近 100 场，旧的拿不回来。
-  3. 量先手值多少：在模型算过阵容之后，先出手的一方还多赢多少。
-  4. 先手概率怎么算：用每名英雄实战里相对速度的分布，还是 Fribbels 配装库的速度分位数；要不要把速度放进胜率模型（要动 B14b 的编码并重训）。
+## 往后放：B14d2 RTA：站位 / 快速分析 / 英雄统计（等 ss22 赛季更新、数据重采后和 B14g 一起做，用户意见）
+设计草案在 reviews/B14a.md「后续块的设计草案 / B14d」，ROADMAP 的 B14d2 一行也有。开工时细化、和用户确认后再动手。要做的：
+- **站位建议**：采集的 `Pick.position`（1–4，被后禁的 0）。B14d1 方案阶段粗试过：只按每名英雄自己的站位分布排，留出 5,000 队上整队排对 26%、单名 51%；分布集中的英雄也有（亚露嘉 99% 在 1 号位、宝剑君主伊赛丽亚 79% 在 4 号位）。打算加「同一阵容以前怎么排」和成对的站位关系，用留出数据比。站位 1–4 对应游戏里哪个格子还没核对（B14f 截图时）。
+- **快速分析**：两队（4 或 5 名）→ 胜率（5 打 5 走后禁矩阵）、每名英雄的贡献（实际阵容 − 换成这一手常见的其他英雄的平均）、搭档 / 克制（成对的二阶差）；先手方不知道时两种各算一半，选人顺序取几种平均。可以顺带给先动概率（`speed.first_mover`，有速度表时）。
+- **英雄统计**：我们的统计（`rta stats` 从采集库生成随包 `stats.json`：选取 / 胜 / 预禁 / 后禁 / 第一手率、搭档 / 克制（扣掉各自强度、样本少的收缩）、套装 + 神器组合胜率、伤害、站位）+ 官方 `getPopularHero`（国服按段位，运行时取、缓存一天）。官方英雄分析（`getHeroAnalysis`）的套装 / 神器 / 技能 / 各属性直方图也能用：`herostats` 快照（要先跑，见「待办」）或运行时按需取。有行动条后还可以加速度、先动率。
 
 能直接用的：
-- B14c 的 `search.load()`：快速分析的胜率可以用 `adv.model.win(states)`，5 打 5 走后禁矩阵 `advise(...)["ban"]`；
-- B14b 的 `model.load()`；
-- B13 的 `hero_builds`（Fribbels 配装库，速度分位数）。
+- `search.load()`：快速分析的胜率用 `adv.model.win(states)`，5 打 5 走 `advise(...)["ban"]`；
+- `speed.first_mover` / `speed.annotate`（速度表生成之后才有数）；
+- `herostats.SCALES`（官方各属性直方图的刻度）。
 
-只做引擎和接口，页面是 B14e。
+只做引擎和接口；页面（快速分析、英雄统计）也跟着往后放。
+
+## 待办：B14d1 的采集和速度表（用户：「采集以后再说，记得保留相关工具和规划」）
+先动概率的代码、接口都在，但随包还没有 `assets/data/rta/speed.json`（`/api/rta/first` 503、advise 的先动概率是 None）。**跑之前先问用户**。步骤：
+1. **国服补采开局行动条**：`python -m uv run e7helper rta crawl --server cn --backfill`（整个赛季重翻一遍，预计 3–4 千次请求、1 小时左右；Ctrl+C 安全退出，下次不带 `--backfill` 接着翻）。跑完 `rta report` 看「开局行动条」一行：有行动条的场数、没有的原因、先手方先动率。海外不用单独补：采集器照常跑时每 20 小时回来看第 1 页会顺带补上最近 100 场。
+2. **官方能力值快照**：`python -m uv run e7helper rta herostats`（国服当前赛季，priors 里被选 ≥ 300 次的约 200 名 × 大师到传说 6 个段位，约 1200 次请求、20–35 分钟；72 小时内取过的跳过，可以分几次跑）。
+3. **生成速度表**：`python -m uv run e7helper rta speed --season <赛季>`（默认只用国服的行动条；前 80% 拟合、最近 20%（最多 3000 场）验收）。要看：
+   - 验收：先手方先动的 log loss（瞎猜 0.693）、命中、先动英雄猜中，加尾部 vs 不加尾部；校准表；
+   - 核对表：反推 ≥ 290 的比例 vs 官方 290 以上的占比，差得多说明参照的绝对值偏了（已知问题 5）；
+   - 残差表：行动条比速度应有的高出很多的英雄，可能有没登记的开局加行动条 → 列出来请用户核对，再加进 `speed.RULES`。
+   - 开局随机：各取值 log loss 差不到 0.002 就保留 5%（合成数据里本来就分不出来）。
+4. 写进随包（`assets/data/rta/speed.json`，`rta speed` 默认就写这里），`rta first` 试几个阵容给用户看；冻结引擎重新打包时带上。
+5. 新赛季（ss22）：采集器第一天起就带行动条；`rta herostats --season <新赛季>` + `rta speed --season <新赛季>` 重新生成；B14g 重训胜率模型时快照里已有 `energy` / `first_mover`。
 
 ## 坑
 - **从游戏截图裁图标**（B13）：脚本在 `engine/tools/`（`cut_icons.py` 彩色图标、`cut_flat_icons.py` 单色白图标、`make_team_icons.py` 群阵图示；用 `.venv/Scripts/python.exe engine/tools/<脚本> <截图> <输出目录> 名字:x,y,w,h ...`）——按和按钮底色的差距算透明度；宽的图标（SS / SSS）不要补成正方形，否则等高显示时会变小；选中行是白底黑图标，统一成白色再用；群阵图示是用一张「34」的截图按位置重新上色生成 7 种。截图时用户可能需要先点开筛选框，我只截图（用户允许时可以在列表文字区慢拖）。
@@ -479,9 +512,12 @@
   - 海外有一方低于优胜者时 `opening_rule_*` 是占位符 `_`；国服完全没有这两个字段。
   - 选秀阶段有人退出的对局双方 0 名英雄、0 回合（约 1%），解析时归为「没有选秀」。
   - `battle_day` 是 UTC，`battleCompletedate` 是韩国时间（晚 9 小时）。
-  - `energyGauge` 是**开局**行动条，不是结算时的（B14c 审核时核对；B14a 误认了，采集没存）。
+  - `energyGauge` 是**开局**行动条，不是结算时的（B14c 审核时核对；B14a 误认了，B14d1 起采集保留）。`position_no` 是第几手，不是站位。
+  - `getHeroAnalysis` 的属性直方图是**绝对值**（官方页面代码里的刻度，速度 110–310、每档 20，最后一档 290 以上没有上限）；段位只有大师到传说；没有数据返回码 -10002（国服还没有的英雄，例如梅琳）。B14a 以为是相对档位。
   - 不存的字段要看值：`rta probe` 只列字段名，临时脚本里直接用 `OfficialClient` 取一页。别在大库上跑 `order by added` 这类全表扫描，几分钟都出不来。
 - **Claude 桌面版是 MSIX 打包应用，会重定向 `AppData`**（B14a 发现）：从 Claude 会话里跑的命令往 `%LOCALAPPDATA%` 写的文件，实际落在 `%LOCALAPPDATA%\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Local\` 下（会话里读写看起来路径正常，资源管理器和会话外启动的程序在原路径找不到）。采集库原来就落在那里，用户在资源管理器里找不到，已挪到 `F:\e7helper-data\rta\`（用户指定）并改了默认路径。以前会话里写的 `e7helper\data`、`debug`、`modules` 等也在那个私有目录里。要让外面看得到，就写到 `AppData` 以外的路径（`--db`、`E7_RTA_DB`、`E7_DATA_DIR`）。
+- **Fribbels 配装接口不能批量取**（B14d1）：每 2 秒取一名，取到第 14 名就开始返回 403。只按用户点开时单个取（B13 的用法）。
+- **全量单元测试约 23 分钟**：别用 `timeout 900` 之类包着跑（B14d1 被它中途杀掉过），放后台跑、等通知。
 - **Git Bash 里的 `/c/...` 路径 Windows 的 python 不认**：传给 python 的路径用 `cygpath -w` 转一下（B14a 踩过）。
 - **RTA 模型训练的坑**（B14b）：
   - AMD 的 Windows ROCm 版 torch 只有 Python 3.12；`uv python install` 默认装进 AppData，Claude 桌面版（MSIX）会重定向，用户自己的终端找不到 → `setup_rocm_venv.ps1` 把 Python 装在 `engine/.python`。

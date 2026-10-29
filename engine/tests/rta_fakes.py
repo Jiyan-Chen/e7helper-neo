@@ -33,6 +33,15 @@ def _deck(codes, prebans, banned: int, first: bool, fmt: str):
     return json.dumps(deck) if fmt == "global" else deck
 
 
+def gauge(my=MY, enemy=ENEMY, mine=(100, 80, 70, 60, 0), theirs=(90, 75, 65, 0, 55)) -> str:
+    """开局行动条（B14d1，`energyGauge` 的格式）：mine / theirs 按这一方的选人顺序，被后禁的是 0（默认的
+    battle() 里我方第 5 手、对方第 4 手被禁）。team "1" 是「我方」，position_no 是第几手。顺序打乱过。"""
+    units = [{"hero_code": c, "energy": e, "team": team, "position_no": str(i + 1)}
+             for team, codes, es in (("1", my, mine), ("2", enemy, theirs)) for i, (c, e) in enumerate(zip(codes, es))]
+    units.sort(key=lambda u: u["energy"])
+    return '"energy_gauge":' + json.dumps(units)
+
+
 def battle(seq: int | str = 1, *, me_first: bool = True, my=MY, enemy=ENEMY, my_banned: int = 4,
            enemy_banned: int = 3, iswin: int = 1, fmt: str = "cn", rule: str | None = None,
            grades=("legend", "emperor"), prebans=(("c3001", "c3002"), ("c3001", "c3003")),

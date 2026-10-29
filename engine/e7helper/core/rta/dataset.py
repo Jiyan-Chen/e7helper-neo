@@ -1,7 +1,7 @@
 """训练数据快照（B14b）：采集库里一个赛季的对局 → 解析、过滤、编码成紧凑的数组，存成 npz。
 
 - 只存模型要的：每场 17 个位置的英雄（存英雄表的下标，-1 = 空位）、双方段位档、开战规则、服务器、日期、
-  先手方是否赢、回合数；不存原始字段。之后训练、评估都读快照，结果可复现（采集还在往库里加新对局）。
+  先手方是否赢、回合数；B14d1 起还有 10 手各自的开局行动条和谁先动（给 ss22 重训用，没有的记 -1）；不存原始字段。之后训练、评估都读快照，结果可复现（采集还在往库里加新对局）。
 - 去掉：解析失败的（几乎都是选秀阶段退出）、含 `m` 开头英雄的（愚人节怪物英雄）、0 回合的、截止日之后的。
 - 切分按日期（UTC）：最后 test_days 天测试、再往前 val_days 天验证，其余训练；一场的所有局面在同一份。
 - 解析在多个进程里并行（一个赛季约 90 万场，单进程要 10 分钟）。
@@ -52,8 +52,11 @@ def _parse_chunk(rows: list[tuple[str, str]]) -> tuple[list[tuple], Counter]:
         if m.turns <= 0:
             dropped["0 回合"] += 1
             continue
+        energy = {(s, p.code): p.energy for s in rules.SIDES for p in m.side(s).picks}
         out.append((m.key, server, m.day[:10], tokens, encode.grade_id(m.first.grade), encode.grade_id(m.second.grade),
-                    encode.match_rule(m), m.rule_category, m.winner == "F", m.turns))
+                    encode.match_rule(m), m.rule_category, m.winner == "F", m.turns,
+                    [-1 if energy[sc] is None else energy[sc] for sc in m.sequence()],
+                    -1 if m.first_mover is None else int(m.first_mover == "F")))
     return out, dropped
 
 
@@ -79,7 +82,17 @@ class Dataset:
     day: np.ndarray  # [N] int32，UTC 日期的序数（date.toordinal）
     first_wins: np.ndarray  # [N] int8
     turns: np.ndarray  # [N] int16
+    energy: np.ndarray | None = None  # [N, 10] int8，按选秀顺序 10 手各自的开局行动条，-1 = 没有（B14d1）
+    first_mover: np.ndarray | None = None  # [N] int8，1 = 先手方先动、0 = 后手方先动、-1 = 不知道（B14d1）
     meta: dict = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        # B14d1 之前的快照没有这两项
+        n = len(self.tokens)
+        if self.energy is None:
+            self.energy = np.full((n, rules.PICKS_PER_SIDE * 2), -1, dtype=np.int8)
+        if self.first_mover is None:
+            self.first_mover = np.full(n, -1, dtype=np.int8)
 
     def __len__(self) -> int:
         return len(self.tokens)
@@ -90,7 +103,7 @@ class Dataset:
         tmp = path.with_suffix(".tmp.npz")
         np.savez_compressed(
             tmp, tokens=self.tokens, grades=self.grades, rule=self.rule, server=self.server, day=self.day,
-            first_wins=self.first_wins, turns=self.turns,
+            first_wins=self.first_wins, turns=self.turns, energy=self.energy, first_mover=self.first_mover,
             info=np.array(json.dumps({"codes": self.codes, "rule_table": self.rule_table, "meta": self.meta},
                                      ensure_ascii=False)))
         tmp.replace(path)
@@ -100,7 +113,8 @@ class Dataset:
         with np.load(path) as z:
             info = json.loads(str(z["info"]))
             return cls(codes=info["codes"], rule_table=[(r[0], r[1]) for r in info["rule_table"]], meta=info["meta"],
-                       **{k: z[k] for k in ("tokens", "grades", "rule", "server", "day", "first_wins", "turns")})
+                       **{k: z[k] for k in ("tokens", "grades", "rule", "server", "day", "first_wins", "turns")},
+                       **{k: z[k] for k in ("energy", "first_mover") if k in z.files})
 
     # —— 切分和编码 ——
     def split(self, test_days: int = 7, val_days: int = 7) -> dict[str, np.ndarray]:
@@ -201,12 +215,15 @@ def build(db_path: Path | None = None, *, season: str = SEASON, until: str | Non
         day=np.array([date.fromisoformat(r[2]).toordinal() for r in kept], dtype=np.int32),
         first_wins=np.array([r[8] for r in kept], dtype=np.int8),
         turns=np.array([r[9] for r in kept], dtype=np.int16),
+        energy=np.array([r[10] for r in kept], dtype=np.int8).reshape(n, rules.PICKS_PER_SIDE * 2),
+        first_mover=np.array([r[11] for r in kept], dtype=np.int8),
     )
     ds.meta = {
         "season": season, "until": until, "built": time.strftime("%Y-%m-%d %H:%M:%S"), "db": str(db_path),
         "read": read, "kept": n, "dropped": dict(dropped.most_common()), "seconds": round(time.time() - started, 1),
         "first_day": ds.day_str(ds.day.min()) if n else None, "last_day": ds.day_str(ds.day.max()) if n else None,
         "per_server": {s: int((ds.server == i).sum()) for i, s in enumerate(SERVERS)},
+        "with_energy": int((ds.first_mover >= 0).sum()),
     }
     return ds
 

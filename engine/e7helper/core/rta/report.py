@@ -1,4 +1,5 @@
-"""采集数据的概况报告（B14a）：场数、解析失败原因、段位 / 开战规则分布、英雄覆盖、先手胜率。"""
+"""采集数据的概况报告（B14a）：场数、解析失败原因、段位 / 开战规则分布、英雄覆盖、先手胜率；
+开局行动条（B14d1）：有行动条的场数、没有的原因、先手方先动率、先动方胜率。"""
 
 from __future__ import annotations
 
@@ -7,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from . import rules
-from .battle import BadBattle, Match, parse_battle
+from .battle import BadBattle, Match, energy_issue, parse_battle
 from .crawl import Crawler, iter_battles
 
 
@@ -23,6 +24,7 @@ def build_report(db_path: Path | None = None, *, known_codes: set[str] | None = 
     servers: dict[str, dict[str, Any]] = defaultdict(lambda: {
         "total": 0, "parsed": 0, "failed": Counter(), "seasons": Counter(), "grades": Counter(), "rules": Counter(),
         "first_wins": 0, "irregular": 0, "days": [None, None], "turns": [], "seconds": [],
+        "energy": 0, "energy_missing": Counter(), "energy_seasons": Counter(), "f_moves_first": 0, "mover_wins": 0,
     })
     picks, prebans, bans = Counter(), Counter(), Counter()
     rules_seen: Counter = Counter()
@@ -48,6 +50,14 @@ def build_report(db_path: Path | None = None, *, known_codes: set[str] | None = 
             rules_seen[m.rule] += 1
             rule_kinds[m.rule] = m.rule_category
         s["first_wins"] += m.winner == "F"
+        issue = energy_issue(raw, m)
+        if issue:
+            s["energy_missing"][issue] += 1
+        else:
+            s["energy"] += 1
+            s["energy_seasons"][m.season] += 1
+            s["f_moves_first"] += m.first_mover == "F"
+            s["mover_wins"] += m.winner == m.first_mover
         lo, hi = s["days"]
         s["days"] = [min(lo or m.day, m.day), max(hi or m.day, m.day)]
         s["turns"].append(m.turns)
@@ -67,6 +77,9 @@ def build_report(db_path: Path | None = None, *, known_codes: set[str] | None = 
             **{k: (dict(v.most_common()) if isinstance(v, Counter) else v) for k, v in s.items()},
             "parse_rate": round(parsed / s["total"], 4) if s["total"] else None,
             "first_win_rate": round(s["first_wins"] / parsed, 4) if parsed else None,
+            "energy_rate": round(s["energy"] / parsed, 4) if parsed else None,
+            "f_moves_first_rate": round(s["f_moves_first"] / s["energy"], 4) if s["energy"] else None,
+            "mover_win_rate": round(s["mover_wins"] / s["energy"], 4) if s["energy"] else None,
             "median_turns": turns[len(turns) // 2] if turns else None,
             "median_seconds": secs[len(secs) // 2] if secs else None,
         }

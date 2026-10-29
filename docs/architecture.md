@@ -184,22 +184,23 @@ db.artifacts()                # 神器编号 → {name（中文）, name_en}
 | `POST /api/heroes/update` | 联网更新；正在更新 409 `busy`，下载失败 502 `update_failed` |
 
 ## RTA 选秀 `e7helper.core.rta`（B14 起）
-世界竞技场选秀助手的引擎部分，不依赖设备。B14 拆成 a–f 六块（数据 → 模型 → 选秀推荐 → 分析功能 → 页面 → 画面识别），目前有对局数据（B14a）、胜率 / 选人模型（B14b）、选秀推荐（B14c）。
+世界竞技场选秀助手的引擎部分，不依赖设备。B14 拆成 a–g 几块（数据 → 模型 → 选秀推荐 → 分析功能（d1 先动 / 英雄池，d2 站位 / 快速分析 / 英雄统计）→ 页面 → 画面识别 → ss22 重训加先动），目前有对局数据（B14a）、胜率 / 选人模型（B14b）、选秀推荐（B14c）、先动概率和英雄池（B14d1）。
 ```python
 from e7helper.core.rta import rules, parse_battle
 rules.PICK_ORDER                     # ("F","S","S","F","F","S","S","F","F","S")，F = 先手方
 rules.mover(3), rules.left_in_turn(3)  # 选了 3 手后下一手是 F，这一轮还要连选 2 名
 rules.validate(prebans, picks, banned, complete=True)  # 局面检查，返回中文问题列表
-m = parse_battle(raw, "global")      # 官方战绩站的一场 → Match（先手方 / 后手方、10 手顺序、后禁、站位、开战规则、胜方）
+m = parse_battle(raw, "global")      # 官方战绩站的一场 → Match（先手方 / 后手方、10 手顺序、后禁、站位、开战规则、胜方、开局行动条和先动方）
 m.sequence()                         # [(F/S, 编号), ...] 共 10 手
 ```
 | 文件 | 职责 |
 |---|---|
 | `rules.py` | 选秀规则：1-2-2-2-2-1、每边第 3 手是保护位（不能被后禁）、预禁每边 2 名（可以和对方重复）；`validate()`；段位（铜牌 … 传说）和段位档（金牌及以下合成一档）；开战规则对照表（`opening_rule_desc_tid` → 攻击 / 防御 / 抵抗 / 特殊，不认识的按类别 `opening_rule_title` 给名字） |
-| `battle.py` | `parse_battle(raw, server) → Match`，不合格抛 `BadBattle(reason)`（`reason` 用来归类统计）；`strip(raw)` 采集时只留 `STORE_KEYS`（不含昵称、玩家编号） |
+| `battle.py` | `parse_battle(raw, server) → Match`，不合格抛 `BadBattle(reason)`（`reason` 用来归类统计）；`strip(raw)` 采集时只留 `STORE_KEYS`（不含昵称、玩家编号）；开局行动条（B14d1）：`Pick.energy`、`Match.first_mover` / `first_hero`，行动条不合格只是没有，对局照常用（`read_energy` / `energy_issue` 给原因） |
 | `official.py` | 国服 / 海外官方战绩站客户端 `OfficialClient(server)`：两种返回包装统一成 `result_body`；限速（最小间隔 + 抖动）、429 / 5xx / 网络错误退避重试、其他 4xx 和非 0 返回码抛 `OfficialError`；`fetch` / 时钟可注入 |
-| `crawl.py` | 开发用的采集：sqlite `F:\e7helper-data\rta\crawl.sqlite`（环境变量 `E7_RTA_DB` 可改；不放 AppData，因为 Claude 桌面版会把会话里写进 AppData 的文件重定向走）；`players` 队列 + `battles` + `meta`，滚雪球、两个服各一个线程并行、断点续采 |
-| `report.py` | 采集数据报告：场数、解析失败原因、段位 / 开战规则分布、英雄覆盖、先手胜率 |
+| `crawl.py` | 开发用的采集：sqlite `F:\e7helper-data\rta\crawl.sqlite`（环境变量 `E7_RTA_DB` 可改；不放 AppData，因为 Claude 桌面版会把会话里写进 AppData 的文件重定向走）；`players` 队列 + `battles` + `meta`，滚雪球、两个服各一个线程并行、断点续采；已有对局再采到时补上开局行动条（B14d1） |
+| `report.py` | 采集数据报告：场数、解析失败原因、段位 / 开战规则分布、英雄覆盖、先手胜率；有开局行动条的场数、没有的原因、先手方先动率、先动方胜率（B14d1） |
+| `herostats.py` | 开发用：官方英雄分析的快照（赛季 × 段位 × 英雄，存进采集库的 `hero_stats` 表）、速度直方图、读有开局行动条的对局（B14d1） |
 
 **官方战绩站**（两个站是同一套系统，接口同名，都是非公开接口）：`POST <地址>/gameApi/<名字>?<参数>`，没有请求体。
 | | 国服 | 海外 |
@@ -211,10 +212,11 @@ m.sequence()                         # [(F/S, 编号), ...] 共 10 手
 | 牌组 `my_deck` / `enemy_deck` | 对象 | JSON 字符串 |
 | 开战规则 | 没有（2026-10 国服优胜者以上的对局也没有） | `opening_rule_title` / `opening_rule_desc_tid`，优胜者以上每局随机一条；有一方低于优胜者时是占位符 `_`（解析成没有规则） |
 
-- 一场对局：`battle_seq`（**两边视角相同**，去重键）、`battle_day`（UTC）、`iswin`（1 胜 / 2 负）、`grade_code` / `enemy_grade_code`、牌组的 `preban_list` 和 `hero_list[{hero_code, first_pick, ban, mvp}]`（先手方第一手的英雄 `first_pick=1`）、字符串化的 `teamBettleInfo(enemy)`（`"my_team":[...]`，`pick_order` 1–5、`position` 1–4（被后禁的是 0）、神器、套装、伤害、击杀）。
+- 一场对局：`battle_seq`（**两边视角相同**，去重键）、`battle_day`（UTC）、`iswin`（1 胜 / 2 负）、`grade_code` / `enemy_grade_code`、牌组的 `preban_list` 和 `hero_list[{hero_code, first_pick, ban, mvp}]`（先手方第一手的英雄 `first_pick=1`）、字符串化的 `teamBettleInfo(enemy)`（`"my_team":[...]`，`pick_order` 1–5、`position` 1–4（被后禁的是 0）、神器、套装、伤害、击杀、等级、觉醒、复活次数）。
+- `energyGauge`（`"energy_gauge":[{hero_code, energy, team, position_no}]`）是**开局行动条**（B14d1 核对 198 场全部成立）：第一个行动的正好 100，被后禁的两名 0，其余 ≈ 开局随机 + 100 × 自己速度 ÷ 先动者速度 + 开局效果；`team` "1" = 采集视角那一方，`position_no` = 第几手（不是站位）。B14d1 之前没存（B14a 误认成结算行动条）。原始记录 29 个字段里没存的其余都是昵称、编号、重复字段。
 - 对手的数字编号是 `matchPlayerNicknameno`（`enemy_nick_no` 是昵称，拿它查会 405）。
 - 选秀阶段有人退出的对局双方都没有英雄、0 回合（约 0.9%），解析时归为「没有选秀」。
-- 另有 `getSeasonList`、`getPopularHero?season_code&grade_code`（每名英雄 pick / win / ban 率、搭档 3、难对付 3、套装）、`getHeroAnalysis`（属性直方图只有「+1…+10」相对档位，没有绝对速度）。
+- 另有 `getSeasonList`、`getPopularHero?season_code&grade_code`（每名英雄 pick / win / ban 率、搭档 3、难对付 3、套装）、`getHeroAnalysis?hero_code&season_code&grade_code`（段位只有大师到传说；没有数据返回码 -10002）：套装 / 神器 / 技能、按选人顺序的选取 / 后禁率、各赛季胜率，以及 `abillity` 属性直方图，口径「60 级 / 6 星满觉醒 / 穿戴全部装备」，每项 10 档等宽、最后一档没有上限，刻度是绝对值（官方页面代码里的 `re` / `ie`）：攻击 1200–6000、防御 800–3000、生命 9000–40000、**速度 110–310（每档 20）**、暴击率 15–100、暴击伤害 150–350、效果命中 0–200、效果抗性 0–300。B14a 以为只是「+1…+10」相对档位，B14d1 改正。
 
 ### 胜率 / 选人模型（B14b）
 ```python
@@ -272,7 +274,29 @@ adv.preban(None, grades=("legend", "emperor"))        # 预禁推荐（先后手
 - 每次重训（新赛季）：`rta export` 主模型 + 切分模型（`--out assets/data/rta/second`）→ `rta priors`；可信度的常数要用新的切分模型在测试期重新量一次（审核记录里的脚本做法）。
 
 **采集**（`e7helper rta crawl`，开发用）：种子 → 采他们的对局 → 对手段位 ≥ `--min-grade`（默认优胜者）就入队。国服一名玩家往前翻到这个赛季的头（最多 `--max-pages` 页，一页里没有新对局也停）；海外每人只有最近 100 场，隔 `--refresh-hours`（默认 20）再采；国服翻完的玩家也按这个间隔回来看第 1 页。没采过的、段位高的、离种子近的优先。每个服默认 1 次 / 秒（另加 0–0.3 秒抖动）、每天 2 万次上限、连续出错 10 次就停；取不到的玩家（多半是 405）隔一段时间再试，失败 3 次不再采。对局表只存 `strip()` 后的字段，**玩家编号只在队列表里**，采集库不进 git、不随包。
-- CLI：`e7helper rta probe -s cn|global`（采一页看字段，不打印昵称）、`rta crawl [--server both] [--season …] [--max-requests N]`、`rta report [--json]`。
+- 补开局行动条（B14d1）：已有、但原始字段里没有 `energyGauge` 的对局再采到时整行换成新的（视角可能换成另一方），算「补」，翻页时和新对局一样会让国服继续往前翻；`rta crawl --backfill` 开跑时把国服这些赛季的玩家重置到第 1 页，整个赛季重翻一遍（约 3–4 千次请求）。海外只有最近 100 场，采集器每 20 小时回来看第 1 页时顺带补上。
+- CLI：`e7helper rta probe -s cn|global`（采一页看字段，不打印昵称）、`rta crawl [--server both] [--season …] [--max-requests N] [--backfill]`、`rta report [--json]`。
+
+### 先动概率 / 英雄池（B14d1）
+```python
+from e7helper.core.rta import speed, pool
+table = speed.load()                                   # 随包 assets/data/rta/speed.json；没有返回 None
+speed.first_mover(table, [speed.Unit("mine", "c1168", "legend", speed=335), speed.Unit("theirs", "c5190", "legend")])
+speed.annotate(out, state, "F", table, pool.load().speeds)   # 在 advise 结果上加先动概率（不改胜率）
+```
+| 文件 | 职责 |
+|---|---|
+| `speed.py` | 速度表 `SpeedTable`（每名英雄每个段位 13 档：官方 110–290 九档 + 290 以上拆成 290–310 / 310–330 / 330–350 / 350–370）、`first_mover`（蒙特卡洛，固定种子）、开局规则 `RULES`、`annotate`；开发用的 `fit_tails` / `implied_speeds` / `residuals` / `evaluate` / `choose_jitter` / `build` |
+| `pool.py` | 英雄池 `<数据目录>/modules/rta_draft/pool.json`：`{heroes: [{code, speed?}]}`，速度 50–400，同一名英雄留最后一次 |
+
+- **速度**：290 以下用官方英雄分析的速度直方图（按对局双方各自的段位；没有这个段位用最近的，一样近取高的；段位不知道按人数混合；没有这名英雄用这个段位所有英雄的合计并标 `no_data`）。290 以上官方只给占比，用开局行动条反推：同场 290 以上占比 < 20%、第 1 档占比 < 30%、行动条 20–95 的英雄当参照（至少 3 名），经过的时间 = 中位数（(行动条 − 开局随机的一半) ÷ 参照的速度中位数），再反推其余英雄的速度；290 以上四档每名英雄每个段位一份，向这个段位的合计收缩（强度 20 场），段位合计再向先验（方案阶段 198 场的粗估）收缩（强度 50 场）。核对：反推出 ≥ 290 的比例应接近官方 290 以上的占比。有限速英雄（赫尔赛蒂）的对局、有开局加行动条的英雄不参与反推。
+- **开局规则**：智武首次战斗开始 +30% 行动条；赫尔赛蒂（PvP）把其他英雄的速度限制在她的 90% 以下。天秤之主是别人加行动条时跟着加，开局不触发（用户意见），不算。没登记的开局效果靠 `rta speed` 的残差（行动条比速度应有的高出多少）找。
+- **开局随机**：每名英雄 0–`jitter`% 行动条，默认 5%（社区说法）；`rta speed` 在拟合用的对局上比 0 / 2.5 / 5 / 7.5 / 10，比 5% 好不到 0.002 的 log loss 就不换（合成数据里各取值只差约 0.001，从「谁先动」上很难分辨）。
+- **先动概率**：每名英雄抽速度（英雄池里填了速度的用填的），到 100 的时间 = (100 − 开局行动条) ÷ 速度，最先到的先动；4000 次抽样，同样的输入结果相同。
+- **不进胜率模型**（用户意见）：有的阵容抢到一速胜率差几十个点，有的几乎不差，不能在模型外统一修正；推荐和后禁矩阵只在旁边显示先动概率。ss22 重训时把「谁先动」作为模型输入（B14g）。
+- 接口：`POST /api/rta/first {mine, theirs, grades?, speeds?}`（没有速度表 503 `no_speed_data`）、`GET/PUT /api/rta/pool`；`POST /api/rta/advise` 不传 `pool` 时用保存的英雄池（`use_saved_pool: false` 不限制），结果加 `first`（目前双方在场的，`partial` = 还不是最终 4 打 4）、每个推荐的 `first`、后禁矩阵的 `ban.first`（每格 4 打 4），都是我方先动的概率；`GET /api/rta/model` 加 `speed`（速度表信息）。
+- 生成速度表（开发用）：`rta herostats [--season] [--grades] [--min-picks 300]`（国服、每名英雄每个段位一次请求，约 200 名 × 6 段 ≈ 35 分钟，72 小时内取过的跳过）→ `rta speed [--season] [--servers cn]`（前 80% 有行动条的对局拟合、最近的 20%（最多 3000 场）验收，打印核对表和残差）→ `assets/data/rta/speed.json`。试算：`rta first --mine … --theirs … [--grades] [--speed 名字=速度]`；`rta advise` 也显示先动概率（`--speed`）。
+- 快照（`rta dataset`）带上 10 手各自的开局行动条（按选秀顺序，-1 = 没有）和 `first_mover`（1 = 先手方先动、0 = 后手方、-1 = 不知道），旧快照读出来是 -1；给 B14g 用。
 
 ## API 层 `e7helper.api`（B08）
 ```
@@ -309,7 +333,7 @@ python -m uv run e7helper serve [--port 47800] [--index N] [--no-connect] [--pau
 | `/capture/...`（B09，开发工具） | 模板采集，见下文 |
 | `/flows/...`、`/user-templates/...`（B11） | 自定义流程和玩家模板，见下文 |
 | `/heroes/...`（B13） | 英雄数据库，见「游戏数据」 |
-| `/rta/...`（B14c） | RTA 选秀推荐，见「RTA 选秀 / 选秀推荐」 |
+| `/rta/...`（B14c、B14d1） | RTA 选秀推荐、先动概率、英雄池，见「RTA 选秀 / 选秀推荐」「先动概率 / 英雄池」 |
 
 **模块子路由**：`Module.routes()` 返回的路由挂到 `/api/modules/<id>/`，同样要 token。第一段路径不能是 `config` / `stats` / `timers` 或路径参数，否则启动时报 `ModuleRegistryError`。fastapi 在 `routes()` 里再导入。已有：`GET /api/modules/daily/ledger`、`GET /api/modules/secret_shop/report`（B12c）。
 

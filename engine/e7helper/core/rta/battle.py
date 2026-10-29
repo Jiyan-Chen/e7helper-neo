@@ -9,7 +9,11 @@
   先手方的第一名英雄 `first_pick=1`，被后禁的 `ban=1`；
 - `teamBettleInfo` / `teamBettleInfoenemy`：字符串 `"my_team":[...]`（JSON 片段，没有外层花括号），
   每名英雄有 `pick_order`（这一方的第几手，1–5）、`position`（站位，0 = 被后禁没上场）、神器、套装、伤害等；
-- `iswin`：1 = 「我方」赢，2 = 输；`battle_day` 是 UTC 时间（`battleCompletedate` 是韩国时间，比它晚 9 小时）。
+- `iswin`：1 = 「我方」赢，2 = 输；`battle_day` 是 UTC 时间（`battleCompletedate` 是韩国时间，比它晚 9 小时）；
+- `energyGauge`：字符串 `"energy_gauge":[{hero_code, energy, team, position_no}, ...]`，**开局行动条**（B14d1 核对：
+  国服、海外各 99 场全部成立）：每场 10 条，第一个行动的那名正好是 100，被后禁的两名是 0，其余 ≈ 100 × 自己速度 ÷
+  先动者速度 + 开局随机的一点 + 开局效果（例如智武首次战斗开始 +30%）；`team` "1" = 「我方」（采集视角），
+  `position_no` = 这一方的第几手（同 `pick_order`），不是站位。B14d1 之前采集没存它（B14a 误认成结算行动条）。
 
 采集时只存 `STORE_KEYS` 里的字段（不含昵称、玩家编号），`parse_battle` 读的也只是这些。
 """
@@ -25,12 +29,14 @@ from . import rules
 
 Server = Literal["cn", "global"]
 
-# 采集时保留的原始字段（其余的昵称、玩家编号、对方头像英雄、结算时的行动条等都丢掉）
+# 采集时保留的原始字段。原始记录 29 个字段，丢掉的是昵称、玩家编号、对方头像英雄、语言、韩国时间、登记时间、
+# 赛季名，以及和 my_deck / myscore_info 重复的预禁、积分字段（B14d1 逐个核对过）
 STORE_KEYS = (
     "battle_seq", "season_code", "battle_day", "battle_time", "turn", "iswin", "grade_code", "enemy_grade_code",
     "my_deck", "enemy_deck", "teamBettleInfo", "teamBettleInfoenemy", "opening_rule_title", "opening_rule_desc_tid",
-    "worldCode", "enemy_world_code", "myscore_info",
+    "worldCode", "enemy_world_code", "myscore_info", "energyGauge",
 )
+ENERGY_KEY = "energyGauge"
 
 
 class Pick(BaseModel):
@@ -44,6 +50,7 @@ class Pick(BaseModel):
     healed: float = 0
     kills: int = 0
     mvp: bool = False
+    energy: int | None = Field(None, description="开局行动条 0–100（先动者 100、被后禁的 0）；没采到的是 None")
 
 
 class Side(BaseModel):
@@ -74,6 +81,8 @@ class Match(BaseModel):
     second: Side = Field(description="后手方 S")
     winner: Literal["F", "S"]
     score: int | None = Field(None, description="采集视角那一方的积分（myscore_info.win_score）")
+    first_mover: Literal["F", "S"] | None = Field(None, description="战斗里第一个行动的是哪一方；没有开局行动条时是 None")
+    first_hero: str | None = Field(None, description="第一个行动的英雄")
 
     def side(self, name: str) -> Side:
         return self.first if name == "F" else self.second
@@ -160,6 +169,71 @@ def _side(deck: Any, team: Any, grade: str, world: str) -> tuple[Side, bool]:
     return Side(grade=grade or "", prebans=prebans, picks=picks, world=world or ""), any(first_flags)
 
 
+def read_energy(raw: dict) -> tuple[dict[str, dict[str, int]] | None, str]:
+    """开局行动条 → ({"1": {英雄: 行动条}, "2": {...}}, "")；不合格时 (None, 原因)。
+
+    只核对行动条自身：每场 10 条、每方 5 名、第几手 1–5 不重复、行动条 0–100、正好一名 100、正好两名 0。
+    和选秀对不对得上由 `parse_battle` 再核对。旧对局没有这个字段，原因是「缺行动条」。"""
+    value = raw.get(ENERGY_KEY)
+    if not value:
+        return None, "缺行动条"
+    try:
+        units = _fragment(value, "energy_gauge")
+    except BadBattle:
+        return None, "行动条格式不对"
+    if not isinstance(units, list) or len(units) != 2 * rules.PICKS_PER_SIDE:
+        return None, "行动条条数不对"
+    out: dict[str, dict[str, int]] = {"1": {}, "2": {}}
+    orders: dict[str, set[int]] = {"1": set(), "2": set()}
+    for u in units:
+        if not isinstance(u, dict):
+            return None, "行动条格式不对"
+        team, code = str(u.get("team")), u.get("hero_code")
+        try:
+            energy, order = int(u.get("energy")), int(u.get("position_no"))
+        except (TypeError, ValueError):
+            return None, "行动条格式不对"
+        if team not in out or not code or code in out[team] or not 0 <= energy <= 100:
+            return None, "行动条格式不对"
+        out[team][code] = energy
+        orders[team].add(order)
+    if any(o != set(range(1, rules.PICKS_PER_SIDE + 1)) for o in orders.values()):
+        return None, "行动条格式不对"
+    values = [e for side in out.values() for e in side.values()]
+    if values.count(100) != 1:
+        return None, "先动者不唯一"
+    if values.count(0) != 2:
+        return None, "行动条为 0 的不是两名"
+    return out, ""
+
+
+def _apply_energy(raw: dict, mine: Side, theirs: Side) -> tuple[str | None, str | None]:
+    """把行动条填进双方的 Pick；返回 (先动的一方 "mine" / "theirs", 先动英雄)。对不上就什么都不填。"""
+    energy, _ = read_energy(raw)
+    if energy is None:
+        return None, None
+    sides = {"1": mine, "2": theirs}
+    for team, side in sides.items():
+        if set(energy[team]) != set(side.codes):
+            return None, None
+        for p in side.picks:
+            if (energy[team][p.code] == 0) != p.banned:  # 被后禁的才是 0
+                return None, None
+    for team, side in sides.items():
+        for p in side.picks:
+            p.energy = energy[team][p.code]
+    team, hero = next((t, c) for t, side in energy.items() for c, e in side.items() if e == 100)
+    return ("mine" if team == "1" else "theirs"), hero
+
+
+def energy_issue(raw: dict, m: Match) -> str:
+    """数据报告用：这场为什么没有行动条（"" = 有）。"""
+    if m.first_mover:
+        return ""
+    _, reason = read_energy(raw)
+    return reason or "行动条和选秀对不上"
+
+
 def _rule(value: Any) -> str | None:
     """海外有一方低于优胜者时开战规则字段是占位符「_」，当成没有规则。"""
     return value if isinstance(value, str) and value.strip("_ ") else None
@@ -182,6 +256,8 @@ def parse_battle(raw: dict, server: Server) -> Match:
     if iswin not in (1, 2):
         raise BadBattle("胜负不明", str(raw.get("iswin")))
     first, second = (mine, theirs) if mine_first else (theirs, mine)
+    mover, first_hero = _apply_energy(raw, mine, theirs)
+    first_mover = None if mover is None else ("F" if (mover == "mine") == mine_first else "S")
     mine_won = iswin == 1
     winner = "F" if mine_won == mine_first else "S"
     problems = rules.validate(
@@ -196,6 +272,6 @@ def parse_battle(raw: dict, server: Server) -> Match:
         day=str(raw.get("battle_day", ""))[:19], rule=_rule(raw.get("opening_rule_desc_tid")),
         rule_category=_rule(raw.get("opening_rule_title")),
         turns=int(raw.get("turn") or 0), seconds=int(raw.get("battle_time") or 0),
-        first=first, second=second, winner=winner,
+        first=first, second=second, winner=winner, first_mover=first_mover, first_hero=first_hero,
         score=int(score["win_score"]) if isinstance(score, dict) and score.get("win_score") is not None else None,
     )

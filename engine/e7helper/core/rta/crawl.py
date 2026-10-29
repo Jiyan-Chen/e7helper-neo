@@ -11,6 +11,11 @@
 - 国服能往前翻页：一名玩家从第 1 页翻到这个赛季的头（或 `max_pages`、或一页里没有新对局）为止；
 - 海外每人只能看最近 100 场：采一次后隔 `refresh_hours` 再采（每天重复采才能积累）；国服翻完的玩家也按这个间隔回来看第 1 页。
 没采过的、段位高的、离种子近的优先。每个服一个线程、各自限速，Ctrl+C（stop 事件）后安全退出，下次接着采。
+
+补采（B14d1）：B14d1 之前存的对局没有开局行动条（`energyGauge`）。再采到这样的对局时用新的原始字段整行替换
+（视角可能换成另一方，段位列跟着换），算作「补」；翻页时「补」和「新」一样会让国服继续往前翻。
+`rta crawl --backfill`（`CrawlConfig.backfill`）开跑时把国服这些赛季的玩家都重置到第 1 页，整个赛季重翻一遍；
+海外接口只给最近 100 场，采集器每 `refresh_hours` 回来看第 1 页时顺带补上。
 """
 
 from __future__ import annotations
@@ -27,7 +32,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import rules
-from .battle import strip
+from .battle import ENERGY_KEY, strip
 from .official import CN_WORLD, OfficialClient, OfficialError
 
 log = logging.getLogger(__name__)
@@ -81,6 +86,7 @@ class CrawlConfig:
     max_pages: int = 10  # 国服每名玩家最多往前翻几页（一页 100 场）
     refresh_hours: float = 20.0  # 采过的玩家隔多久再看一次最新的对局
     max_errors: int = 10  # 连续出错几次就停（可能被限流了）
+    backfill: bool = False  # 开跑时把能翻页的服（国服）这些赛季的玩家重置到第 1 页，整个赛季重翻一遍补开局行动条
 
 
 @dataclass
@@ -90,6 +96,7 @@ class ServerStats:
     requests: int = 0
     battles_new: int = 0
     battles_seen: int = 0
+    battles_filled: int = 0  # 已有对局补上开局行动条
     players_new: int = 0
     errors: int = 0
     stopped: str = ""
@@ -153,6 +160,8 @@ class Crawler:
         try:
             seasons = (cfg.seasons or {}).get(server) or [client.current_season()]
             stats.seasons = list(seasons)
+            if cfg.backfill and client.info.pages:
+                log.info("%s 补采：%d 名玩家重置到第 1 页", server, self.backfill(server, seasons))
             for season in seasons:
                 stats.players_new += self._seed(conn, client, server, season)
             self._count_requests(conn, server, client.requests - start)
@@ -190,11 +199,12 @@ class Crawler:
                     continue
                 consecutive = 0
                 self._count_requests(conn, server, client.requests - before)
-                new, seen, players = self._store(conn, server, job, rows)
+                new, seen, filled, players = self._store(conn, server, job, rows)
                 stats.battles_new += new
                 stats.battles_seen += seen
+                stats.battles_filled += filled
                 stats.players_new += players
-                self._advance(conn, server, job, rows, new)
+                self._advance(conn, server, job, rows, new + filled)
                 stats.requests = client.requests - start
                 if self.progress and stats.requests % self.progress_every == 0:
                     self.progress(stats)
@@ -205,6 +215,19 @@ class Crawler:
             stats.requests = client.requests - start
             conn.close()
         return stats
+
+    def backfill(self, server: str, seasons: Iterable[str]) -> int:
+        """把这个服这些赛季的玩家都重置成「从第 1 页重新翻」，返回涉及的玩家数（补采开局行动条用，只对能翻页的国服有意义）。"""
+        seasons = list(seasons)
+        conn = connect(self.db_path)
+        try:
+            marks = ",".join("?" * len(seasons))
+            cur = conn.execute(f"UPDATE players SET done = 0, next_page = 1 WHERE server = ? AND season IN ({marks}) "
+                               f"AND fails < ?", (server, *seasons, MAX_PLAYER_FAILS))
+            conn.commit()
+            return cur.rowcount
+        finally:
+            conn.close()
 
     def summary(self) -> dict:
         """数据库里的概况：各服 / 赛季的对局数、玩家数、待采的玩家数。"""
@@ -254,22 +277,28 @@ class Crawler:
             (server, *seasons, MAX_PLAYER_FAILS, stale)).fetchone()
         return _Job(*row) if row else None
 
-    def _store(self, conn: sqlite3.Connection, server: str, job: _Job, rows: list[dict]) -> tuple[int, int, int]:
-        now, new, seen = self.now(), 0, 0
+    def _store(self, conn: sqlite3.Connection, server: str, job: _Job,
+               rows: list[dict]) -> tuple[int, int, int, int]:
+        """存一页对局 → (新, 已有, 已有但补上了开局行动条, 新入队的玩家)。"""
+        now, new, seen, filled = self.now(), 0, 0, 0
         opponents = []
         min_rank = grade_rank(self.config.min_grade)
         for raw in rows:
             if not raw.get("battle_seq"):
                 continue
-            kept = strip(raw)
+            key = f"{server}:{raw['battle_seq']}"
+            text = json.dumps(strip(raw), ensure_ascii=False, separators=(",", ":"))
             cur = conn.execute(
                 "INSERT OR IGNORE INTO battles (key, server, season, day, grade, enemy_grade, rule, raw, added) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (f"{server}:{raw['battle_seq']}", server, raw.get("season_code") or job.season,
-                 str(raw.get("battle_day", ""))[:19], raw.get("grade_code"), raw.get("enemy_grade_code"),
-                 raw.get("opening_rule_desc_tid"), json.dumps(kept, ensure_ascii=False, separators=(",", ":")), now))
+                (key, server, raw.get("season_code") or job.season, str(raw.get("battle_day", ""))[:19],
+                 raw.get("grade_code"), raw.get("enemy_grade_code"), raw.get("opening_rule_desc_tid"), text, now))
             if cur.rowcount:
                 new += 1
+            elif raw.get(ENERGY_KEY) and conn.execute(
+                    "UPDATE battles SET raw = ?, grade = ?, enemy_grade = ? WHERE key = ? AND instr(raw, ?) = 0",
+                    (text, raw.get("grade_code"), raw.get("enemy_grade_code"), key, f'"{ENERGY_KEY}"')).rowcount:
+                filled += 1
             else:
                 seen += 1
             grade = raw.get("enemy_grade_code")
@@ -281,10 +310,10 @@ class Crawler:
                          "AND world=?", (rows[0]["grade_code"], grade_rank(rows[0]["grade_code"]), server, job.season,
                                          job.nick_no, job.world))
         conn.commit()
-        return new, seen, self._enqueue(conn, server, job.season, opponents)
+        return new, seen, filled, self._enqueue(conn, server, job.season, opponents)
 
     def _advance(self, conn: sqlite3.Connection, server: str, job: _Job, rows: list[dict], new: int) -> None:
-        """国服：这一页满了、全是这个赛季的、有新对局、没到页数上限就继续往前翻；否则这个赛季翻完了。
+        """国服：这一页满了、全是这个赛季的、有新对局（含补上行动条的）、没到页数上限就继续往前翻；否则这个赛季翻完了。
         海外：采一次就算完。国服的 getBattleList 不按赛季过滤，翻过赛季开头就是以前赛季的对局（照样入库，带赛季标记）。"""
         in_season = all(r.get("season_code", job.season) == job.season for r in rows)
         more = (not job.done and self.clients[server].info.pages and len(rows) >= 100 and in_season and new > 0

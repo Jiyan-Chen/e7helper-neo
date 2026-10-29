@@ -669,6 +669,7 @@ def rta_crawl(
     daily_cap: Annotated[int, typer.Option("--daily-cap", help="每个服每天最多发几次请求")] = 20000,
     max_pages: Annotated[int, typer.Option("--max-pages", help="国服每名玩家最多往前翻几页")] = 10,
     refresh_hours: Annotated[float, typer.Option("--refresh-hours", help="采过的玩家隔多久再采")] = 20.0,
+    backfill: Annotated[bool, typer.Option("--backfill", help="国服这些赛季的玩家从第 1 页重翻一遍，给旧对局补开局行动条")] = False,
     db: Annotated[Optional[Path], typer.Option("--db", help="sqlite 路径，默认 F:\\e7helper-data\\rta\\crawl.sqlite（环境变量 E7_RTA_DB 可改）")] = None,
 ) -> None:
     """采集世界竞技场对局（开发用，给模型训练）。Ctrl+C 安全退出，下次接着采。"""
@@ -681,20 +682,21 @@ def rta_crawl(
         raise typer.Exit(2)
     config = CrawlConfig(servers=servers, seasons={s: list(season) for s in servers} if season else None,
                          min_grade=min_grade, interval=interval, max_requests=max_requests, daily_cap=daily_cap,
-                         max_pages=max_pages, refresh_hours=refresh_hours)
+                         max_pages=max_pages, refresh_hours=refresh_hours, backfill=backfill)
     started = time.time()
 
     def progress(st: ServerStats) -> None:
         mins = max((time.time() - started) / 60, 1e-6)
         console.print(f"[dim]{datetime.now():%H:%M:%S}[/] {st.server}：请求 {st.requests}，新对局 {st.battles_new}"
-                      f"（{st.battles_new / mins:.0f}/分钟），重复 {st.battles_seen}，新玩家 {st.players_new}，出错 {st.errors}")
+                      f"（{st.battles_new / mins:.0f}/分钟），补行动条 {st.battles_filled}，重复 {st.battles_seen}，"
+                      f"新玩家 {st.players_new}，出错 {st.errors}")
 
     crawler = Crawler(db, config, progress=progress)
     console.print(f"采集 {', '.join(servers)} → {crawler.db_path}（Ctrl+C 停止）")
     results = crawler.run()
     for st in results.values():
-        console.print(f"{st.server} {st.seasons}：请求 {st.requests}，新对局 {st.battles_new}，重复 {st.battles_seen}，"
-                      f"新玩家 {st.players_new}，出错 {st.errors} · {st.stopped}")
+        console.print(f"{st.server} {st.seasons}：请求 {st.requests}，新对局 {st.battles_new}，补行动条 {st.battles_filled}，"
+                      f"重复 {st.battles_seen}，新玩家 {st.players_new}，出错 {st.errors} · {st.stopped}")
     summary = crawler.summary()
     console.print(f"库里的对局：{summary['battles']}")
     console.print(f"玩家（总数, 没采过的）：{summary['players']}")
@@ -733,6 +735,13 @@ def rta_report(
                       "\n".join(f"{k} {v}" for k, v in s["rules"].items()),
                       "\n".join(f"{k} {v}" for k, v in s["failed"].items()) or "—")
     console.print(table)
+    for server, s in rep["servers"].items():
+        missing = "、".join(f"{k} {v}" for k, v in s["energy_missing"].items()) or "—"
+        line = f"{server} 开局行动条：{s['energy']} 场（{(s['energy_rate'] or 0):.1%}），没有的原因：{missing}"
+        if s["energy"]:
+            line += (f"；按赛季 {s['energy_seasons']}；先手方先动 {s['f_moves_first_rate']:.1%}，"
+                     f"先动方胜率 {s['mover_win_rate']:.1%}")
+        console.print(line)
     h = rep["heroes"]
     console.print(f"英雄：出场过 {h['picked']} 名，选过 ≥30 次 {h['picked_30']} 名，≥300 次 {h['picked_300']} 名"
                   + (f"；数据库里没有：{', '.join(h['unknown'])}" if h.get("unknown") else ""))
@@ -1125,6 +1134,31 @@ def _rta_rule(rule: str):
     return UNKNOWN_RULE if rule == "unknown" else None if rule == "none" else rule
 
 
+def _rta_speeds(db, text: str | None) -> dict[str, int]:
+    """「名字=速度」（逗号分隔）→ {编号: 速度}；没填的用英雄池里存的。"""
+    from e7helper.core.rta import pool as rpool
+
+    out = dict(rpool.load().speeds)
+    for item in filter(None, (s.strip() for s in (text or "").replace("，", ",").split(","))):
+        name, _, value = item.partition("=")
+        if not value.strip().isdigit():
+            _fail(f"速度要写成「名字=速度」：{item}")
+            raise typer.Exit(2)
+        out[_rta_codes(db, name)[0]] = int(value)
+    return out
+
+
+def _print_first(first: dict | None, db) -> None:
+    """先动概率（speed.annotate 的 first）打一行。"""
+    if not first:
+        return
+    nm = lambda c: _rta_name(db, c)  # noqa: E731
+    top = sorted(first["heroes"], key=lambda h: -h["p"])[:4]
+    who = "、".join(f"{'我方' if h['side'] == 'mine' else '对方'}{nm(h['code'])} {h['p']:.0%}" for h in top if h["p"] >= 0.01)
+    console.print(f"先动概率：我方 [bold]{first['mine']:.0%}[/]（{who}）"
+                  + ("[dim] · 按目前已选的英雄[/]" if first.get("partial") else ""))
+
+
 def _rta_grades(text: str) -> tuple[str | None, str | None]:
     g = [x.strip() or None for x in text.split(",")] if text else []
     g += [None, None]
@@ -1151,12 +1185,13 @@ def _print_advice(out: dict, db) -> None:
     if out["phase"] == "pick":
         head += f" · 轮到{'我方' if out['turn'] == 'mine' else '对手'}（这一轮 {out['slots']} 名）"
     console.print(head)
+    _print_first(out.get("first"), db)
     if out.get("unknown"):
         console.print(f"[yellow]英雄池里这些模型没有数据，不推荐：{'、'.join(map(nm, out['unknown']))}[/]")
     recs = out.get("recommend") or []
     if recs:
-        t = Table("#", "推荐", "分数", "预期", "被针对时", "差距", "这一手常见度", "两模型差", "对手最可能的回应", "最坏的回应",
-                  title="推荐（分数 = ½ 预期 + ½ 被针对时）")
+        t = Table("#", "推荐", "分数", "预期", "被针对时", "差距", "这一手常见度", "两模型差", "我方先动", "对手最可能的回应",
+                  "最坏的回应", title="推荐（分数 = ½ 预期 + ½ 被针对时）")
         for i, r in enumerate(recs):
             heroes = "+".join(nm(c) + ("（保护位）" if c == r["protected"] else "") for c in r["heroes"])
             flags = [f for f, on in (("差距不明显", r["close"]), ("数据少", r["rare"]), ("不确定", r.get("uncertain"))) if on]
@@ -1170,6 +1205,7 @@ def _print_advice(out: dict, db) -> None:
             t.add_row(str(i + 1), heroes + (f" [dim]{'、'.join(flags)}[/]" if flags else ""), pct(r["score"]), pct(r["win"]),
                       pct(r["worst"]), f"{r['gap']:+.1%}", " / ".join(f"{x:.1%}" for x in r["common"]),
                       f"{r['second']['spread']:+.1%}" if r.get("second") else "—",
+                      f"{r['first']:.0%}" if r.get("first") is not None else "—",
                       f"{names(resp['heroes'])} {resp['prob']:.0%} → {pct(resp['win'])}" if resp else "—", th_txt)
         console.print(t)
         if out.get("heroes"):
@@ -1184,11 +1220,13 @@ def _print_advice(out: dict, db) -> None:
                                          for x in opp["threats"]))
     b = out.get("ban")
     if b:
+        fm = b.get("first")
+        cell = lambda i, j: pct(b["matrix"][i][j]) + (f"\n[dim]先动 {fm[i][j]:.0%}[/]" if fm and fm[i][j] is not None else "")  # noqa: E731
         t = Table("我方禁 ↓ / 对方禁 →", *[nm(c) for c in b["cols"]], "最坏", "预期", "分数", "两模型差",
-                  title="后禁：我方胜率（保护位不能禁；★ = 推荐）")
+                  title="后禁：我方胜率（保护位不能禁；★ = 推荐）" + ("；每格下面是我方先动概率" if fm else ""))
         for i, code in enumerate(b["rows"]):
             s = b["row_stats"][i]
-            t.add_row(("★ " if code == b["recommend"] else "") + nm(code), *[pct(v) for v in b["matrix"][i]], pct(s["worst"]),
+            t.add_row(("★ " if code == b["recommend"] else "") + nm(code), *[cell(i, j) for j in range(len(b["cols"]))], pct(s["worst"]),
                       pct(s["win"]), pct(s["score"]), f"{s['second']['spread']:+.1%}" if s.get("second") else "—")
         console.print(t)
         console.print("对方可能禁（按后禁率）：" + "、".join(f"{nm(x['code'])} {x['prob']:.0%}" for x in b["their_likely"]))
@@ -1213,12 +1251,15 @@ def rta_advise(
     grades: Annotated[str, typer.Option("--grades", help="我方,对方 的段位，如 legend,emperor")] = "",
     rule: Annotated[str, typer.Option("--rule", help="开战规则：unknown（国服）/ none / opening_rule_desc_tid")] = "unknown",
     pool: Annotated[str, typer.Option("--pool", help="我的英雄池（逗号分隔；不填 = 不限制）")] = "",
+    speeds: Annotated[str, typer.Option("--speed", help="我方英雄的速度「名字=速度」逗号分隔（不填用英雄池里存的）")] = "",
     top: Annotated[int, typer.Option("--top", help="推荐几个")] = 8,
     budget: Annotated[float, typer.Option("--budget", help="最多算几秒")] = 5.0,
     as_json: Annotated[bool, typer.Option("--json", help="输出 JSON（和 /api/rta/advise 一样）")] = False,
 ) -> None:
-    """选秀推荐（B14c）：轮到我方 → 推荐 + 对手的回应；轮到对手 → 对手可能怎么选；选完 → 后禁矩阵。胜率是我方的。"""
+    """选秀推荐（B14c）：轮到我方 → 推荐 + 对手的回应；轮到对手 → 对手可能怎么选；选完 → 后禁矩阵。胜率是我方的。
+    有速度表时（B14d1）另给我方先动的概率（不改胜率）。"""
     from e7helper.core.data import heroes as hero_db
+    from e7helper.core.rta import speed
     from e7helper.core.rta.encode import DraftState
 
     db = hero_db()
@@ -1239,10 +1280,136 @@ def rta_advise(
     except ValueError as e:
         _fail("；".join(e.args[0]))
         raise typer.Exit(2) from None
+    out = speed.annotate(out, st, side, speed.load(), _rta_speeds(db, speeds))
     if as_json:
         print(json.dumps(out, ensure_ascii=False, indent=1))
         return
     _print_advice(out, db)
+
+
+@rta_app.command("first")
+def rta_first(
+    mine: Annotated[str, typer.Option("--mine", help="我方英雄（中文名 / 昵称，逗号分隔）")],
+    theirs: Annotated[str, typer.Option("--theirs", help="对方英雄")],
+    grades: Annotated[str, typer.Option("--grades", help="我方,对方 的段位，如 legend,emperor（不填按各段位混合）")] = "",
+    speeds: Annotated[str, typer.Option("--speed", help="我方英雄的速度「名字=速度」逗号分隔（不填用英雄池里存的）")] = "",
+    table_path: Annotated[Optional[Path], typer.Option("--table", help="速度表，默认随包的 speed.json")] = None,
+    as_json: Annotated[bool, typer.Option("--json", help="输出 JSON")] = False,
+) -> None:
+    """先动概率（B14d1）：两队英雄 → 每方、每名英雄第一个行动的概率。"""
+    from e7helper.core.data import heroes as hero_db
+    from e7helper.core.rta import speed
+
+    db = hero_db()
+    table = speed.load(table_path)
+    if table is None:
+        _fail("还没有速度表：先 e7helper rta herostats 取官方能力值，再 e7helper rta speed 生成")
+        raise typer.Exit(1)
+    g = _rta_grades(grades)
+    fixed = _rta_speeds(db, speeds)
+    units = ([speed.Unit("mine", c, g[0], fixed.get(c)) for c in _rta_codes(db, mine)]
+             + [speed.Unit("theirs", c, g[1]) for c in _rta_codes(db, theirs)])
+    res = speed.first_mover(table, units)
+    if as_json:
+        print(json.dumps(res, ensure_ascii=False, indent=1))
+        return
+    console.print(f"我方先动 [bold]{res['sides'].get('mine', 0):.1%}[/] · 对方先动 {res['sides'].get('theirs', 0):.1%}"
+                  f"[dim] · 开局随机 0–{table.jitter:g}% · 速度表 {table.season}[/]")
+    t = Table("方", "英雄", "先动概率", "速度（25% / 中位 / 75%）", "说明")
+    for h in sorted(res["heroes"], key=lambda h: -h["p"]):
+        spd = f"{h['fixed']}（填的）" if h["fixed"] else " / ".join(map(str, h["speed"] or []))
+        note = "；".join(x for x in (h["rule"], "没有数据，按段位平均" if h["no_data"] else None) if x)
+        t.add_row("我方" if h["side"] == "mine" else "对方", _rta_name(db, h["code"]), f"{h['p']:.1%}", spd, note or "")
+    console.print(t)
+
+
+@rta_app.command("herostats")
+def rta_herostats(
+    season: Annotated[Optional[str], typer.Option("--season", help="赛季代码，默认国服当前赛季")] = None,
+    grades: Annotated[str, typer.Option("--grades", help="段位（逗号分隔），默认大师到传说 6 档")] = "",
+    min_picks: Annotated[int, typer.Option("--min-picks", help="只取随包 priors.json 里被选 ≥ 这么多次的英雄")] = 300,
+    max_age: Annotated[float, typer.Option("--max-age", help="这么多小时内取过的跳过")] = 72.0,
+    interval: Annotated[float, typer.Option("--interval", help="两次请求至少隔几秒")] = 1.0,
+    db: Annotated[Optional[Path], typer.Option("--db", help="采集库 sqlite 路径")] = None,
+) -> None:
+    """取官方英雄分析的快照（B14d1，开发用）：每名英雄每个段位一次请求，存进采集库的 hero_stats 表。Ctrl+C 安全退出。"""
+    import threading
+
+    from e7helper.core.rta import herostats, priors
+    from e7helper.core.rta.official import OfficialClient
+
+    grade_list = [g.strip() for g in grades.split(",") if g.strip()] or list(herostats.GRADES)
+    if any(g not in herostats.GRADES for g in grade_list):
+        _fail(f"--grades 只能是 {', '.join(herostats.GRADES)}")
+        raise typer.Exit(2)
+    stop = threading.Event()
+    client = OfficialClient("cn", interval=interval, sleep=stop.wait)
+    season = season or client.current_season()
+    picks = priors.load().picks if priors.available() else {}
+    codes = sorted((c for c, n in picks.items() if n >= min_picks), key=lambda c: -picks[c])
+    if not codes:
+        _fail("没有英雄可取（priors.json 不在？）")
+        raise typer.Exit(1)
+    console.print(f"国服 {season} · {len(codes)} 名英雄 × {len(grade_list)} 个段位（Ctrl+C 停止）")
+    started = time.time()
+
+    def progress(done: int, total: int) -> None:
+        if done % 50 == 0:
+            console.print(f"[dim]{datetime.now():%H:%M:%S}[/] {done} / {total}（{(time.time() - started) / 60:.1f} 分钟）")
+
+    try:
+        counts = herostats.snapshot(client, season, codes, grades=grade_list, db_path=db, max_age_hours=max_age,
+                                    stop=stop, progress=progress)
+    except KeyboardInterrupt:
+        stop.set()
+        raise typer.Exit(130) from None
+    console.print(f"完成：{counts}，请求 {client.requests} 次")
+
+
+@rta_app.command("speed")
+def rta_speed(
+    season: Annotated[str, typer.Option("--season", help="赛季代码")] = "pvp_rta_ss21",
+    servers: Annotated[str, typer.Option("--servers", help="用哪些服的开局行动条拟合（逗号分隔）")] = "cn",
+    out: Annotated[Optional[Path], typer.Option("--out", help="输出路径，默认随包 assets/data/rta/speed.json")] = None,
+    db: Annotated[Optional[Path], typer.Option("--db", help="采集库 sqlite 路径")] = None,
+    as_json: Annotated[bool, typer.Option("--json", help="输出拟合报告 JSON")] = False,
+) -> None:
+    """生成速度表（B14d1，开发用）：官方能力值快照 + 有开局行动条的对局 → speed.json（290 以上的尾部、开局随机、验收）。"""
+    from e7helper.core.data import heroes as hero_db
+    from e7helper.core.rta import herostats, speed
+
+    hists = herostats.speed_histograms(season, db_path=db)
+    if not hists:
+        _fail(f"采集库里没有 {season} 的能力值快照：先 e7helper rta herostats")
+        raise typer.Exit(1)
+    matches = herostats.energy_matches(season, servers=[s.strip() for s in servers.split(",") if s.strip()], db_path=db)
+    console.print(f"能力值快照 {len(hists)} 名英雄 · 有开局行动条的对局 {len(matches)} 场")
+    res = speed.build(hists, matches, season=season)
+    path = out or speed.bundled_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(res["data"], ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    speed.load.cache_clear()
+    if as_json:
+        print(json.dumps({"fit": res["data"]["fit"], "check": res["check"][:40], "residuals": res["residuals"][:20]},
+                         ensure_ascii=False, indent=1))
+        return
+    hdb = hero_db()
+    fit = res["data"]["fit"]
+    console.print(f"写入 {path} · 开局随机 0–{res['data']['jitter']:g}%（各取值的 log loss {fit['jitter_scores'] or '对局不够，没选'}）")
+    for name, key in (("加尾部", "test"), ("不加尾部", "test_without_tail")):
+        e = fit[key]
+        if e.get("matches"):
+            console.print(f"验收（{name}，最近 {e['matches']} 场）：先手方先动 log loss {e['log_loss']}（瞎猜 0.693），"
+                          f"命中 {e['accuracy']:.1%}，先动英雄猜中 {e['hero_hit']:.1%}")
+    if res["check"]:
+        t = Table("英雄", "段位", "反推次数", "反推 ≥ 290", "官方 290+", title="核对：反推出 ≥ 290 的比例 vs 官方直方图")
+        for r in res["check"][:15]:
+            t.add_row(_rta_name(hdb, r["code"]), r["grade"], str(r["n"]), f"{r['implied_top']:.0%}",
+                      f"{r['official_top']:.0%}" if r["official_top"] is not None else "—")
+        console.print(t)
+    if res["residuals"]:
+        console.print("行动条比速度高出最多的（可能有没登记的开局加行动条）：" + "、".join(
+            f"{_rta_name(hdb, r['code'])} {r['mean']:+.1f}（{r['n']} 次，先动 {r['first']}）" for r in res["residuals"][:8]))
 
 
 @rta_app.command("preban")

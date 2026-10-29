@@ -205,3 +205,57 @@ def test_run_threads_and_iter(db):
     assert [r["battle_seq"] for _, r in iter_battles(db, server="global")] == ["1"]
     summary = crawler.summary()
     assert summary["battles"] == {f"cn/{SEASON}": 1, f"global/{SEASON}": 1}
+
+
+# —— 补开局行动条（B14d1） ——
+
+def old_game(seq, enemy_no):
+    """B14d1 之前存的对局：原始字段里没有 energyGauge。"""
+    raw = game(seq, enemy_no)
+    raw.pop("energyGauge")
+    return raw
+
+
+def test_fill_energy_on_seen_battles(db):
+    from rta_fakes import gauge
+
+    client = FakeClient("cn", {"1": [old_game(10, "9"), old_game(11, "9")], "9": []})
+    crawler, clock = make(db, client)
+    crawler.run_server("cn", threading.Event())
+    # 再采到时一场带行动条（还换成了对方视角）、一场没有
+    client = FakeClient("cn", {"1": [game(10, "9", me_first=False, iswin=2, energyGauge=gauge()), old_game(11, "9")],
+                               "9": []})
+    clock[0] += 30 * 3600
+    crawler, _ = make(db, client, now=clock)
+    stats = crawler.run_server("cn", threading.Event())
+    assert stats.battles_filled == 1 and stats.battles_seen == 1 and stats.battles_new == 0
+    m = parse_battle(json.loads(sqlite3.connect(db).execute("SELECT raw FROM battles WHERE key='cn:10'").fetchone()[0]), "cn")
+    assert m.first_mover == "S" and m.winner == "F"  # 换了视角，同一场的结果不变
+    # 已经有行动条的不再改
+    client = FakeClient("cn", {"1": [game(10, "9", energyGauge=gauge(mine=(100, 1, 2, 3, 0)))], "9": []})
+    clock[0] += 30 * 3600
+    crawler, _ = make(db, client, now=clock)
+    assert crawler.run_server("cn", threading.Event()).battles_filled == 0
+
+
+def test_backfill_repages_season(db):
+    """--backfill：国服翻完的玩家从第 1 页重翻，补上行动条的页面算有新内容、继续往前翻。"""
+    from rta_fakes import gauge
+
+    old = [old_game(1000 + i, "9") for i in range(250)]
+    client = FakeClient("cn", {"1": old, "9": []})
+    crawler, clock = make(db, client)
+    crawler.run_server("cn", threading.Event())
+    new = [game(1000 + i, "9", energyGauge=gauge()) for i in range(250)]
+    # 不补采：刚采过，没有待采的玩家
+    client = FakeClient("cn", {"1": new, "9": []})
+    crawler, _ = make(db, client, now=clock)
+    assert crawler.run_server("cn", threading.Event()).stopped == "没有待采的玩家"
+    # 补采：1 号从第 1 页翻到第 3 页，250 场都补上
+    client = FakeClient("cn", {"1": new, "9": []})
+    crawler, _ = make(db, client, now=clock, backfill=True)
+    stats = crawler.run_server("cn", threading.Event())
+    assert [c for c in client.calls if c[0] == "1"] == [("1", 1), ("1", 2), ("1", 3)]
+    assert stats.battles_filled == 250 and stats.battles_new == 0
+    conn = sqlite3.connect(db)
+    assert conn.execute("SELECT COUNT(*) FROM battles WHERE instr(raw, '\"energyGauge\"') > 0").fetchone()[0] == 250

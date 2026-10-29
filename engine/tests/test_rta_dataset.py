@@ -102,3 +102,32 @@ def test_summary(built):
     assert info["vocab"] == 10 and info["rules"] == [RULE]
     assert info["splits"]["test"]["champion_plus"] == 6  # 国服默认传说 / 王者，海外优胜者 / 传说
     assert info["splits"]["train"]["champion_plus"] == 3  # 海外第一场有一方是金牌
+
+
+def test_energy_in_snapshot(tmp_path):
+    """B14d1：快照带上 10 手各自的开局行动条（按选秀顺序）和谁先动；旧快照读出来是 -1。"""
+    from rta_fakes import gauge
+
+    db = tmp_path / "crawl.sqlite"
+    conn = connect(db)
+    _insert(conn, "cn", battle("e1", energyGauge=gauge()))  # 我方先手，我方第 1 手先动
+    _insert(conn, "cn", battle("e2", me_first=False, energyGauge=gauge()))  # 对方先手，我方（后手方）先动
+    raw = battle("e3")
+    raw.pop("energyGauge")
+    _insert(conn, "cn", raw)
+    conn.commit()
+    conn.close()
+    ds = rds.build(db, workers=1)
+    rows = {k: i for i, k in enumerate(sorted(["e1", "e2", "e3"]))}  # 同一天，按 key 排
+    # 选秀顺序 F S S F F S S F F S；e1 我方是 F
+    assert ds.energy[rows["e1"]].tolist() == [100, 90, 75, 80, 70, 65, 0, 60, 0, 55]
+    assert ds.first_mover.tolist() == [1, 0, -1] and ds.meta["with_energy"] == 2
+    assert ds.energy[rows["e3"]].tolist() == [-1] * 10
+    path = tmp_path / "s.npz"
+    ds.save(path)
+    again = rds.Dataset.load(path)
+    assert (again.energy == ds.energy).all() and (again.first_mover == ds.first_mover).all()
+    # 旧快照（没有这两项）
+    old = rds.Dataset(codes=ds.codes, rule_table=ds.rule_table, tokens=ds.tokens, grades=ds.grades, rule=ds.rule,
+                      server=ds.server, day=ds.day, first_wins=ds.first_wins, turns=ds.turns)
+    assert (old.first_mover == -1).all() and old.energy.shape == (3, 10)

@@ -44,3 +44,24 @@ def test_build_report(tmp_path):
     assert h["unknown"] == ["c2005", "c3001", "c3002", "c3003", "m8041_apr"]
     assert rep["per_day"] == {"cn:2026-10-19": 1, "cn:2026-10-20": 1, "global:2026-10-19": 2}
     assert rep["queue"] == {"cn/s": (1, 1)}
+
+
+def test_report_energy(tmp_path):
+    """B14d1：有开局行动条的场数、没有的原因、先手方先动率、先动方胜率。"""
+    from rta_fakes import gauge
+
+    db = tmp_path / "crawl.sqlite"
+    conn = connect(db)
+    _insert(conn, "cn", battle(1, energyGauge=gauge()))  # 先手方先动、先手方赢
+    _insert(conn, "cn", battle(2, me_first=False, iswin=1, energyGauge=gauge()))  # 后手方（我方）先动、我方赢
+    _insert(conn, "cn", battle(3, energyGauge=gauge(theirs=(100, 75, 65, 0, 55))))  # 两个 100
+    old = battle(4)
+    old.pop("energyGauge")
+    _insert(conn, "cn", old)
+    conn.commit()
+    conn.close()
+    cn = build_report(db)["servers"]["cn"]
+    assert cn["energy"] == 2 and cn["energy_rate"] == 0.5
+    assert cn["energy_missing"] == {"先动者不唯一": 1, "缺行动条": 1}
+    assert cn["energy_seasons"] == {"pvp_rta_ss21": 2}
+    assert cn["f_moves_first_rate"] == 0.5 and cn["mover_win_rate"] == 1.0
