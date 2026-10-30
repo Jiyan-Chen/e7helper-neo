@@ -7,6 +7,7 @@
 | `POST /rta/preban` | 预禁推荐（先后手可以不知道、可以固定一名） |
 | `POST /rta/first` | 先动概率（B14d1）：两队英雄 + 段位 → 每方、每名英雄第一个行动的概率；没有速度表 503 `no_speed_data` |
 | `GET /rta/pool`、`PUT /rta/pool` | 英雄池（B14d1）：`{heroes: [{code, speed?}]}`，存在 `<数据目录>/modules/rta_draft/pool.json` |
+| `GET /rta/priors` | 每名英雄本赛季的出场数据（B14e1，选秀页的英雄网格排序 / 标记用）：被选次数、后禁率、预禁率、是否冷门 |
 
 局面的格式和 `DraftState.to_dict()` 一样，按先手方 F / 后手方 S 分：`prebans`、`picks`（这一方按顺序的选人）、
 `banned`（F = 先手方被禁的那名）、`grades`（[先手方, 后手方]）、`rule`（`"unknown"` = 国服不知道，null = 没有规则，
@@ -27,7 +28,7 @@ from typing import Literal
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
-from e7helper.core.rta import encode, search, speed
+from e7helper.core.rta import encode, rules, search, speed
 from e7helper.core.rta import pool as rpool
 
 from .engine import ApiError
@@ -92,7 +93,28 @@ def build_rta_router() -> APIRouter:
     @r.get("/rta/model", summary="模型信息")
     def model_info() -> dict:
         table = speed.load()
-        return {**advisor().info(), "speed": table.info() if table else None}
+        # 选秀页准备这一步的开战规则按钮（B14e1；双方都在优胜者以上才有，每局随机一条）
+        options = {"rules": [{"tid": tid, "label": label, "desc": desc}
+                             for tid, (label, desc) in rules.OPENING_RULES.items()]}
+        return {**advisor().info(), "speed": table.info() if table else None, "options": options}
+
+    @r.get("/rta/priors", summary="英雄的出场数据")
+    def priors_info() -> dict:
+        """每名英雄：`picks` 训练数据里被选的次数、`rare`（< rare_picks 次，推荐里标「数据少」）、
+        `ban_rate` 可被后禁时被禁的比例（数据少是 null）、`preban` 双方 ≥ 优胜者时一方预禁它的比例
+        （只从各前 300 组预禁组合里数，两个先后手平均，排序用）。没出现过的英雄不在里面（= 0 次）。"""
+        adv = advisor()
+        pr = adv.priors
+        pre: dict[str, float] = {}
+        for side in rules.SIDES:
+            pairs = pr.preban_pairs(side)
+            for (a, b), share in pairs:
+                for c in (a, b):
+                    pre[c] = pre.get(c, 0.0) + share / len(rules.SIDES)
+        heroes = {c: {"picks": n, "rare": n < adv.cfg.rare_picks, "ban_rate": pr.ban_rate(c),
+                      "preban": round(pre.get(c, 0.0), 5)} for c, n in pr.picks.items()}
+        return {"built": pr.meta.get("built"), "matches": pr.meta.get("matches"),
+                "rare_picks": adv.cfg.rare_picks, "heroes": heroes}
 
     @r.post("/rta/advise", summary="选秀推荐")
     def advise(body: AdviseIn) -> dict:

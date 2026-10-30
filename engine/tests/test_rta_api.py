@@ -43,6 +43,22 @@ def test_needs_token(client):
 def test_model_info(client):
     d = client.get("/api/rta/model").json()
     assert d["model"]["kind"] == "fake" and d["second"] is None and d["rare_picks"] == 1000
+    rules = d["options"]["rules"]  # B14e1：准备这一步的开战规则按钮
+    assert {r["label"] for r in rules} == {"攻击", "防御", "抵抗", "特殊"} and all(r["tid"] and r["desc"] for r in rules)
+
+
+def test_priors(client, monkeypatch):
+    adv = search.Advisor(FakeModel({c: 1.0 for c in CODES}, {c: 0.0 for c in CODES}),
+                         fake_priors({"c00": 5000, "c01": 300}, preban=PRE, postban={"c00": [50, 200], "c01": [1, 10]}))
+    monkeypatch.setattr(search, "load", lambda: adv)
+    d = client.get("/api/rta/priors").json()
+    assert d["rare_picks"] == 1000 and set(d["heroes"]) == {"c00", "c01"}
+    c00, c01 = d["heroes"]["c00"], d["heroes"]["c01"]
+    assert c00["picks"] == 5000 and not c00["rare"] and c00["ban_rate"] == 0.25
+    assert c01["rare"] and c01["ban_rate"] is None  # 可被禁不到 100 次
+    # c00 在先手方 50 / 80、后手方 60 / 100 的预禁组合里 → 平均 (0.625 + 0.6) / 2
+    assert c00["preban"] == pytest.approx(0.6125) and c01["preban"] == pytest.approx(0.6125)
+    assert "c04" not in d["heroes"]  # 没出现过的不列
 
 
 def test_advise_my_turn(client):

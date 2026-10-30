@@ -6,6 +6,7 @@ import type {
 } from "./types";
 import type { Flow, FlowSummary, UserTemplate } from "./flow";
 import type { HeroBuilds, HeroDetail, HeroList, HeroUpdateResult } from "./heroes";
+import type { AdviseBody, Advice, PrebanAdvice, PrebanBody, RtaModelInfo, RtaPriors } from "./rta";
 
 export interface UserTemplateSaveBody {
   frame: string;
@@ -145,6 +146,12 @@ export class Api {
   heroBuilds = (code: string, refresh = false) => this.get<HeroBuilds>(`/api/heroes/${code}/builds${refresh ? "?refresh=true" : ""}`);
   heroAssetUrl = (name: string) => `${this.url}/api/hero-icons/${encodeURIComponent(name)}${this.tokenQuery()}`;
   artifactIconUrl = (code: string) => `${this.url}/api/artifacts/${encodeURIComponent(code)}/icon${this.tokenQuery()}`;
+
+  // RTA 选秀（B14c / B14e1）
+  rtaModel = () => this.get<RtaModelInfo>("/api/rta/model");
+  rtaPriors = () => this.get<RtaPriors>("/api/rta/priors");
+  rtaAdvise = (body: AdviseBody) => this.request<Advice>("POST", "/api/rta/advise", body);
+  rtaPreban = (body: PrebanBody) => this.request<PrebanAdvice>("POST", "/api/rta/preban", body);
 
   private tokenQuery() {
     return this.token ? `?token=${encodeURIComponent(this.token)}` : "?";

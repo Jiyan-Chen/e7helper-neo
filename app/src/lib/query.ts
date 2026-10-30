@@ -21,4 +21,6 @@ export const qk = {
   heroes: ["heroes"] as const,
   heroDetail: (code: string) => ["heroes", code, "detail"] as const,
   heroBuilds: (code: string) => ["heroes", code, "builds"] as const,
+  rtaModel: ["rta", "model"] as const,
+  rtaPriors: ["rta", "priors"] as const,
 };

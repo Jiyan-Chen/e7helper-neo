@@ -184,7 +184,7 @@ db.artifacts()                # 神器编号 → {name（中文）, name_en}
 | `POST /api/heroes/update` | 联网更新；正在更新 409 `busy`，下载失败 502 `update_failed` |
 
 ## RTA 选秀 `e7helper.core.rta`（B14 起）
-世界竞技场选秀助手的引擎部分，不依赖设备。B14 拆成 a–g 几块（数据 → 模型 → 选秀推荐 → 分析功能（d1 先动 / 英雄池，d2 站位 / 快速分析 / 英雄统计）→ 页面 → 画面识别 → ss22 重训加先动），目前有对局数据（B14a）、胜率 / 选人模型（B14b）、选秀推荐（B14c）、先动概率和英雄池（B14d1）。
+世界竞技场选秀助手的引擎部分，不依赖设备。B14 拆成 a–g 几块（数据 → 模型 → 选秀推荐 → 分析功能（d1 先动 / 英雄池，d2 站位 / 快速分析 / 英雄统计）→ 页面 → 画面识别 → ss22 重训加先动），目前有对局数据（B14a）、胜率 / 选人模型（B14b）、选秀推荐（B14c）、先动概率和英雄池（B14d1）；GUI 的选秀页见「GUI / RTA 选秀（B14e1）」。
 ```python
 from e7helper.core.rta import rules, parse_battle
 rules.PICK_ORDER                     # ("F","S","S","F","F","S","S","F","F","S")，F = 先手方
@@ -269,7 +269,7 @@ adv.preban(None, grades=("legend", "emperor"))        # 预禁推荐（先后手
 - **后禁**（10 手选完）：4 × 4 矩阵（行 = 我方禁对方哪名，列 = 对方禁我方哪名，保护位除外）；每行 最坏 / 预期（对方按后禁率）/ 分数（½ / ½），推荐分数最高的行；另给纳什均衡混合策略。
 - **预禁**：我方候选 = 数据里（我方这个先后手）占比 ≥ 0.2% 的组合或前 60 组（可以 `fixed` 一名）；对手 = 对方那个先后手最常见的 100 组按频率加权；胜率读模型「已选 0 手」的局面（不用选人头模拟）；分数 = ½ 预期 + ½ 最坏（对手最常见的 10 组里最差的）；先后手不知道时两种各算一半。
 - 返回的胜率一律是**我方**的；`close` = 和第一名差 < 1 个百分点（差距不明显）；`rare` = 训练时被选 < 1000 次；`pool_only` = 只因为英雄池才放进来的冷门英雄；`trust` = 这一手的可信度。
-- 接口（`api/rta.py`，要 token）：`GET /api/rta/model`、`POST /api/rta/advise {side, state, pool?, top?, budget?}`（局面不合法 422 `invalid_state`，detail 是中文问题列表）、`POST /api/rta/preban {side?, grades, rule, fixed?, top?, budget?}`；没有模型 503 `no_model`。
+- 接口（`api/rta.py`，要 token）：`GET /api/rta/model`（B14e1 起带 `options.rules`：开战规则列表）、`POST /api/rta/advise {side, state, pool?, top?, budget?}`（局面不合法 422 `invalid_state`，detail 是中文问题列表）、`POST /api/rta/preban {side?, grades, rule, fixed?, top?, budget?}`（结果里 `theirs`、每组的 `share` / `worst_vs` 都以**我方**的先后手为键）、`GET /api/rta/priors`（B14e1：每名英雄被选次数、是否冷门、后禁率、预禁比例）；没有模型 503 `no_model`。
 - CLI：`rta advise --side F --pre-mine … --pre-theirs … --mine … --theirs … [--ban-mine/--ban-theirs] [--grades 我方,对方] [--pool …] [--json]`、`rta preban [--side] [--fixed]`、`rta sim`（B14c 起用这里的搜索）、`rta priors`、`rta audit`（开发用）。
 - 每次重训（新赛季）：`rta export` 主模型 + 切分模型（`--out assets/data/rta/second`）→ `rta priors`；可信度的常数要用新的切分模型在测试期重新量一次（审核记录里的脚本做法）。
 
@@ -333,7 +333,7 @@ python -m uv run e7helper serve [--port 47800] [--index N] [--no-connect] [--pau
 | `/capture/...`（B09，开发工具） | 模板采集，见下文 |
 | `/flows/...`、`/user-templates/...`（B11） | 自定义流程和玩家模板，见下文 |
 | `/heroes/...`（B13） | 英雄数据库，见「游戏数据」 |
-| `/rta/...`（B14c、B14d1） | RTA 选秀推荐、先动概率、英雄池，见「RTA 选秀 / 选秀推荐」「先动概率 / 英雄池」 |
+| `/rta/...`（B14c、B14d1、B14e1） | RTA 选秀推荐、先动概率、英雄池、英雄出场数据，见「RTA 选秀 / 选秀推荐」「先动概率 / 英雄池」 |
 
 **模块子路由**：`Module.routes()` 返回的路由挂到 `/api/modules/<id>/`，同样要 token。第一段路径不能是 `config` / `stats` / `timers` 或路径参数，否则启动时报 `ModuleRegistryError`。fastapi 在 `routes()` 里再导入。已有：`GET /api/modules/daily/ledger`、`GET /api/modules/secret_shop/report`（B12c）。
 
@@ -413,7 +413,9 @@ pnpm typecheck
 | `src/lib/` | `api.ts`（REST）、`ws.ts`（/ws，断线重连）、`frames.ts`（/ws/frames → object URL）、`store.ts`（zustand：状态、场景、日志；事件到来时让 react-query 失效）、`time.ts`（三种时间格式统一转 Date）、`schema.ts`（JSON Schema → 字段）、`labels.ts`（场景名、状态、日志的中文化） |
 | `src/components/shell/` | 启动画面、顶栏（左边固定是索尔缇娅头像 + 「第七史诗助手」；右边模拟器、当前画面、下个计划、停止、窗口按钮）、左侧菜单、右侧「实时画面 + 动态」（可收起）、背景。窗口没有系统标题栏（`decorations: false`，B12）：顶栏就是标题栏（`data-tauri-drag-region`：拖动、双击最大化），`WindowControls` 画最小化 / 最大化 / 关闭（只在 Tauri 里显示）；启动画面顶上有一条 `WindowDragStrip` |
 | `src/components/module/` | 通用模块页：说明、计时胶囊、（开发版）演练条、自动表单、最近运行、底部行动条 |
-| `src/pages/` | 计划、运行记录、日志、设置、模板采集（开发版，菜单里叫「内置模板采集」）；B11：`FlowsPage`（我的流程）、`FlowEditorPage`（编辑流程）、`TemplatesPage`（我的模板）；B13：`HeroesPage`（英雄图鉴） |
+| `src/pages/` | 计划、运行记录、日志、设置、模板采集（开发版，菜单里叫「内置模板采集」）；B11：`FlowsPage`（我的流程）、`FlowEditorPage`（编辑流程）、`TemplatesPage`（我的模板）；B13：`HeroesPage`（英雄图鉴）；B14e1：`DraftPage`（RTA 选秀） |
+| `src/components/heroes/` | B13：`HeroDetailDialog`；B14e1：`HeroGrid.tsx`（头像、筛选条、头像网格，图鉴和选秀页共用） |
+| `src/components/rta/`、`src/lib/draft.ts`、`draftStore.ts`、`rta.ts` | B14e1：选秀页的阵容栏 / 各步面板、局面和撤销、`/api/rta/*` 的数据形状和「只要最新的」请求 |
 | `src/components/flow/` | B11：步骤树（嵌套积木、拖动排序）、属性面板、模板选择 / 现场采集、坐标点选、冻结画面画布 |
 | `src/lib/flow.ts` | B11：流程的数据形状和步骤树操作（按 id 定位、插入 / 移动 / 复制、编号、中文描述、本地检查、校验错误定位） |
 | `src/modules/<id>/index.tsx` | 模块的界面扩展，见下 |
@@ -432,6 +434,11 @@ pnpm typecheck
 
 **英雄图鉴（B13）**：左侧菜单「我的模板」下面，正式版也有。头像网格（属性色边框 + 右下角属性图标），默认按发布日期新的在前（没有日期的最后），搜索（中文名 / 英文名 / 昵称 / 编号）、属性 / 职业 / 星级筛选（`lib/heroes.ts` 的 `filterHeroes`，排序同引擎 `search`），右上「检查更新」。宽页面，不显示右侧栏。点开是 `components/heroes/HeroDetailDialog.tsx`（参照 e7.wiki 的角色详情）：角色信息（星级、属性 / 职业 / 星座、发布日期、简介、角色奉献、专属装备（主属性 + 三选一的效果，不显示背景说明）、满级属性；昵称只用来搜索，不显示）/ 技能详情（描述、灵魂燃烧、专属装备效果、技能特效、强化、倍率）/ 配装方案（Fribbels 玩家配装的套装组合、属性中位数表（带速度套的分前 10% / 前 25% / 中位，不带的分快 / 中 / 慢三档）、常用神器）。
 - **游戏图标**（B13 审核后加）：属性 `element_<键>`、职业 `role_<键>`、套装 `set_<键>`、属性类型 `stat_<键>`（cp / atk / def / hp / spd / chc / chd / eff / efr / dac）、等级 `grade_<b…sss>`、刻印 `devotion_self` / `devotion_team_<位置>`（群阵影响的位置，1 右、2 下、3 上、4 左）的 PNG 放在 `src/assets/game/`，是从游戏截图里裁出来、按按钮底色抠成透明的；`lib/gameIcons.ts` 用 `import.meta.glob` 按文件名收集，`gameIcon(name)` 没有时返回 undefined（调用方退回色块 / 文字）。
+
+**RTA 助手（B14e1）**：左侧菜单「英雄图鉴」下面，`#/rta`，宽页面。五步手动模式：准备（双方段位、先后手、开战规则（双方都在优胜者以上才有））→ 预禁（`/rta/preban`；只填了一名时按它 `fixed`）→ 选秀（`/rta/advise`：轮到我方给推荐卡，轮到对方给对方可能的选择）→ 后禁（`advise` 的 `ban` 矩阵）→ 结果。布局参考 e7rtabot.com/draft（用户意见）：准备是一张居中卡片（段位 5 个图标：挑战者及以下合成一项、按挑战者发给引擎；开战规则和先后手是分段按钮）；预禁 / 选秀右边一整列是英雄网格（`HeroGrid`，按 `/rta/priors` 的被选次数排，预禁时按预禁比例）；选秀左边是信息条 + 双方阵容并排 + 推荐卡，正在选的格子里直接放前 3 名；后禁 / 结果阵容每队一行，下面是矩阵 / 结果。段位图标是 `assets/game/rank_<段位>.png`（从游戏截图裁，没有时写段位名）。
+- 局面（`lib/draft.ts`）按「我方 / 对方」记，整局按顺序存 10 手；发给引擎时 `apiState` 换成先手 F / 后手 S，后禁双方都填了才带上。撤销记录和当前局面在 `lib/draftStore.ts`（zustand，放在页面外，切页面不丢；准备里的段位和先后手记在 localStorage）。
+- 请求（`lib/rta.ts` 的 `useLatest`）：同一时间只发一个，在途时局面变了只记最新的；结果按局面缓存在页面外。引擎同一时间只跑一个搜索，所以前端不能让旧请求排队。
+- 信息条上是「当前胜率」（模型对当前局面的读数），推荐卡上是「预期」（搜索值），两者含义不同（B14e1 审核记录「发现」）；后禁这一步信息条改显示推荐行（已选时是选的那一行）的预期（`banHeadline`，用户意见）。开战规则只有四个按钮：有规则（双方都在优胜者以上）时玩家一定知道是哪条，没选不能开始；每局清空重选。先动概率（`first`）引擎给了才显示，随包没有速度表时整块不出现。
 
 **样式**：游戏风（原型见 `docs/prototypes/b09/d-epic.html`），配色和组件类在 `src/index.css`。背景是圣域（进入圣域时 UI 淡入前的一帧，`src/assets/bg_sanctuary.jpg`），用 CSS 压暗。只用系统字体（数字用 Bahnschrift）。
 

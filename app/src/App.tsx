@@ -13,6 +13,7 @@ import { setModuleNames } from "@/lib/labels";
 import { useEngine } from "@/lib/store";
 import { menuModules, moduleUI } from "@/modules/registry";
 import { CapturePage } from "@/pages/CapturePage";
+import { DraftPage } from "@/pages/DraftPage";
 import { FlowEditorPage } from "@/pages/FlowEditorPage";
 import { FlowsPage } from "@/pages/FlowsPage";
 import { HeroesPage } from "@/pages/HeroesPage";
@@ -46,9 +47,9 @@ function useIdleScene() {
   }, [connected, running]);
 }
 
-/** 需要宽画面的页面（模板采集、流程编辑器、英雄图鉴），不显示右侧栏。 */
+/** 需要宽画面的页面（模板采集、流程编辑器、英雄图鉴、RTA 助手），不显示右侧栏。 */
 const isWidePage = (path: string) =>
-  path === "/capture" || path === "/templates" || path === "/heroes" || path.startsWith("/flows/");
+  path === "/capture" || path === "/templates" || path === "/heroes" || path === "/rta" || path.startsWith("/flows/");
 
 function Shell() {
   const { data: modules } = useModules();
@@ -69,7 +70,7 @@ function Shell() {
             <Outlet />
           </div>
         </main>
-        {/* 模板采集页、流程编辑器、英雄图鉴需要宽的画面，不显示右侧栏 */}
+        {/* 模板采集页、流程编辑器、英雄图鉴、RTA 助手需要宽的画面，不显示右侧栏 */}
         {!isWidePage(pathname) && <LivePanel />}
       </div>
     </div>
@@ -104,6 +105,7 @@ const router = createHashRouter([
       { path: "flows/:id", element: <FlowEditorPage /> },
       { path: "templates", element: <TemplatesPage /> },
       { path: "heroes", element: <HeroesPage /> },
+      { path: "rta", element: <DraftPage /> },
       ...(isDev ? [{ path: "capture", element: <CapturePage /> }] : []),
       { path: "*", element: <Navigate to="/" replace /> },
     ],

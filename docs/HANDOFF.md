@@ -1,6 +1,6 @@
 # HANDOFF
 
-> 新会话从这里读起。上次更新：2026-10-29（B14d1 已通过）
+> 新会话从这里读起。上次更新：2026-10-30（B14e1 已通过）
 
 ## 当前进度
 - **B01 骨架 + 模块契约 + MuMu 设备层**：✅ 已通过，记录见 [reviews/B01.md](reviews/B01.md)。
@@ -38,7 +38,12 @@
   - 英雄池 `core/rta/pool.py`，`GET/PUT /api/rta/pool`，advise 不传 pool 时用它。
   - **采集没跑**（用户意见「采集以后再说」）：随包还没有速度表，先动概率暂时是空的。步骤见下面「待办：B14d1 的采集和速度表」。
   - 全量 `1173 passed, 9 skipped, 1 failed`（又是 `test_scheduler.py` 的退避测试，单独重跑 3 次都过）。
-- 下一块：**B14e RTA：选秀助手页面**（见下面「下一块」）。B14d2（站位 / 快速分析 / 英雄统计）往后放，等 ss22 赛季更新、数据重采后和 B14g 一起做（用户意见）。
+- **B14e1 RTA：选秀页（菜单「RTA 助手」）**：✅ 已通过，记录见 [reviews/B14e1.md](reviews/B14e1.md)。B14e 按用户意见拆成 B14e1（选秀页）/ B14e2（英雄池）。
+  - GUI 五步手动模式（准备 / 预禁 / 选秀 / 后禁 / 结果），审核中布局改成参考 e7rtabot.com/draft；段位 5 个图标（挑战者及以下合一项，图标从游戏截图裁）、开战规则 / 先后手分段按钮（有规则时必须选，没有「不知道」）；正在选的格子里放前 3 名；后禁时信息条显示推荐行的预期。
+  - 引擎：`GET /api/rta/priors`、`/api/rta/model` 的 `options.rules`；`engine/tools/cut_icons.py --grabcut`。
+  - 审核改了 4 轮：改名和布局、后禁胜率和开战规则、卡片对齐、全页布局检查（1280×800 和 1100 宽）。
+  - 全量 `1175 passed, 9 skipped`（第 1 轮审核前跑的，之后只改了前端和一个接口字段，RTA 接口测试 13 个每轮都跑）；前端 45 个。
+- 下一块：**B14e2 RTA：英雄池**（见下面「下一块」）。B14d2（站位 / 快速分析 / 英雄统计）往后放，等 ss22 赛季更新、数据重采后和 B14g 一起做（用户意见）。
 
 ## 已有能力
 ### 设备（B01）
@@ -192,6 +197,15 @@
   - 过渡动画：`index.css` 里的 `--ease-*` / `--dur-*` 和 `anim-page` / `anim-dialog` / `anim-overlay` / `anim-menu` / `anim-slide-right` / `toast`；页面区按路径加 key（流程编辑器的路径算一页）。系统「减少动画」时全部关掉。
   - 说明文字只写功能做什么（用户意见），不写运行逻辑和安全规则。
   - B12c：「统计」页删掉了；`ModuleUI.RunsPanel` 代替通用「最近运行」（书签刷取的刷取历史）；`api.moduleGet(id, path)` 调模块子路由。
+
+### RTA 助手页（B14e1，详见 architecture.md「GUI / RTA 助手（B14e1）」和 reviews/B14e1.md）
+- 左侧菜单「英雄图鉴」下面「RTA 助手」，`#/rta`，宽页面（不显示右侧栏）。文件：`src/pages/DraftPage.tsx`（页面框架、请求、右边英雄网格）、`src/components/rta/`（`Panels.tsx` 各步面板 + 信息条、`TeamColumn.tsx` 阵容栏、`bits.tsx` 小部件：头像 / 段位图标 / 分段按钮 / 胜率颜色 / 标记）、`src/lib/draft.ts`（局面：选人顺序、保护位、预禁 / 选人 / 后禁、段位 5 项、开战规则、转成引擎格式）、`draftStore.ts`（当前局面 + 撤销，放在页面外）、`rta.ts`（接口数据形状、`useLatest`、`banHeadline`）。
+- 局面按「我方 / 对方」记、整局按顺序存 10 手；发给引擎时 `apiState` 换成先手 / 后手，后禁双方都填了才带上。段位「挑战者及以下」按 `challenger` 发；双方都在优胜者以上才有开战规则（必须选，每局清空），否则按 `unknown`。
+- 请求「只要最新的」：同一时间只发一个，在途时局面变了只记最新的；结果按局面缓存在页面外（撤销、切页面不用再算）。引擎在途的搜索取消不了。
+- 胜率：信息条是「当前胜率」（模型对当前局面的读数），推荐卡是「预期」（搜索值）；后禁这一步信息条显示「禁 X 后」= 推荐行（或已选那一行）的预期（用户意见）。先动概率引擎给了才显示（随包还没有速度表，现在都不出现；用合成速度表验证过）。
+- 英雄网格是共用组件 `src/components/heroes/HeroGrid.tsx`（图鉴也用）：`HeroIcon`、`FilterRow`（`iconOnly`）、`HeroFilters`（`compact`、`onEnter`）、`HeroGrid`（`decor`：变灰、角标）；`filterHeroes(heroes, filter, score?)` 按 score 排。
+- 段位图标 `app/src/assets/game/rank_{challenger,champion,warlord,emperor,legend}.png`：世界竞技场 › 排名 › 赛季奖励截图，`python tools/cut_icons.py <截图> ../app/src/assets/game --grabcut --max 128 rank_legend:370,248,150,152 rank_emperor:370,400,150,150 rank_warlord:370,550,150,150 rank_champion:370,700,150,150 rank_challenger:60,195,220,195`（挑战者用左边「我的段位」大图标）。
+- 测试：`src/lib/draft.test.ts`（14）、`rta.test.ts`（2）、`heroes.test.ts` 加 1；引擎 `tests/test_rta_api.py`（13）。
 
 ### 打包（B10，详见 architecture.md「打包发布」和 reviews/B10.md）
 - `cd engine && python -m uv run --group build python packaging/build.py`：检查 5 处版本号 → PyInstaller onedir → 冒烟测试（不碰设备）。产物 `engine/dist/e7engine/` 约 272MB、352 个文件。
@@ -366,6 +380,12 @@
   - 自对弈 ≥ 90% 的 4 局（超过我定的 2%）按现状接受（审核通过，没有另提意见）；
   - 和 e7rtabot 的对抗对比：站长在 Discord 同意小规模、限频（每 3–5 秒一次请求）。网站条款原本禁止自动访问，以后要再跑，先问用户；
   - 开局行动条（`energyGauge`）的采集和用法放到 B14d 开工时定（用户决定）。
+- B14e1（2026-10-30 审核通过，均为用户意见 / 选择）：
+  - B14e 拆成 B14e1（选秀页）/ B14e2（英雄池 + 试用反馈）；
+  - 菜单名「RTA 助手」；布局参考 e7rtabot.com/draft（方案阶段选的「仿游戏 BP 画面」在第 1 轮审核时改掉）；
+  - 段位用游戏里的段位图标，「挑战者及以下」合成一项；开战规则、先后手用按钮不用下拉框；国服 RTA 有开战规则（战绩站接口没有这个字段），**有规则的局玩家一定知道规则**，所以没有「不知道」、没选不能开始；预禁前就知道先后手；
+  - 后禁这一步显示推荐行的预期，不显示「后禁前」的读数（两种读法单局能差 ±12 个点，模型那边留给 B14g）；
+  - 卡片要对齐（「前面对齐、后面突然不对齐，体验不好」）：一组卡片放进列宽固定的网格，同一面板里几组用同一个列模板，每张卡行数一样；页面按桌面版默认 1280×800 和最窄 1100 宽核对。
 - B14d1（2026-10-29 审核通过）：
   - B14d 拆成 B14d1（行动条 / 先动 / 英雄池）和 B14d2（站位 / 快速分析 / 英雄统计）（按「大块拆开」的习惯，用户同意）；
   - 速度按段位取（用户提议「像配装推荐一样按段位用不同分位」）→ 查到官方英雄分析的速度直方图就是按段位的绝对值，直接用；Fribbels 不批量取（会 403）；
@@ -375,15 +395,15 @@
   - **采集以后再说**（用户）：国服补采、能力值快照、随包速度表都没跑，工具和步骤保留（见「待办」）。
   - **B14d2 往后放**（用户，审核通过后）：站位 / 快速分析 / 英雄统计等 ss22 赛季更新、数据重采后和 B14g 一起做；B14e 先做五步 BP 页面和英雄池，快速分析、英雄统计页跟着 B14d2 往后放。
 
-## 下一块：B14e RTA：选秀助手页面
-设计草案在 reviews/B14a.md「后续块的设计草案 / B14e / B14f」，ROADMAP 的 B14e 一行也有。开工时细化、和用户确认后再动手（按「大块拆开」的习惯，工作量大就先拆）。要做的：
-- **五步手动模式**：准备（先后手、双方段位）/ 预禁（`POST /api/rta/preban`）/ 选秀（`POST /api/rta/advise`：轮到我方给推荐、轮到对手给对手可能怎么选）/ 后禁（advise 的 `ban`：4 × 4 矩阵、推荐、纳什）/ 结果（后禁后的胜率）。胜率一律是我方的。
-- 左侧双方阵容卡、右侧英雄网格：复用图鉴的头像和筛选（要从 `HeroesPage.tsx` 抽出来）；GUI 还不支持助手模块，菜单要加入口、`App.tsx` 的宽页面列表要加这一页。
-- **英雄池**：在英雄图鉴里勾选「我有的英雄」、可填速度 → `GET/PUT /api/rta/pool`；advise 不传 pool 时引擎用保存的。
-- **先动概率**：advise 结果里的 `first`、每个推荐的 `first`、后禁矩阵的 `ban.first`（我方先动的概率）。**随包速度表还没生成**（见「待办」），现在都是 null，页面要能不显示；有了以后在胜率旁边单独显示，不和胜率合成（用户意见）。
-- 推荐里的标记：`close`（差距不明显）、`rare`（数据少）、`uncertain`（两个模型差 ≥ 5 个百分点）、`protected`（放保护位的那名）、`pool_only`。
-- 正式版面向玩家：说明只讲功能（记忆「GUI 说明只讲功能」），开发者功能只在开发版。
-- **不做**：快速分析、英雄统计页（随 B14d2 往后放）。
+## 下一块：B14e2 RTA：英雄池
+设计草案在 reviews/B14e1.md 末尾「B14e2 设计草案」，ROADMAP 的 B14e2 一行也有。开工时细化、和用户确认后再动手。要做的：
+- **图鉴里勾选英雄池**：图鉴页加「英雄池」模式，网格每格可勾选（有角标），旁边一列是已勾的英雄和速度输入（空 = 按段位的常见速度），「全部清空」；保存走 `PUT /api/rta/pool`（B14d1 已有，存 `<数据目录>/modules/rta_draft/pool.json`）。空的英雄池 = 不限制。
+- **RTA 助手页**：英雄池不空时有「只推荐我的英雄」开关（advise 的 `use_saved_pool`，默认开；关掉就传 `use_saved_pool: false`）；右边网格标出英雄池里的英雄、可以只看英雄池；推荐卡的 `pool_only` 标记（只因为英雄池才放进来的冷门英雄）。预禁推荐 `preban` 目前不看英雄池（它推荐的是禁谁，和自己有没有无关），要不要改开工时问。
+- **英雄池变了推荐要重算**：前端的结果缓存（`DraftPage.tsx` 的 `adviceCache`）键里带上英雄池的 `updated`；引擎的 advise 缓存键已经带 `pool`。
+- **先动概率**：英雄池里填的速度会用在我方英雄上（`speed.annotate`），但随包还没有速度表，页面上看不到；有速度表之前可以用 B14e1 审核记录里「合成速度表」的做法验证。
+- 加上 B14e1 试用时的反馈（用户在 B14e2 开工时给）。
+- 沿用 B14e1 的做法：布局对齐（列宽固定的网格、每张卡行数一样）、按 1280×800 和 1100 宽核对并用 DOM 量；说明只讲功能。
+- **不做**：快速分析、英雄统计、站位（B14d2）；画面识别（B14f）。
 
 ## 往后放：B14d2 RTA：站位 / 快速分析 / 英雄统计（等 ss22 赛季更新、数据重采后和 B14g 一起做，用户意见）
 设计草案在 reviews/B14a.md「后续块的设计草案 / B14d」，ROADMAP 的 B14d2 一行也有。开工时细化、和用户确认后再动手。要做的：
@@ -518,6 +538,10 @@
 - **Claude 桌面版是 MSIX 打包应用，会重定向 `AppData`**（B14a 发现）：从 Claude 会话里跑的命令往 `%LOCALAPPDATA%` 写的文件，实际落在 `%LOCALAPPDATA%\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Local\` 下（会话里读写看起来路径正常，资源管理器和会话外启动的程序在原路径找不到）。采集库原来就落在那里，用户在资源管理器里找不到，已挪到 `F:\e7helper-data\rta\`（用户指定）并改了默认路径。以前会话里写的 `e7helper\data`、`debug`、`modules` 等也在那个私有目录里。要让外面看得到，就写到 `AppData` 以外的路径（`--db`、`E7_RTA_DB`、`E7_DATA_DIR`）。
 - **Fribbels 配装接口不能批量取**（B14d1）：每 2 秒取一名，取到第 14 名就开始返回 403。只按用户点开时单个取（B13 的用法）。
 - **全量单元测试约 23 分钟**：别用 `timeout 900` 之类包着跑（B14d1 被它中途杀掉过），放后台跑、等通知。
+- **桌面版窗口默认 1280×800**（`tauri.conf.json`），最窄 1100（`App.tsx` 的 `min-w-[1100px]`）：新页面按这两个尺寸核对（浏览器面板 `resize_window`），别只看 1440×900（B14e1 一开始就是只看了大尺寸）。
+- **浏览器面板里 radix 下拉框（`Select`）点不中选项**（B14e1，面板隐藏时尤其明显）：按坐标、按元素引用、按键盘都不稳。用脚本派发 `pointerdown` / `pointerup`（`pointerType: "mouse"`）先打开触发器，等 0.4 秒，再对选项派发同样的事件。普通按钮直接 `click()` 就行。
+- **底色不均匀的游戏图标**（B14e1 段位图标：模糊立绘 + 渐变 + 图标自己有深色描边）：`cut_icons.py` 默认按颜色差抠会留灰色方块，用 `--grabcut`；放在浅色底上预览一下边缘。
+- **很长的 Bash heredoc 会被引号处理弄坏**（B14e1：几百行带 `'''` 的 Python 脚本报 `unexpected EOF while looking for matching`）：长脚本先用 Write 写到会话临时目录再 `python 脚本` 跑。
 - **Git Bash 里的 `/c/...` 路径 Windows 的 python 不认**：传给 python 的路径用 `cygpath -w` 转一下（B14a 踩过）。
 - **RTA 模型训练的坑**（B14b）：
   - AMD 的 Windows ROCm 版 torch 只有 Python 3.12；`uv python install` 默认装进 AppData，Claude 桌面版（MSIX）会重定向，用户自己的终端找不到 → `setup_rocm_venv.ps1` 把 Python 装在 `engine/.python`。

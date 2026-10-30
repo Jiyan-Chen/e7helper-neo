@@ -206,10 +206,13 @@ function matchRank(h: Hero, key: string): number | null {
   return best;
 }
 
-/** 按条件筛选。按发布日期新的在前（没有日期的排最后，同一天按编号大的在前）；有搜索词时先按命中程度。 */
+/**
+ * 按条件筛选。按发布日期新的在前（没有日期的排最后，同一天按编号大的在前）；有搜索词时先按命中程度。
+ * 给了 score 时按它大的在前代替发布日期（RTA 助手按本赛季出场次数，B14e1）。
+ */
 const cmpDesc = (a: string, b: string) => (a < b ? 1 : a > b ? -1 : 0);
 
-export function filterHeroes(heroes: Hero[], f: HeroFilter): Hero[] {
+export function filterHeroes(heroes: Hero[], f: HeroFilter, score?: (h: Hero) => number): Hero[] {
   const key = nameKey(f.query);
   const ranked: { h: Hero; rank: number }[] = [];
   for (const h of heroes) {
@@ -219,6 +222,9 @@ export function filterHeroes(heroes: Hero[], f: HeroFilter): Hero[] {
     const rank = key ? matchRank(h, key) : 0;
     if (rank !== null) ranked.push({ h, rank });
   }
-  ranked.sort((a, b) => a.rank - b.rank || cmpDesc(a.h.released, b.h.released) || cmpDesc(a.h.code, b.h.code));
+  const order = score
+    ? (a: Hero, b: Hero) => score(b) - score(a)
+    : (a: Hero, b: Hero) => cmpDesc(a.released, b.released);
+  ranked.sort((a, b) => a.rank - b.rank || order(a.h, b.h) || cmpDesc(a.h.code, b.h.code));
   return ranked.map((r) => r.h);
 }

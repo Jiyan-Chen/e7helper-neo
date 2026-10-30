@@ -42,6 +42,13 @@ describe("filterHeroes", () => {
     expect(codes({ role: "assassin", rarity: 5 })).toEqual(["c2007", "c1007"]);
     expect(codes({ role: "assassin", element: "dark", query: "维德" })).toEqual(["c2007"]);
   });
+
+  it("给了 score 按它排（RTA 助手按出场次数），搜索时仍先按命中程度", () => {
+    const picks: Record<string, number> = { c1001: 50, c4001: 900, c1007: 10 };
+    const byPicks = (f: Partial<HeroFilter>) => filterHeroes(HEROES, { ...ALL, ...f }, (h) => picks[h.code] ?? 0).map((h) => h.code);
+    expect(byPicks({})).toEqual(["c4001", "c1001", "c1007", "c2111", "c2007"]); // 同分的按编号大的在前
+    expect(byPicks({ query: "维德瑞" })).toEqual(["c1007", "c2007"]);
+  });
 });
 
 describe("formatStat", () => {
