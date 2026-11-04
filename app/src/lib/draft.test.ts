@@ -146,7 +146,7 @@ describe("转成引擎的局面", () => {
   it("开战规则：双方都在优胜者以上才用选的；有规则时没选不能开始", () => {
     const s = (grades: Setup["grades"], rule = "rta_cs_dodge_down_desc"): Setup => ({ side: "F", grades, rule });
     expect(ruleFor(s(["legend", "champion"]))).toBe("rta_cs_dodge_down_desc");
-    expect(ruleFor(s(["legend", "challenger"]))).toBe("unknown");
+    expect(ruleFor(s(["legend", "challenger"]))).toBeNull(); // 没有规则（海外数据的记法）
     expect(needsRule(s(["legend", "champion"], "unknown"))).toBe(true);
     expect(needsRule(s(["legend", "champion"]))).toBe(false);
     expect(needsRule(s(["legend", "challenger"], "unknown"))).toBe(false); // 没有规则

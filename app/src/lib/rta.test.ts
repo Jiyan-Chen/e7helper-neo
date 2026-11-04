@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { banHeadline, type BanAdvice } from "./rta";
+import { banHeadline, inModel, type BanAdvice } from "./rta";
 
 const ban = (first?: (number | null)[][]): BanAdvice => ({
   rows: ["a", "b"],
@@ -22,5 +22,13 @@ describe("banHeadline", () => {
   it("先动概率按对方后禁的可能性加权，缺一格就不算", () => {
     expect(banHeadline(ban([[0.8, 0.4], [0.5, 0.5]]), null).first).toBeCloseTo((0.8 * 0.3 + 0.4 * 0.1) / 0.4);
     expect(banHeadline(ban([[0.8, null], [0.5, 0.5]]), null).first).toBeNull();
+  });
+});
+
+describe("inModel", () => {
+  it("只留模型里有的英雄，顺序不变", () => {
+    const heroes = [{ code: "c2187" }, { code: "c1001" }, { code: "c1002" }];
+    expect(inModel(heroes, ["c1002", "c1001"]).map((h) => h.code)).toEqual(["c1001", "c1002"]);
+    expect(inModel(heroes, [])).toEqual([]);
   });
 });

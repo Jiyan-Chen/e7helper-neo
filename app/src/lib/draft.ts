@@ -169,9 +169,9 @@ export function needsRule(setup: Setup): boolean {
   return ruleApplies(setup.grades) && setup.rule === UNKNOWN_RULE;
 }
 
-/** 发给引擎的开战规则：有规则时用准备里选的，否则按「不知道」（国服的训练数据都是这么记的）。 */
-export function ruleFor(setup: Setup): string {
-  return ruleApplies(setup.grades) ? setup.rule : UNKNOWN_RULE;
+/** 发给引擎的开战规则：有规则时用准备里选的，否则是 null = 没有规则（B14h 起模型只用海外数据，海外这种局就是这么记的）。 */
+export function ruleFor(setup: Setup): string | null {
+  return ruleApplies(setup.grades) ? setup.rule : null;
 }
 
 /** 引擎的局面格式（`DraftState.to_dict()`，按先手 F / 后手 S 分）。 */
@@ -180,11 +180,12 @@ export interface ApiState {
   picks: Record<Side, string[]>;
   banned: Partial<Record<Side, string>>;
   grades: [string, string];
-  rule: string;
+  /** null = 没有开战规则 */
+  rule: string | null;
 }
 
 /** 转成引擎接口的局面。后禁只在双方都填了才带上（只填了一边时还是按后禁前的局面算）。 */
-export function apiState(d: Draft, rule: string): ApiState {
+export function apiState(d: Draft, rule: string | null): ApiState {
   const f: Team = d.setup.side === "F" ? "mine" : "theirs";
   const s = other(f);
   const banned: Partial<Record<Side, string>> = {};

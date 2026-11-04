@@ -2,7 +2,8 @@
 
 - 只存模型要的：每场 17 个位置的英雄（存英雄表的下标，-1 = 空位）、双方段位档、开战规则、服务器、日期、
   先手方是否赢、回合数；B14d1 起还有 10 手各自的开局行动条和谁先动（给 ss22 重训用，没有的记 -1）；不存原始字段。之后训练、评估都读快照，结果可复现（采集还在往库里加新对局）。
-- 去掉：解析失败的（几乎都是选秀阶段退出）、含 `m` 开头英雄的（愚人节怪物英雄）、0 回合的、截止日之后的。
+- 去掉：解析失败的（几乎都是选秀阶段退出）、含 `m` 开头英雄的（愚人节怪物英雄）、0 回合的、截止日之后的；
+  B14h 起还可以只用某些服（`servers`）、去掉含某些英雄的（`exclude`，刚出、还没养成的新英雄，预禁 / 选人 / 被禁都算）。
 - 切分按日期（UTC）：最后 test_days 天测试、再往前 val_days 天验证，其余训练；一场的所有局面在同一份。
 - 解析在多个进程里并行（一个赛季约 90 万场，单进程要 10 分钟）。
 """
@@ -14,7 +15,7 @@ import os
 import sqlite3
 import time
 from collections import Counter, deque
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from datetime import date
@@ -60,11 +61,12 @@ def _parse_chunk(rows: list[tuple[str, str]]) -> tuple[list[tuple], Counter]:
     return out, dropped
 
 
-def _read_rows(db_path: Path, season: str) -> Iterable[list[tuple[str, str]]]:
+def _read_rows(db_path: Path, season: str, servers: Sequence[str] = SERVERS) -> Iterable[list[tuple[str, str]]]:
     """只读打开采集库（采集可能还在写），按块读出 (服务器, raw)。"""
     conn = sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True, timeout=60)
     try:
-        cur = conn.execute("SELECT server, raw FROM battles WHERE server IN (?, ?) AND season = ?", (*SERVERS, season))
+        marks = ",".join("?" * len(servers))
+        cur = conn.execute(f"SELECT server, raw FROM battles WHERE server IN ({marks}) AND season = ?", (*servers, season))
         while rows := cur.fetchmany(CHUNK):
             yield rows
     finally:
@@ -167,10 +169,16 @@ class Dataset:
                                  rule=rule, rule_category=cat)
 
 
-def build(db_path: Path | None = None, *, season: str = SEASON, until: str | None = None, workers: int | None = None,
+def build(db_path: Path | None = None, *, season: str = SEASON, until: str | None = None,
+          servers: Sequence[str] = SERVERS, exclude: Iterable[str] = (), workers: int | None = None,
           progress: Callable[[int, int], None] | None = None) -> Dataset:
-    """从采集库建快照。until：只要这一天（UTC，含）以前的对局；progress(已读, 已收) 每块调一次。"""
+    """从采集库建快照。until：只要这一天（UTC，含）以前的对局；servers：只读这些服；exclude：去掉含这些英雄
+    （编号）的对局；progress(已读, 已收) 每块调一次。"""
     db_path = db_path or default_db_path()
+    servers = [s for s in SERVERS if s in servers]
+    if not servers:
+        raise ValueError(f"servers 只能是 {', '.join(SERVERS)}")
+    exclude = set(exclude)
     started = time.time()
     kept: list[tuple] = []
     dropped: Counter = Counter()
@@ -185,6 +193,8 @@ def build(db_path: Path | None = None, *, season: str = SEASON, until: str | Non
         for row in out:
             if until and row[2] > until:
                 dropped["截止日之后"] += 1
+            elif exclude and (hit := exclude.intersection(row[3])):
+                dropped[f"含 {'、'.join(sorted(hit))}"] += 1
             else:
                 kept.append(row)
         if progress:
@@ -193,7 +203,7 @@ def build(db_path: Path | None = None, *, season: str = SEASON, until: str | Non
     # 手动限制在途的块数：Executor.map 会先把整个库读进内存
     with ProcessPoolExecutor(workers) as pool:
         pending: deque = deque()
-        for rows in _read_rows(db_path, season):
+        for rows in _read_rows(db_path, season, servers):
             pending.append(pool.submit(_parse_chunk, rows))
             if len(pending) >= workers * 3:
                 collect(pending.popleft().result())
@@ -219,7 +229,8 @@ def build(db_path: Path | None = None, *, season: str = SEASON, until: str | Non
         first_mover=np.array([r[11] for r in kept], dtype=np.int8),
     )
     ds.meta = {
-        "season": season, "until": until, "built": time.strftime("%Y-%m-%d %H:%M:%S"), "db": str(db_path),
+        "season": season, "until": until, "servers": servers, "exclude": sorted(exclude),
+        "built": time.strftime("%Y-%m-%d %H:%M:%S"), "db": str(db_path),
         "read": read, "kept": n, "dropped": dict(dropped.most_common()), "seconds": round(time.time() - started, 1),
         "first_day": ds.day_str(ds.day.min()) if n else None, "last_day": ds.day_str(ds.day.max()) if n else None,
         "per_server": {s: int((ds.server == i).sum()) for i, s in enumerate(SERVERS)},

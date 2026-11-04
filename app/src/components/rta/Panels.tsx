@@ -173,21 +173,22 @@ export function InfoBar({ draft, options, advice }: { draft: Draft; options: Rta
   const head = d?.phase === "ban" && d.ban ? banHeadline(d.ban, draft.bans.mine) : null;
   const win = head ? head.win : d?.win;
   const first = head ? head.first : d?.first?.mine ?? null;
+  // 加上先动概率后 1280 宽放不下一行（B14h）：1440 以下去掉三个文字标签，1200 以下再去掉手数
   return (
     <div className="panel flex flex-none flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2 text-sm max-[1199px]:gap-x-2 max-[1199px]:px-3">
-      <span className="text-xs text-muted max-[1199px]:hidden">段位</span>
+      <span className="text-xs text-muted max-[1439px]:hidden">段位</span>
       <RankIcon code={draft.setup.grades[0]} size={28} />
       <span className="text-xs text-faint">vs</span>
       <RankIcon code={draft.setup.grades[1]} size={28} />
       {sep}
-      <span className="text-xs text-muted max-[1199px]:hidden">开战规则</span>
+      <span className="text-xs text-muted max-[1439px]:hidden">开战规则</span>
       <span title={hasRule ? `开战规则：${rule?.desc ?? ""}` : "开战规则：无"}>{hasRule ? rule?.label ?? "—" : "无"}</span>
       {sep}
-      <span className="text-xs text-muted max-[1199px]:hidden">预禁</span>
+      <span className="text-xs text-muted max-[1439px]:hidden">预禁</span>
       <Faces codes={draft.prebans.mine} size={26} />
       <Faces codes={draft.prebans.theirs} size={26} />
       {sep}
-      <span className="num text-muted">{draft.picks.length} / {PICKS}</span>
+      <span className="num text-muted max-[1199px]:hidden">{draft.picks.length} / {PICKS}</span>
       <span className="flex-1" />
       {d && d.unknown.length > 0 && (
         <Tag tone="warn" title={d.unknown.map(name).join("、")}>{`模型没见过：${d.unknown.length} 名`}</Tag>

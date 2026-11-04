@@ -14,6 +14,8 @@ export interface RtaModelInfo {
   /** 速度表信息；还没有速度表（先动概率不可用）时是 null */
   speed: Record<string, unknown> | null;
   options: RtaOptions;
+  /** 主模型里有的英雄（B14h）：RTA 助手只放这些，模型没训练进的只在图鉴里看 */
+  codes: string[];
 }
 
 export interface RtaHeroPrior {
@@ -143,7 +145,8 @@ export interface AdviseBody {
 export interface PrebanBody {
   side: Side;
   grades: [string | null, string | null];
-  rule: string;
+  /** null = 没有开战规则 */
+  rule: string | null;
   fixed?: string | null;
 }
 
@@ -158,6 +161,12 @@ export interface Latest<T> {
 }
 
 /** 胜率等比例：0.5612 → "56.1%" */
+/** 只留模型里有的英雄（B14h 用户意见：模型没训练进的英雄不放进 RTA 助手）。 */
+export function inModel<T extends { code: string }>(heroes: readonly T[], codes: readonly string[]): T[] {
+  const set = new Set(codes);
+  return heroes.filter((h) => set.has(h.code));
+}
+
 export const pct1 = (p: number) => `${(p * 100).toFixed(1)}%`;
 export const pct0 = (p: number) => `${Math.round(p * 100)}%`;
 

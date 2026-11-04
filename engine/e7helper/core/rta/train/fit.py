@@ -47,6 +47,9 @@ class TrainConfig:
     warmup: int = 500  # 预热步数
     train_eval: int = 50_000  # 每轮在这么多场训练数据上用评估模式算一次胜率损失（看训练 / 验证差距），0 = 不算
     unk_rate: float = 0.02  # 训练时把英雄换成 UNK 的概率
+    # 训练时把开战规则换成「不知道」的概率（B14h）：只用海外数据后训练集里没有「不知道」（原来只有国服是），
+    # 这样「不知道」学到的是各条规则的平均，CLI / 接口默认的 unknown 才有意义
+    rule_unknown_rate: float = 0.1
     min_picks: int = 30
     test_days: int = 7
     val_days: int = 7
@@ -204,6 +207,10 @@ def train(ds: Dataset, cfg: TrainConfig, *, out_dir: Path | None = None, stop: t
                 if cfg.unk_rate > 0:
                     swap = (torch.rand(h.shape, device=device) < cfg.unk_rate) & (h >= encode.FIRST_HERO)
                     h = torch.where(swap, torch.full_like(h, encode.UNK), h)
+                if cfg.rule_unknown_rate > 0:
+                    hide = torch.rand(len(c), device=device) < cfg.rule_unknown_rate
+                    c = c.clone()
+                    c[:, 2] = torch.where(hide, torch.full_like(c[:, 2], encode.RULE_UNKNOWN), c[:, 2])
                 for group in opt.param_groups:
                     group["lr"] = _lr_at(step, total, cfg)
                 win_loss, pick_ce, _, _ = nets.losses(model, h, c, yy, size)

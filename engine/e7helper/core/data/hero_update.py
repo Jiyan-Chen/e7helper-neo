@@ -13,6 +13,10 @@ e7.wiki（国服中文站，B13 审核后用户同意用它的公开数据）：
   slug 就是 Fribbels 的 `_id`。角色列表里的更新时间没变就不重新下载。
 e7.wiki 连不上时只更新 Fribbels 那部分，名字用 Fribbels 的简中名。
 
+刚出的英雄 Fribbels 往往要晚几天才有（B14h：兔女郎名侦探茉萝），e7.wiki 角色列表里有、Fribbels 还没有的
+`c` 开头英雄用 e7.wiki 详情里的英文名 / 属性补上（`UpdateResult.wiki_only`），头像用 e7.wiki 的
+`static/avatar/<编号>_s.webp`（转成 PNG）；Fribbels 有了以后自动换成 Fribbels 的数据。
+
 随包数据也用这里生成：`e7helper heroes --update --bundled`（开发用，写进 assets/data/heroes/）。
 """
 
@@ -50,6 +54,7 @@ ICON_PATH = "data/cachedimages/{code}_s.png"
 WIKI_CARDS_URL = "https://admin.e7.wiki/api/open/epicseven/hero/card-list"
 WIKI_ASSETS = "https://assets2.e7.wiki"
 WIKI_HERO_PATH = "/static/heroes/{slug}.json"
+WIKI_AVATAR = WIKI_ASSETS + "/static/avatar/{code}_s.webp"
 WIKI_ARTIFACTS_URL = "https://admin.e7.wiki/api/open/epicseven/artifact/artifact-list"
 WIKI_ARTIFACT_ICON = WIKI_ASSETS + "/arts/assets/item_arti/{icon}.png"
 STATS_KEY = "lv60SixStarFullyAwakened"
@@ -146,6 +151,35 @@ def convert(herodata: dict, zh: dict, cards: dict[str, dict] | None = None) -> t
     return [out[c] for c in sorted(out)], missing
 
 
+def wiki_hero(card: dict, raw: dict) -> Hero:
+    """e7.wiki 角色列表的一张卡片 + 这名英雄的详情 JSON → Hero（Fribbels 还没有的新英雄用）。
+    卡片的属性 / 职业 / 星级 / 星座 / slug 和 Fribbels 的叫法一样（B14h 核对过全部 389 名）；属性没有战斗力。"""
+    name = str(card["name"]).strip()
+    raw_stats = raw.get("stats") or {}
+    return Hero(
+        code=card["face_id"], name=name, name_en=str(raw.get("nameEn") or "").strip() or str(card["code"]),
+        aliases=_aliases(card, name), element=card["attribute"], role=card["role"], rarity=int(card["rarity"]),
+        zodiac=card.get("zodiac") or "", slug=str(card["code"]), source="wiki",
+        stats={k: raw_stats[k] for k in STAT_KEYS if isinstance(raw_stats.get(k), (int, float))},
+    )
+
+
+def _wiki_only(cards: dict[str, dict], known: set[str], fetch: Fetch) -> list[Hero]:
+    """e7.wiki 有、Fribbels 还没有的英雄（只收 c 开头的）；详情下载失败的这次先不加。"""
+    out = []
+    for code, card in sorted(cards.items()):
+        if code in known or not code.startswith(HERO_CODE_PREFIX):
+            continue
+        if not all(card.get(k) for k in ("name", "code", "attribute", "role", "rarity")):
+            continue
+        try:
+            raw = json.loads(fetch(WIKI_ASSETS + WIKI_HERO_PATH.format(slug=card["code"])))
+            out.append(wiki_hero(card, raw if isinstance(raw, dict) else {}))
+        except (UpdateError, ValueError, KeyError, TypeError) as e:
+            log.warning("e7.wiki 新英雄 %s 的详情下载失败，这次先不加：%s", code, e)
+    return out
+
+
 def convert_artifacts(artifactdata: dict, zh: dict, wiki: list[dict] | None = None) -> dict[str, dict]:
     """Fribbels 的神器数据 + 简中翻译 → 编号 → {name, name_en, icon?}。
 
@@ -180,6 +214,7 @@ class UpdateResult:
     icons: int = 0  # 新下载的头像数
     icon_failed: list[str] = field(default_factory=list)
     missing_names: list[str] = field(default_factory=list)  # 没有中文名、先用英文名的
+    wiki_only: list[str] = field(default_factory=list)  # Fribbels 还没有、用 e7.wiki 数据补上的（B14h）
     details: int = 0  # 新下载 / 更新的详情数
     detail_icons: int = 0
     detail_failed: list[str] = field(default_factory=list)
@@ -251,16 +286,24 @@ def update_heroes(target: Path, current: HeroFile | None, *, fetch: Fetch | None
 
     heroes, missing = convert(herodata, zh, cards)
     old = {h.code: h for h in (current.heroes if current else [])}
-    if not heroes or len(heroes) < len(old) * MIN_KEEP_RATIO:
-        raise UpdateError(f"下载的数据只有 {len(heroes)} 名英雄（现有 {len(old)} 名），没有覆盖")
-    if not cards and old:
-        # e7.wiki 没连上：沿用现有的中文名和昵称，别因为这次缺数据把它们改回 Fribbels 的
+    n_old = sum(h.source != "wiki" for h in old.values())  # 和现有的 Fribbels 数据比（e7.wiki 补的不算）
+    if not heroes or len(heroes) < n_old * MIN_KEEP_RATIO:
+        raise UpdateError(f"下载的数据只有 {len(heroes)} 名英雄（现有 {n_old} 名），没有覆盖")
+    fribbels = {h.code for h in heroes}
+    if cards:
+        heroes += _wiki_only(cards, fribbels, fetch)
+    elif old:
+        # e7.wiki 没连上：沿用现有的中文名和昵称，别因为这次缺数据把它们改回 Fribbels 的；
+        # 以前从 e7.wiki 补上的新英雄（Fribbels 还没有）也留着
         heroes = [h.model_copy(update={"name": old[h.code].name, "aliases": old[h.code].aliases})
                   if h.code in old else h for h in heroes]
+        heroes += [h for c, h in old.items() if c not in fribbels and h.source == "wiki"]
         missing = [en for en in missing if not any(h.name_en == en and h.name != en for h in heroes)]
+    heroes.sort(key=lambda h: h.code)
 
     res = UpdateResult(changed=False, total=len(heroes), missing_names=missing, wiki_error=wiki_error,
-                       updated=current.updated if current else "")
+                       updated=current.updated if current else "",
+                       wiki_only=[h.code for h in heroes if h.source == "wiki"])
     # 详情先更新：发布日期来自详情，要写进 heroes.json（列表按发布日期排序，不用读详情文件）
     if cards:
         _update_details(target, dirs, fetch, heroes, cards, res, icons)
@@ -334,6 +377,8 @@ def _update_icons(target: Path, dirs: Sequence[Path], fetch: Fetch, heroes: list
         except UpdateError as e:
             log.warning("头像下载失败 %s：%s", h.code, e)
             png = b""
+        if not png.startswith(b"\x89PNG"):  # Fribbels 还没有（刚出的英雄）：用 e7.wiki 的
+            png = _wiki_avatar(fetch, h.code)
         if not png.startswith(b"\x89PNG"):
             res.icon_failed.append(h.code)
             streak += 1
@@ -341,6 +386,23 @@ def _update_icons(target: Path, dirs: Sequence[Path], fetch: Fetch, heroes: list
         streak = 0
         _write_atomic(target / ICONS_DIR / f"{h.code}.png", png)
         res.icons += 1
+
+
+def _wiki_avatar(fetch: Fetch, code: str) -> bytes:
+    """e7.wiki 的头像（webp，112×112）→ PNG；没有 / 解不开返回 b""。"""
+    import cv2
+    import numpy as np
+
+    try:
+        data = fetch(WIKI_AVATAR.format(code=code))
+    except UpdateError as e:
+        log.warning("e7.wiki 头像下载失败 %s：%s", code, e)
+        return b""
+    img = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_UNCHANGED)
+    if img is None:
+        return b""
+    ok, buf = cv2.imencode(".png", img)
+    return buf.tobytes() if ok else b""
 
 
 def _update_details(target: Path, dirs: Sequence[Path], fetch: Fetch, heroes: list[Hero],

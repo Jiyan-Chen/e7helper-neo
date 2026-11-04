@@ -88,6 +88,7 @@ class Hero(BaseModel):
     stats: dict[str, int | float] = Field(default_factory=dict, description="60 级 6 星满觉醒的基础属性（不含装备）")
     slug: str = Field("", description="Fribbels / e7.wiki 用的英文 id，例如 solitaria-of-the-snow")
     released: str = Field("", description="发布日期 YYYY-MM-DD（e7.wiki 详情的 releaseDate），没有的为空")
+    source: str = Field("", description="空 = Fribbels 的数据；wiki = Fribbels 还没有、从 e7.wiki 补的新英雄（B14h）")
 
 
 class HeroFile(BaseModel):
@@ -100,7 +101,8 @@ class HeroFile(BaseModel):
 def dump_hero_file(file: HeroFile) -> str:
     """写盘格式：一名英雄一行，方便看 git diff。"""
     head = json.dumps(file.model_dump(exclude={"heroes"}), ensure_ascii=False)[:-1]
-    rows = ",\n".join("  " + json.dumps(h.model_dump(), ensure_ascii=False) for h in file.heroes)
+    rows = ",\n".join("  " + json.dumps(h.model_dump(exclude={"source"} if not h.source else None), ensure_ascii=False)
+                      for h in file.heroes)
     return f'{head}, "heroes": [\n{rows}\n]}}\n'
 
 

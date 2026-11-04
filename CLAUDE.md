@@ -39,9 +39,9 @@ E7_DEVICE_TESTS=1 python -m uv run pytest -m device   # 真机测试（需 MuMu 
 python -m uv run e7helper doctor | bench | screenshot | tap X Y | modules | run <id> | heroes [词]
 python -m uv run e7helper serve [--no-connect]       # API 服务（B08），端口和 token 见 %LOCALAPPDATA%\e7helper\api.json
 python -m uv run e7helper rta probe | crawl | report # RTA 对局采集（B14a，开发用），库在 F:\e7helper-data\rta\crawl.sqlite（E7_RTA_DB 可改）
-python -m uv run e7helper rta dataset | model --check | predict | sim   # RTA 模型（B14b）：建快照、随包模型核对、试算、终端模拟 BP
+python -m uv run e7helper rta dataset | model --check | predict | sim   # RTA 模型（B14b）：建快照（B14h 起只用国际服，`--exclude` 去掉还没养成的新英雄）、随包模型核对、试算、终端模拟 BP
 python -m uv run e7helper rta advise --side F ... | preban | priors | audit   # RTA 选秀推荐（B14c）：推荐、预禁、生成 priors.json、验收统计
-python -m uv run e7helper rta first --mine ... --theirs ... | herostats | speed | crawl --backfill   # 先动概率（B14d1）：试算、官方能力值快照、生成 speed.json、国服补开局行动条（采集前先问用户）
+python -m uv run e7helper rta first --mine ... --theirs ... | herostats | speed | crawl --backfill   # 先动概率（B14d1）：试算、官方能力值快照、生成 speed.json（B14h 起默认国际服）、国服补开局行动条（采集前先问用户）
 python -m uv run --group train e7helper rta train | eval | export | watch   # 训练（要 torch；GPU 用 .venv-rocm，见 tools/setup_rocm_venv.ps1）
 ```
 - 装了 `--group train` 后，再跑不带它的 `uv sync` 会把 torch 删掉。

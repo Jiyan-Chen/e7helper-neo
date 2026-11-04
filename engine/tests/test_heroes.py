@@ -540,6 +540,52 @@ def test_update_wiki_down_keeps_names(tmp_path):
     assert {h.code: h.name for h in read_hero_file(tmp_path / "heroes.json").heroes}["c1191"] == "梅铃"
 
 
+MORO_CARD = {"face_id": "c2187", "code": "bunny-girl-great-detective-moro", "name": "兔女郎名侦探茉萝",
+             "nicknames": "moluo,茉萝", "attribute": "light", "role": "assassin", "rarity": 5, "zodiac": "maiden",
+             "update_time": "2026-10-30 14:26:23"}
+
+
+def _moro_fetch(herodata=None):
+    """e7.wiki 有、Fribbels 还没有的新英雄（B14h）：详情里有英文名 / 属性 / 发布日期，头像只有 e7.wiki 的 webp。"""
+    import cv2
+    import numpy as np
+
+    f = _wiki_fetch(herodata or _herodata_with_slugs(), cards=[*CARDS, MORO_CARD])
+    f.files[hero_update.WIKI_ASSETS + "/static/heroes/bunny-girl-great-detective-moro.json"] = json.dumps(
+        {**WIKI_RAW, "code": MORO_CARD["code"], "nameEn": "Bunny Girl Great Detective Moro", "releaseDate": "2026-10-29",
+         "stats": {"atk": 1075, "chc": 0.15, "def": 487, "hp": 5562, "spd": 128, "unknown": 1}},
+        ensure_ascii=False).encode()
+    ok, webp = cv2.imencode(".webp", np.full((112, 112, 4), 200, np.uint8))
+    f.files[hero_update.WIKI_AVATAR.format(code="c2187")] = webp.tobytes()
+    return f
+
+
+def test_update_wiki_only_hero(tmp_path):
+    res = update_heroes(tmp_path, None, fetch=_moro_fetch())
+    assert res.wiki_only == ["c2187"] and "c2187" in res.added and res.icon_failed == []
+    moro = {h.code: h for h in read_hero_file(tmp_path / "heroes.json").heroes}["c2187"]
+    assert (moro.name, moro.name_en, moro.element, moro.role, moro.rarity, moro.zodiac) == (
+        "兔女郎名侦探茉萝", "Bunny Girl Great Detective Moro", "light", "assassin", 5, "maiden")
+    assert moro.stats == {"atk": 1075, "hp": 5562, "def": 487, "spd": 128, "chc": 0.15}  # 没有战斗力
+    assert moro.released == "2026-10-29" and moro.aliases == ["moluo", "茉萝"]
+    assert moro.slug == MORO_CARD["code"] and moro.source == "wiki"
+    assert (tmp_path / "icons" / "c2187.png").read_bytes().startswith(b"\x89PNG")  # webp 转成了 PNG
+
+    # e7.wiki 没连上：以前补上的新英雄留着
+    file = read_hero_file(tmp_path / "heroes.json")
+    res2 = update_heroes(tmp_path, file, fetch=FakeFetch(_herodata_with_slugs()))
+    assert res2.wiki_error and not res2.changed and res2.wiki_only == ["c2187"]
+
+    # Fribbels 有了：换成 Fribbels 的数据（有战斗力）
+    data = _herodata_with_slugs()
+    data["Bunny Girl Great Detective Moro"] = {**_fribbels("Bunny Girl Great Detective Moro", "c2187",
+                                                           role="assassin"), "_id": MORO_CARD["code"]}
+    res3 = update_heroes(tmp_path, file, fetch=_moro_fetch(data))
+    assert res3.wiki_only == [] and res3.modified == ["c2187"]
+    moro = {h.code: h for h in read_hero_file(tmp_path / "heroes.json").heroes}["c2187"]
+    assert moro.name == "兔女郎名侦探茉萝" and moro.stats["cp"] == 22755 and moro.source == ""
+
+
 def test_update_keeps_release_without_detail(tmp_path):
     update_heroes(tmp_path, None, fetch=_wiki_fetch(_herodata_with_slugs()))
     file = read_hero_file(tmp_path / "heroes.json")

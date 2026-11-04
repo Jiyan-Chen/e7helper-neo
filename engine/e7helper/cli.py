@@ -588,6 +588,8 @@ def heroes_cmd(
             console.print(f"新增：{', '.join(res.added)}")
         if res.missing_names:
             _warn(f"没有中文名（先用英文名）：{', '.join(res.missing_names)}")
+        if res.wiki_only:
+            console.print(f"Fribbels 还没有、用 e7.wiki 数据补上的：{', '.join(res.wiki_only)}")
         if res.icon_failed:
             _warn(f"头像下载失败：{', '.join(res.icon_failed)}")
         if res.wiki_error:
@@ -771,13 +773,26 @@ def _latest_dataset(path: Path | None) -> Path:
 def rta_dataset(
     until: Annotated[Optional[str], typer.Option("--until", help="只要这一天（UTC，含）以前的对局，例如 2026-10-23")] = None,
     season: Annotated[str, typer.Option("--season", help="赛季代码")] = "pvp_rta_ss21",
+    servers: Annotated[str, typer.Option("--servers", help="用哪些服的对局（逗号分隔）；B14h 起只用海外")] = "global",
+    exclude: Annotated[str, typer.Option("--exclude", help="去掉含这些英雄的对局（编号 / 中文名，逗号分隔），例如刚出、还没养成的新英雄")] = "",
     out: Annotated[Optional[Path], typer.Option("--out", "-o", help="快照路径，默认 datasets/<赛季>-<截止日>.npz")] = None,
     db: Annotated[Optional[Path], typer.Option("--db", help="采集库路径，默认 F:\\e7helper-data\\rta\\crawl.sqlite")] = None,
     show: Annotated[Optional[Path], typer.Option("--show", help="不建新的，只看这个快照的概况")] = None,
 ) -> None:
     """建训练数据快照（B14b）：解析、过滤、编码采集库里一个赛季的对局，存成 npz。"""
+    import re
+
+    from e7helper.core.data import heroes as hero_db
     from e7helper.core.rta import dataset as rds
 
+    server_list = [s.strip() for s in servers.split(",") if s.strip()]
+    if not server_list or any(s not in rds.SERVERS for s in server_list):
+        _fail(f"--servers 只能是 {', '.join(rds.SERVERS)}")
+        raise typer.Exit(2)
+    # 刚出的英雄随包英雄数据里可能还没有，编号直接收
+    words = [w.strip() for w in exclude.replace("，", ",").split(",") if w.strip()]
+    excluded = [w for w in words if re.fullmatch(r"c\d+", w)]
+    excluded += _rta_codes(hero_db(), ",".join(w for w in words if w not in excluded))
     if show:
         ds = rds.Dataset.load(show)
         path = show
@@ -790,12 +805,13 @@ def rta_dataset(
                 last[0] = time.time()
                 console.print(f"[dim]{datetime.now():%H:%M:%S}[/] 已读 {read}，收下 {kept}")
 
-        ds = rds.build(db, season=season, until=until, progress=progress)
+        ds = rds.build(db, season=season, until=until, servers=server_list, exclude=excluded, progress=progress)
         ds.save(path)
     info = rds.summary(ds)
     meta = info["meta"]
     console.print(f"快照 {path}（{path.stat().st_size / 1e6:.1f} MB）：{meta['season']}，{meta['first_day']} ~ "
                   f"{meta['last_day']}，读 {meta['read']} 场、收下 {meta['kept']}，用时 {meta['seconds']} 秒")
+    console.print(f"服：{meta.get('servers', list(rds.SERVERS))} · 去掉含这些英雄的：{meta.get('exclude') or '无'}")
     console.print(f"去掉的：{meta['dropped']}")
     console.print(f"每服：{meta['per_server']} · 较低一方的段位：{info['grade_mix']}")
     table = Table("份", "场数", "双方 ≥ 优胜者", "日期", "先手胜率", "每服")
@@ -843,6 +859,7 @@ def rta_train(
     schedule: Annotated[str, typer.Option("--schedule", help="cosine（余弦退火）/ constant（预热后恒定，grokking 实验用）")] = "cosine",
     batch: Annotated[int, typer.Option("--batch", help="每批几场")] = 512,
     lr: Annotated[float, typer.Option("--lr", help="学习率")] = 2e-3,
+    rule_unknown: Annotated[float, typer.Option("--rule-unknown", help="训练时把开战规则换成「不知道」的概率（B14h）")] = 0.1,
     device: Annotated[str, typer.Option("--device", help="auto / cuda / cpu")] = "auto",
     full: Annotated[bool, typer.Option("--full", help="全量重训：不留验证 / 测试，跑满 --epochs（校准用 --calibration-from）")] = False,
     calibration_from: Annotated[Optional[str], typer.Option("--calibration-from", help="全量重训时用这个 run（切分训练的）在验证集上拟合的校准参数")] = None,
@@ -868,7 +885,8 @@ def rta_train(
             _fail(f"{src.name} 没有校准参数，先跑 e7helper rta eval {src.name}")
             raise typer.Exit(1)
     cfg = fit.TrainConfig(name=name or "", model=model, d=d, layers=layers, lam=lam, k=k, epochs=epochs,
-                          patience=patience, weight_decay=weight_decay, schedule=schedule, batch=batch, lr=lr, device=device, full=full, calibration=calibration,
+                          patience=patience, weight_decay=weight_decay, schedule=schedule, batch=batch, lr=lr,
+                          rule_unknown_rate=rule_unknown, device=device, full=full, calibration=calibration,
                           max_steps=max_steps, dataset=str(path))
     run = fit.runs_dir() / cfg.run_name()
     console.print(f"训练 {cfg.run_name()} · 数据 {path.name}（{len(ds)} 场）· 设备 {fit.pick_device(device)} → {run}")
@@ -1069,7 +1087,7 @@ def rta_predict(
     ban_first: Annotated[str, typer.Option("--ban-first", help="先手方被禁的那名")] = "",
     ban_second: Annotated[str, typer.Option("--ban-second", help="后手方被禁的那名")] = "",
     grades: Annotated[str, typer.Option("--grades", help="双方段位，如 legend,emperor")] = "",
-    rule: Annotated[str, typer.Option("--rule", help="开战规则：unknown（国服）/ none / opening_rule_desc_tid")] = "unknown",
+    rule: Annotated[str, typer.Option("--rule", help="开战规则：unknown（不知道）/ none（没有）/ opening_rule_desc_tid")] = "unknown",
     k: Annotated[int, typer.Option("--top", help="下一手列几名")] = 8,
 ) -> None:
     """用随包模型试算一个局面（B14b）：先手方胜率 + 下一手最可能的英雄。"""
@@ -1249,7 +1267,7 @@ def rta_advise(
     ban_mine: Annotated[str, typer.Option("--ban-mine", help="我方禁了对方哪名")] = "",
     ban_theirs: Annotated[str, typer.Option("--ban-theirs", help="对方禁了我方哪名")] = "",
     grades: Annotated[str, typer.Option("--grades", help="我方,对方 的段位，如 legend,emperor")] = "",
-    rule: Annotated[str, typer.Option("--rule", help="开战规则：unknown（国服）/ none / opening_rule_desc_tid")] = "unknown",
+    rule: Annotated[str, typer.Option("--rule", help="开战规则：unknown（不知道）/ none（没有）/ opening_rule_desc_tid")] = "unknown",
     pool: Annotated[str, typer.Option("--pool", help="我的英雄池（逗号分隔；不填 = 不限制）")] = "",
     speeds: Annotated[str, typer.Option("--speed", help="我方英雄的速度「名字=速度」逗号分隔（不填用英雄池里存的）")] = "",
     top: Annotated[int, typer.Option("--top", help="推荐几个")] = 8,
@@ -1325,7 +1343,8 @@ def rta_first(
 
 @rta_app.command("herostats")
 def rta_herostats(
-    season: Annotated[Optional[str], typer.Option("--season", help="赛季代码，默认国服当前赛季")] = None,
+    server: Annotated[str, typer.Option("--server", "-s", help="cn / global；B14h 起只用海外")] = "global",
+    season: Annotated[Optional[str], typer.Option("--season", help="赛季代码，默认这个服的当前赛季")] = None,
     grades: Annotated[str, typer.Option("--grades", help="段位（逗号分隔），默认大师到传说 6 档")] = "",
     min_picks: Annotated[int, typer.Option("--min-picks", help="只取随包 priors.json 里被选 ≥ 这么多次的英雄")] = 300,
     max_age: Annotated[float, typer.Option("--max-age", help="这么多小时内取过的跳过")] = 72.0,
@@ -1342,15 +1361,18 @@ def rta_herostats(
     if any(g not in herostats.GRADES for g in grade_list):
         _fail(f"--grades 只能是 {', '.join(herostats.GRADES)}")
         raise typer.Exit(2)
+    if server not in ("cn", "global"):
+        _fail("--server 只能是 cn / global")
+        raise typer.Exit(2)
     stop = threading.Event()
-    client = OfficialClient("cn", interval=interval, sleep=stop.wait)
+    client = OfficialClient(server, interval=interval, sleep=stop.wait)
     season = season or client.current_season()
     picks = priors.load().picks if priors.available() else {}
     codes = sorted((c for c, n in picks.items() if n >= min_picks), key=lambda c: -picks[c])
     if not codes:
         _fail("没有英雄可取（priors.json 不在？）")
         raise typer.Exit(1)
-    console.print(f"国服 {season} · {len(codes)} 名英雄 × {len(grade_list)} 个段位（Ctrl+C 停止）")
+    console.print(f"{'国服' if server == 'cn' else '海外'} {season} · {len(codes)} 名英雄 × {len(grade_list)} 个段位（Ctrl+C 停止）")
     started = time.time()
 
     def progress(done: int, total: int) -> None:
@@ -1369,22 +1391,36 @@ def rta_herostats(
 @rta_app.command("speed")
 def rta_speed(
     season: Annotated[str, typer.Option("--season", help="赛季代码")] = "pvp_rta_ss21",
-    servers: Annotated[str, typer.Option("--servers", help="用哪些服的开局行动条拟合（逗号分隔）")] = "cn",
+    servers: Annotated[str, typer.Option("--servers", help="用哪些服的开局行动条拟合（逗号分隔；能力值快照用第一个服的）；B14h 起只用海外")] = "global",
     out: Annotated[Optional[Path], typer.Option("--out", help="输出路径，默认随包 assets/data/rta/speed.json")] = None,
     db: Annotated[Optional[Path], typer.Option("--db", help="采集库 sqlite 路径")] = None,
+    no_clean: Annotated[bool, typer.Option("--no-clean", help="不去掉官方直方图里「没算装备」的低档尖峰（B14h）")] = False,
     as_json: Annotated[bool, typer.Option("--json", help="输出拟合报告 JSON")] = False,
 ) -> None:
     """生成速度表（B14d1，开发用）：官方能力值快照 + 有开局行动条的对局 → speed.json（290 以上的尾部、开局随机、验收）。"""
     from e7helper.core.data import heroes as hero_db
     from e7helper.core.rta import herostats, speed
 
-    hists = herostats.speed_histograms(season, db_path=db)
+    server_list = [s.strip() for s in servers.split(",") if s.strip()]
+    if not server_list or any(s not in ("cn", "global") for s in server_list):
+        _fail("--servers 只能是 cn / global")
+        raise typer.Exit(2)
+    hists = herostats.speed_histograms(season, server=server_list[0], db_path=db)
     if not hists:
-        _fail(f"采集库里没有 {season} 的能力值快照：先 e7helper rta herostats")
+        _fail(f"采集库里没有 {server_list[0]} {season} 的能力值快照：先 e7helper rta herostats -s {server_list[0]}")
         raise typer.Exit(1)
-    matches = herostats.energy_matches(season, servers=[s.strip() for s in servers.split(",") if s.strip()], db_path=db)
+    matches = herostats.energy_matches(season, servers=server_list, db_path=db)
     console.print(f"能力值快照 {len(hists)} 名英雄 · 有开局行动条的对局 {len(matches)} 场")
-    res = speed.build(hists, matches, season=season)
+    hdb = hero_db()
+    base = None if no_clean else {c: h.stats["spd"] for c in hists if (h := hdb.get(c)) and h.stats.get("spd")}
+    res = speed.build(hists, matches, season=season, base_speeds=base)
+    if base is not None:
+        top = sorted((r for r in res["removed"] if r["grade"] == "legend"), key=lambda r: -r["share"])[:8]
+        console.print(f"去掉「没算装备」的低档尖峰：{len(res['removed'])} 份直方图（英雄 × 段位）；传说段最多的："
+                      + "、".join(f"{_rta_name(hdb, r['code'])} {r['share']:.0%}" for r in top))
+        back = sorted(res["restored"], key=lambda r: -r["share"])[:8]
+        console.print(f"按开局行动条补回真的慢速配装：{len(res['restored'])} 份；最多的："
+                      + "、".join(f"{_rta_name(hdb, r['code'])}（{r['grade']}）{r['share']:.0%}" for r in back))
     path = out or speed.bundled_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(res["data"], ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
@@ -1393,11 +1429,11 @@ def rta_speed(
         print(json.dumps({"fit": res["data"]["fit"], "check": res["check"][:40], "residuals": res["residuals"][:20]},
                          ensure_ascii=False, indent=1))
         return
-    hdb = hero_db()
     fit = res["data"]["fit"]
     console.print(f"写入 {path} · 开局随机 0–{res['data']['jitter']:g}%（各取值的 log loss {fit['jitter_scores'] or '对局不够，没选'}）")
-    for name, key in (("加尾部", "test"), ("不加尾部", "test_without_tail")):
-        e = fit[key]
+    for name, key in (("加尾部", "test"), ("不加尾部", "test_without_tail"), ("只去掉低档、不加尾部", "test_cleaned_only"),
+                      ("官方原样、不加尾部", "test_raw_hists")):
+        e = fit.get(key) or {}
         if e.get("matches"):
             console.print(f"验收（{name}，最近 {e['matches']} 场）：先手方先动 log loss {e['log_loss']}（瞎猜 0.693），"
                           f"命中 {e['accuracy']:.1%}，先动英雄猜中 {e['hero_hit']:.1%}")
@@ -1416,7 +1452,7 @@ def rta_speed(
 def rta_preban(
     side: Annotated[Optional[str], typer.Option("--side", help="我方是 F（先手）/ S（后手）；不知道就不填")] = None,
     grades: Annotated[str, typer.Option("--grades", help="我方,对方 的段位")] = "",
-    rule: Annotated[str, typer.Option("--rule", help="开战规则：unknown（国服）/ none / opening_rule_desc_tid")] = "unknown",
+    rule: Annotated[str, typer.Option("--rule", help="开战规则：unknown（不知道）/ none（没有）/ opening_rule_desc_tid")] = "unknown",
     fixed: Annotated[str, typer.Option("--fixed", help="固定预禁这一名，只推荐另一名")] = "",
     top: Annotated[int, typer.Option("--top", help="推荐几组")] = 8,
     budget: Annotated[float, typer.Option("--budget", help="最多算几秒")] = 4.0,
@@ -1546,7 +1582,7 @@ def rta_audit(
 def rta_sim(
     side: Annotated[Optional[str], typer.Option("--side", help="你是 F（先手）还是 S（后手），默认随机")] = None,
     grades: Annotated[str, typer.Option("--grades", help="我方,对方 的段位，如 emperor,warlord")] = "emperor,emperor",
-    rule: Annotated[str, typer.Option("--rule", help="开战规则：unknown（国服）/ none / opening_rule_desc_tid")] = "unknown",
+    rule: Annotated[str, typer.Option("--rule", help="开战规则：unknown（不知道）/ none（没有）/ opening_rule_desc_tid")] = "unknown",
     opponent: Annotated[str, typer.Option("--opponent", help="ai（模型按常见选法选）/ manual（对手也由你输入，复盘用）")] = "ai",
     pool: Annotated[str, typer.Option("--pool", help="我的英雄池（逗号分隔；不填 = 不限制）")] = "",
     seed: Annotated[Optional[int], typer.Option("--seed", help="随机种子（对手的预禁和选人）")] = None,

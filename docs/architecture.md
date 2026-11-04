@@ -160,12 +160,12 @@ db.artifacts()                # 神器编号 → {name（中文）, name_en}
 |---|---|
 | `hero_db.py` | `Hero` / `HeroFile`（heroes.json 的格式）/ `HeroDB`（查询、头像、详情、详情图标、神器表；按「用户数据目录 → 随包目录」查找）；`load_heroes()` 读两份 heroes.json、用 `updated` 较新的一份；属性 / 职业 / 星座 / 套装 / 属性类型的国服叫法（套装名对照游戏核对过）、四件套列表 |
 | `hero_detail.py` | `HeroDetail`（技能、灵魂燃烧、效果、强化、倍率、专属装备、角色奉献、群阵影响的位置 `devotion_slot`）；e7.wiki 数据 → 我们的格式（富文本：段落 → 片段，`hl` 是游戏里高亮的词） |
-| `hero_update.py` | 联网更新（只收 `c` 开头的编号，`m` 开头的愚人节怪物英雄不要）：Fribbels 的英雄 / 神器数据 + 简中翻译（`MirrorFetcher` 依次试 raw.githubusercontent.com、jsDelivr），e7.wiki 的角色列表（中文名、昵称、更新时间）和详情；有变化才写，详情只在 e7.wiki 更新时间变了时重下，缺的头像 / 图标才下；新数据比现有少一成以上就不覆盖；e7.wiki 连不上时只更新 Fribbels 那部分 |
+| `hero_update.py` | 联网更新（只收 `c` 开头的编号，`m` 开头的愚人节怪物英雄不要）：Fribbels 的英雄 / 神器数据 + 简中翻译（`MirrorFetcher` 依次试 raw.githubusercontent.com、jsDelivr），e7.wiki 的角色列表（中文名、昵称、更新时间）和详情；有变化才写，详情只在 e7.wiki 更新时间变了时重下，缺的头像 / 图标才下；新数据比现有少一成以上就不覆盖（只和 Fribbels 来源的比）；e7.wiki 连不上时只更新 Fribbels 那部分。B14h：e7.wiki 有、Fribbels 还没有的新英雄用 e7.wiki 详情的英文名 / 满级属性补上（`Hero.source = "wiki"`，头像用 e7.wiki 的 `static/avatar/<编号>_s.webp` 转 PNG），e7.wiki 连不上时以前补上的留着，Fribbels 有了就换成 Fribbels 的 |
 | `hero_builds.py` | 配装方案：Fribbels 配装库（`getBuilds`，POST 英雄英文名）的玩家配装 → 套装组合占比 / 属性中位数 / 常用神器；带速度套的组合分前 10% / 前 25%（按速度最快的那部分）/ 全部三行，不带的按速度三等分成快 / 中 / 慢三档，每行份数 + 属性中位数；装备分换算成装备均分（÷6）；缓存一天（带格式版本） |
 
 - **数据来源**（B13 用户确认）：
   - [Fribbels Epic 7 Optimizer](https://github.com/fribbels/Fribbels-Epic-7-Optimizer)：`data/cache/herodata.json`（编号、属性、职业、星级、星座、60 级 6 星满觉醒属性、slug）、`artifactdata.json`（神器编号）、`data/locales/zh/translation.json`（简中名）、头像 `data/cachedimages/<编号>_s.png`；配装库接口 `krivpfvxi0.execute-api.us-west-2.amazonaws.com/dev/getBuilds`。
-  - e7.wiki（国服中文站）：`admin.e7.wiki/api/open/epicseven/hero/card-list`（中文名、昵称、更新时间）、`assets2.e7.wiki/static/heroes/<slug>.json`（技能等详情）和其中引用的图标。中文名优先用 e7.wiki 的。
+  - e7.wiki（国服中文站）：`admin.e7.wiki/api/open/epicseven/hero/card-list`（中文名、昵称、更新时间）、`assets2.e7.wiki/static/heroes/<slug>.json`（技能等详情）和其中引用的图标。中文名优先用 e7.wiki 的。Fribbels 还没有的新英雄另取详情 JSON 的 `nameEn` / `stats` 和 `assets2.e7.wiki/static/avatar/<编号>_s.webp`（B14h；属性 / 职业 / 星级 / 星座 / slug 和 Fribbels 对现有英雄全部一致，详情里没有战斗力）。
   - 神器图标：先官方指南站 `static.smilegatemegaport.com/.../wearingStatus/images/artifact/<编号>_ico.png`，新神器那里没有，再用 e7.wiki 的 `assets2.e7.wiki/arts/assets/item_arti/<图标名>.png`（图标名来自 e7.wiki 神器列表 `admin.e7.wiki/api/open/epicseven/artifact/artifact-list`，更新时存进 `artifacts.json`）；第一次显示时下载缓存。
   - 属性 / 职业 / 套装图标：从游戏截图裁的，放在 GUI 的 `app/src/assets/game/`（见「GUI」）。
 - **存储**：随包 `engine/assets/data/heroes/`：`heroes.json`（一名英雄一行）、`icons/<编号>.png`、`details/<编号>.json` + `details/icons/`（技能 / 效果 / 专属装备图标，文件名沿用 e7.wiki 的）、`artifacts.json`（一件一行）、`overrides.json`。联网更新写 `<数据目录>/data/heroes/`（同样结构，只放新的）；配装缓存 `builds/<编号>.json`、神器图标缓存 `artifacts/<编号>.png` 也在这里。详情两边都有时用 e7.wiki 更新时间新的那份。`overrides.json` 按编号改中文名、加别名，加载时套用，更新不会冲掉。
@@ -231,17 +231,17 @@ m.evaluate(states)                                 # 一批局面一次前向：
 | 文件 | 职责 |
 |---|---|
 | `encode.py` | 训练和运行共用的编码：一场 = 17 个 token（0 CTX、1–4 预禁、5–14 选秀、15–16 双方被禁的），类型 / 位置编号、注意力掩码（0–4 互相可见、之后因果）、12 个局面的读出位置（已选 n 手读 4 + n，后禁后读 16）、选人标签（连选 2 名的回合两名各 0.5）；`Vocab`（英雄词表 + 开战规则表，没见过的规则按类别兜底）、`DraftState`（运行时的局面）、`pick_mask` |
-| `dataset.py` | 训练数据快照：采集库一个赛季 → 多进程解析、过滤（解析失败 / `m` 开头英雄 / 0 回合 / 截止日之后）、编码 → `F:\e7helper-data\rta\datasets\<赛季>-<截止日>.npz`；按日期切分（最后 7 天测试、再前 7 天验证）；`state(row, n)` 还原某场在局面 n 的 `DraftState` |
+| `dataset.py` | 训练数据快照：采集库一个赛季 → 多进程解析、过滤（解析失败 / `m` 开头英雄 / 0 回合 / 截止日之后 / 不在 `servers` 里的服 / 含 `exclude` 里英雄的对局，预禁和被禁也算）、编码 → `F:\e7helper-data\rta\datasets\<赛季>-<截止日>.npz`；按日期切分（最后 7 天测试、再前 7 天验证）；`state(row, n)` 还原某场在局面 n 的 `DraftState` |
 | `metrics.py` | log loss、Brier、AUC、ECE / 校准表、选人命中前 k |
 | `model.py` | 运行时：读 `model.onnx` + `meta.json`（词表、温度、训练数据、测试指标）+ `parity.json`；`win` / `next_picks` / `evaluate` / `check()`（parity 核对，冻结引擎的冒烟测试用） |
 | `train/`（不随包，要 torch） | `nets.py`（混合结构 `HybridTransformer`、纯 Transformer 和三个基线：只看段位的逻辑回归、英雄强度、因子分解机）、`fit.py`（训练循环、按验证集的胜率保存最好的一轮、可选早停、恒定 / 余弦学习率、每轮在训练子集上同口径评估、Platt 校准，过程写进 run 目录）、`evaluate.py`（按局面 / 子集的指标、热度基线）、`export.py`（ONNX + parity）、`watch.py`（训练曲线页） |
 
-- 输入：一场选秀的 17 个 token，每个 = 英雄嵌入 + 类型嵌入（7 种）+ 位置嵌入；CTX 再加双方段位档 + 开战规则（海外四条 / 无 / 国服「未知」）。胜率一律是**先手方**赢的概率。
+- 输入：一场选秀的 17 个 token，每个 = 英雄嵌入 + 类型嵌入（7 种）+ 位置嵌入；CTX 再加双方段位档 + 开战规则（海外四条 / 无 / 「不知道」）。B14h 起训练集只有海外，没有「不知道」：训练时以 10% 的概率把规则换成「不知道」（`TrainConfig.rule_unknown_rate`，`rta train --rule-unknown`），学到的是各条规则的平均。胜率一律是**先手方**赢的概率。
 - 网络（随包的是混合结构，d = 128、3 层、λ = 1，66.5 万参数）：胜率 logit = 因子分解机（强度 + 搭档 + 克制，显式去掉被禁的英雄）+ Pre-LN Transformer（手写注意力）的 `Linear(d→1)`；选人头 `Linear(d→d)` 后乘英雄嵌入的转置（共享权重）。损失 = 12 个局面胜率 BCE 平均 + λ × 10 个局面选人交叉熵平均；默认跑满整个余弦周期、按验证集的胜率损失保存最好的一轮（`--patience N` 打开早停，学习率降到峰值三成以下才计数）；验证集上每个局面拟合 Platt 校准（σ(a · logit + b)，存在 `meta.json` 的 `calibration`）。纯 Transformer 打不过因子分解机、也几乎用不上后禁信息，所以加了宽部分（B14b 审核记录）。架构图：[reviews/B14b-architecture.html](reviews/B14b-architecture.html)。
-- 测试集（10-17 ~ 10-23，22.3 万场，后禁后）：log loss 0.6166、AUC 0.717、ECE 0.005（因子分解机 0.6236 / 0.708）；选人前 5 命中 0.601（热度 0.411）。
-- 训练数据：只用本赛季（ss21，两服合并），全段位（段位作为输入）。随包模型 = 用切分选好结构和轮数后、全量数据重训的那个。
+- 测试集（B14h：10-26 ~ 11-01，17.4 万场，只有海外，后禁后，切分训练的模型）：log loss 0.6125、AUC 0.721、ECE 0.005（因子分解机 0.6208 / 0.713）；选人前 5 命中 0.610（热度 0.416）。随包的全量模型和 B14b 的全量模型在两者都没见过的 11-02（2 万场）上：0.6099 / 0.6124。B14b 时（10-17 ~ 10-23，两服）是 0.6166 / 0.717。
+- 训练数据：只用本赛季、**只用海外**（B14h 用户意见：国服已同步海外，数据质量不如海外），全段位（段位作为输入）；还没得到开发的新英雄整场去掉（`--exclude`，B14h 是侦探茉萝 c2187）。模型词表里没有的英雄（这些新英雄、训练集里选过不到 30 次的）不进 RTA 助手和英雄池，只在图鉴里看（B14h 用户意见）。B14h 前的随包模型是两服合并的。随包模型 = 用切分选好结构和轮数后、全量数据重训的那个。
 - 训练（开发机）：`python -m uv sync --group train`（CPU 版 torch，测试和导出用）；GPU 训练环境 `engine/.venv-rocm`（`tools/setup_rocm_venv.ps1`：AMD 官方 Windows ROCm 版 torch 2.9，只有 Python 3.12，装在 `engine/.python`），本机 RX 7700 XT 比 CPU 快约 16 倍。网格 `tools/rta_grid.ps1`。
-- CLI（开发用）：`rta dataset [--until]`、`rta train -m lr0|lr|fm|transformer|hybrid [--d --layers --lambda] [--full --calibration-from <run>]`、`rta watch`（曲线页 `http://127.0.0.1:47900/`）、`rta eval <run>...`、`rta export <run> [--metrics-from]`、`rta model [--check]`、`rta predict --first ... --second ...`（中文名试算）、`rta sim [--side F|S] [--opponent ai|manual]`（终端里模拟 BP：一层估算的推荐 + 后禁矩阵；候选按选人头先验筛，见 B14b 审核记录「冷门英雄外推」）。run 目录 `F:\e7helper-data\rta\runs\<名字>\`。
+- CLI（开发用）：`rta dataset [--until] [--servers global] [--exclude 编号或名字,...]`、`rta train -m lr0|lr|fm|transformer|hybrid [--d --layers --lambda] [--rule-unknown 0.1] [--full --calibration-from <run>]`、`rta watch`（曲线页 `http://127.0.0.1:47900/`）、`rta eval <run>...`、`rta export <run> [--metrics-from]`、`rta model [--check]`、`rta predict --first ... --second ...`（中文名试算）、`rta sim [--side F|S] [--opponent ai|manual]`（终端里模拟 BP：一层估算的推荐 + 后禁矩阵；候选按选人头先验筛，见 B14b 审核记录「冷门英雄外推」）。run 目录 `F:\e7helper-data\rta\runs\<名字>\`。
 - 冻结：`e7engine.spec` 的 `collect_submodules` 跳过 `e7helper.core.rta.train`，`excludes` 加 torch / onnx / onnxscript；冒烟测试跑 `rta model --check` 并检查产物里没有 torch。
 
 ### 选秀推荐（B14c）
@@ -264,14 +264,14 @@ adv.preban(None, grades=("legend", "emperor"))        # 预禁推荐（先后手
   4. 选秀最后几手（先手第 8–9 手、后手第 10 手，以及后手第 6–7 手的第 3 层）搜到后禁：叶子 = 后禁博弈的值。
   5. **少见选择的高估修正**：一手的单步变化里对出手方有利的部分，有 (1 − 可信度) 当成高估，从这一手之后的所有结果里扣掉；可信度 = q / (q + 1.5%) × min(1, 被选次数 / 1000)，q = 这一手的常见度；我方后面几手的可信度不超过候选那一手的。依据见 reviews/B14c.md「少见选择的高估」。
   6. 截止时间（默认 5 秒）：第 2 / 3 层按名次一个个算，时间不够就停（`stats.truncated`），没算到的按浅一层排在后面。
-- **第二个模型**（切分训练的 hy-d128-L3-lam1，没见过最后 14 天）：列出的推荐重算到第 2 层（同样的回应和修正），`second.spread` = 两个模型的预期之差，|差| ≥ 5 个百分点标 `uncertain`。两个模型词表不同（265 / 248 名），局面统一按主模型编号拼、推理时换成各自的。
+- **第二个模型**（切分训练的那个，没见过最后 14 天；B14h 起是 b14h-hy-d128-L3-lam1）：列出的推荐重算到第 2 层（同样的回应和修正），`second.spread` = 两个模型的预期之差，|差| ≥ 5 个百分点标 `uncertain`。两个模型词表不同（B14h：274 / 260 名），局面统一按主模型编号拼、推理时换成各自的。
 - **轮到对手**：对手可能的选择（两手回合 = 先验前 16 名两两组合）按先验排，带之后我方胜率；威胁 = 之后我方胜率最低的 3 个。
 - **后禁**（10 手选完）：4 × 4 矩阵（行 = 我方禁对方哪名，列 = 对方禁我方哪名，保护位除外）；每行 最坏 / 预期（对方按后禁率）/ 分数（½ / ½），推荐分数最高的行；另给纳什均衡混合策略。
 - **预禁**：我方候选 = 数据里（我方这个先后手）占比 ≥ 0.2% 的组合或前 60 组（可以 `fixed` 一名）；对手 = 对方那个先后手最常见的 100 组按频率加权；胜率读模型「已选 0 手」的局面（不用选人头模拟）；分数 = ½ 预期 + ½ 最坏（对手最常见的 10 组里最差的）；先后手不知道时两种各算一半。
-- 返回的胜率一律是**我方**的；`close` = 和第一名差 < 1 个百分点（差距不明显）；`rare` = 训练时被选 < 1000 次；`pool_only` = 只因为英雄池才放进来的冷门英雄；`trust` = 这一手的可信度。
-- 接口（`api/rta.py`，要 token）：`GET /api/rta/model`（B14e1 起带 `options.rules`：开战规则列表）、`POST /api/rta/advise {side, state, pool?, top?, budget?}`（局面不合法 422 `invalid_state`，detail 是中文问题列表）、`POST /api/rta/preban {side?, grades, rule, fixed?, top?, budget?}`（结果里 `theirs`、每组的 `share` / `worst_vs` 都以**我方**的先后手为键）、`GET /api/rta/priors`（B14e1：每名英雄被选次数、是否冷门、后禁率、预禁比例）；没有模型 503 `no_model`。
+- 返回的胜率一律是**我方**的；`close` = 和第一名差 < 1 个百分点（差距不明显）；`rare` = 训练时被选 < 1000 次；`pool_only` = 只因为英雄池才放进来的冷门英雄；`trust` = 这一手的可信度。`unknown` = 模型没见过的英雄（按 UNK 算）：局面里的和英雄池里的（B14h 前只列英雄池里的；页面上选不到这些英雄，命令行 / 接口直接传时才有）；后禁矩阵的行列编号从局面里取，模型没见过的英雄也有编号。预禁的组合只用模型里有的英雄（`_Preban.pairs`，B14h）。
+- 接口（`api/rta.py`，要 token）：`GET /api/rta/model`（B14e1 起带 `options.rules`：开战规则列表；B14h 起带 `codes`：主模型里有的英雄）、`POST /api/rta/advise {side, state, pool?, top?, budget?}`（局面不合法 422 `invalid_state`，detail 是中文问题列表）、`POST /api/rta/preban {side?, grades, rule, fixed?, top?, budget?}`（结果里 `theirs`、每组的 `share` / `worst_vs` 都以**我方**的先后手为键）、`GET /api/rta/priors`（B14e1：每名英雄被选次数、是否冷门、后禁率、预禁比例）；没有模型 503 `no_model`。
 - CLI：`rta advise --side F --pre-mine … --pre-theirs … --mine … --theirs … [--ban-mine/--ban-theirs] [--grades 我方,对方] [--pool …] [--json]`、`rta preban [--side] [--fixed]`、`rta sim`（B14c 起用这里的搜索）、`rta priors`、`rta audit`（开发用）。
-- 每次重训（新赛季）：`rta export` 主模型 + 切分模型（`--out assets/data/rta/second`）→ `rta priors`；可信度的常数要用新的切分模型在测试期重新量一次（审核记录里的脚本做法）。
+- 每次重训（新赛季）：`rta export` 主模型 + 切分模型（`--out assets/data/rta/second`）→ `rta priors`；可信度的常数要用新的切分模型在测试期重新量一次：`python -m uv run python tools/rta_trust.py <快照.npz> assets/data/rta/second`（B14h 写成脚本）。
 
 **采集**（`e7helper rta crawl`，开发用）：种子 → 采他们的对局 → 对手段位 ≥ `--min-grade`（默认优胜者）就入队。国服一名玩家往前翻到这个赛季的头（最多 `--max-pages` 页，一页里没有新对局也停）；海外每人只有最近 100 场，隔 `--refresh-hours`（默认 20）再采；国服翻完的玩家也按这个间隔回来看第 1 页。没采过的、段位高的、离种子近的优先。每个服默认 1 次 / 秒（另加 0–0.3 秒抖动）、每天 2 万次上限、连续出错 10 次就停；取不到的玩家（多半是 405）隔一段时间再试，失败 3 次不再采。对局表只存 `strip()` 后的字段，**玩家编号只在队列表里**，采集库不进 git、不随包。
 - 补开局行动条（B14d1）：已有、但原始字段里没有 `energyGauge` 的对局再采到时整行换成新的（视角可能换成另一方），算「补」，翻页时和新对局一样会让国服继续往前翻；`rta crawl --backfill` 开跑时把国服这些赛季的玩家重置到第 1 页，整个赛季重翻一遍（约 3–4 千次请求）。海外只有最近 100 场，采集器每 20 小时回来看第 1 页时顺带补上。
@@ -290,12 +290,13 @@ speed.annotate(out, state, "F", table, pool.load().speeds)   # 在 advise 结果
 | `pool.py` | 英雄池 `<数据目录>/modules/rta_draft/pool.json`：`{heroes: [{code, speed?}]}`，速度 50–400，同一名英雄留最后一次 |
 
 - **速度**：290 以下用官方英雄分析的速度直方图（按对局双方各自的段位；没有这个段位用最近的，一样近取高的；段位不知道按人数混合；没有这名英雄用这个段位所有英雄的合计并标 `no_data`）。290 以上官方只给占比，用开局行动条反推：同场 290 以上占比 < 20%、第 1 档占比 < 30%、行动条 20–95 的英雄当参照（至少 3 名），经过的时间 = 中位数（(行动条 − 开局随机的一半) ÷ 参照的速度中位数），再反推其余英雄的速度；290 以上四档每名英雄每个段位一份，向这个段位的合计收缩（强度 20 场），段位合计再向先验（方案阶段 198 场的粗估）收缩（强度 50 场）。核对：反推出 ≥ 290 的比例应接近官方 290 以上的占比。有限速英雄（赫尔赛蒂）的对局、有开局加行动条的英雄不参与反推。
+- **直方图清理**（B14h）：官方直方图里混着「没算装备」的记录，表现为基础速度或基础 × 1.25（只算速度套）那一档的孤立尖峰（传说段修里 55%）。`clean_hists`：低档（下边界 ≤ 基础 × 1.25 + 5，基础速度取英雄数据库的满觉醒属性）里最高一档比紧挨的上一档多 5 倍以上时，低档整块清零；`refit_low`：用清理后的表从开局行动条反推这名英雄在这个段位的速度，低于低档上界的比例（至少 30 次，向 0 收缩 20 次）就是真的不堆速度的配装（宝剑君主伊赛丽亚八成低于 150），低档按官方原来的比例恢复到这个占比。依据见 reviews/B14h.md。
 - **开局规则**：智武首次战斗开始 +30% 行动条；赫尔赛蒂（PvP）把其他英雄的速度限制在她的 90% 以下。天秤之主是别人加行动条时跟着加，开局不触发（用户意见），不算。没登记的开局效果靠 `rta speed` 的残差（行动条比速度应有的高出多少）找。
 - **开局随机**：每名英雄 0–`jitter`% 行动条，默认 5%（社区说法）；`rta speed` 在拟合用的对局上比 0 / 2.5 / 5 / 7.5 / 10，比 5% 好不到 0.002 的 log loss 就不换（合成数据里各取值只差约 0.001，从「谁先动」上很难分辨）。
 - **先动概率**：每名英雄抽速度（英雄池里填了速度的用填的），到 100 的时间 = (100 − 开局行动条) ÷ 速度，最先到的先动；4000 次抽样，同样的输入结果相同。
 - **不进胜率模型**（用户意见）：有的阵容抢到一速胜率差几十个点，有的几乎不差，不能在模型外统一修正；推荐和后禁矩阵只在旁边显示先动概率。ss22 重训时把「谁先动」作为模型输入（B14g）。
-- 接口：`POST /api/rta/first {mine, theirs, grades?, speeds?}`（没有速度表 503 `no_speed_data`）、`GET/PUT /api/rta/pool`；`POST /api/rta/advise` 不传 `pool` 时用保存的英雄池（`use_saved_pool: false` 不限制），结果加 `first`（目前双方在场的，`partial` = 还不是最终 4 打 4）、每个推荐的 `first`、后禁矩阵的 `ban.first`（每格 4 打 4），都是我方先动的概率；`GET /api/rta/model` 加 `speed`（速度表信息）。
-- 生成速度表（开发用）：`rta herostats [--season] [--grades] [--min-picks 300]`（国服、每名英雄每个段位一次请求，约 200 名 × 6 段 ≈ 35 分钟，72 小时内取过的跳过）→ `rta speed [--season] [--servers cn]`（前 80% 有行动条的对局拟合、最近的 20%（最多 3000 场）验收，打印核对表和残差）→ `assets/data/rta/speed.json`。试算：`rta first --mine … --theirs … [--grades] [--speed 名字=速度]`；`rta advise` 也显示先动概率（`--speed`）。
+- 接口：`POST /api/rta/first {mine, theirs, grades?, speeds?}`（没有速度表 503 `no_speed_data`）、`GET/PUT /api/rta/pool`（B14h 起只收模型里有的英雄：PUT 有别的 422 `not_in_model`，GET / advise 跳过以前存的）；`POST /api/rta/advise` 不传 `pool` 时用保存的英雄池（`use_saved_pool: false` 不限制），结果加 `first`（目前双方在场的，`partial` = 还不是最终 4 打 4）、每个推荐的 `first`、后禁矩阵的 `ban.first`（每格 4 打 4），都是我方先动的概率；`GET /api/rta/model` 加 `speed`（速度表信息）。
+- 生成速度表（开发用）：`rta herostats [--season] [--grades] [--min-picks 300] [-s global]`（每名英雄每个段位一次请求，约 200 名 × 6 段 ≈ 35 分钟，72 小时内取过的跳过）→ `rta speed [--season] [--servers global] [--no-clean]`（直方图用第一个服的；前 80% 有行动条的对局拟合、最近的 20%（最多 3000 场）验收，打印核对表、残差、清理掉和补回的低档，验收另给「官方原样」「只去掉」两种对照）→ `assets/data/rta/speed.json`。B14h 起两步都默认海外。试算：`rta first --mine … --theirs … [--grades] [--speed 名字=速度]`；`rta advise` 也显示先动概率（`--speed`）。
 - 快照（`rta dataset`）带上 10 手各自的开局行动条（按选秀顺序，-1 = 没有）和 `first_mover`（1 = 先手方先动、0 = 后手方、-1 = 不知道），旧快照读出来是 -1；给 B14g 用。
 
 ## API 层 `e7helper.api`（B08）
@@ -435,10 +436,10 @@ pnpm typecheck
 **英雄图鉴（B13）**：左侧菜单「我的模板」下面，正式版也有。头像网格（属性色边框 + 右下角属性图标），默认按发布日期新的在前（没有日期的最后），搜索（中文名 / 英文名 / 昵称 / 编号）、属性 / 职业 / 星级筛选（`lib/heroes.ts` 的 `filterHeroes`，排序同引擎 `search`），右上「检查更新」。宽页面，不显示右侧栏。点开是 `components/heroes/HeroDetailDialog.tsx`（参照 e7.wiki 的角色详情）：角色信息（星级、属性 / 职业 / 星座、发布日期、简介、角色奉献、专属装备（主属性 + 三选一的效果，不显示背景说明）、满级属性；昵称只用来搜索，不显示）/ 技能详情（描述、灵魂燃烧、专属装备效果、技能特效、强化、倍率）/ 配装方案（Fribbels 玩家配装的套装组合、属性中位数表（带速度套的分前 10% / 前 25% / 中位，不带的分快 / 中 / 慢三档）、常用神器）。
 - **游戏图标**（B13 审核后加）：属性 `element_<键>`、职业 `role_<键>`、套装 `set_<键>`、属性类型 `stat_<键>`（cp / atk / def / hp / spd / chc / chd / eff / efr / dac）、等级 `grade_<b…sss>`、刻印 `devotion_self` / `devotion_team_<位置>`（群阵影响的位置，1 右、2 下、3 上、4 左）的 PNG 放在 `src/assets/game/`，是从游戏截图里裁出来、按按钮底色抠成透明的；`lib/gameIcons.ts` 用 `import.meta.glob` 按文件名收集，`gameIcon(name)` 没有时返回 undefined（调用方退回色块 / 文字）。
 
-**RTA 助手（B14e1）**：左侧菜单「英雄图鉴」下面，`#/rta`，宽页面。五步手动模式：准备（双方段位、先后手、开战规则（双方都在优胜者以上才有））→ 预禁（`/rta/preban`；只填了一名时按它 `fixed`）→ 选秀（`/rta/advise`：轮到我方给推荐卡，轮到对方给对方可能的选择）→ 后禁（`advise` 的 `ban` 矩阵）→ 结果。布局参考 e7rtabot.com/draft（用户意见）：准备是一张居中卡片（段位 5 个图标：挑战者及以下合成一项、按挑战者发给引擎；开战规则和先后手是分段按钮）；预禁 / 选秀右边一整列是英雄网格（`HeroGrid`，按 `/rta/priors` 的被选次数排，预禁时按预禁比例）；选秀左边是信息条 + 双方阵容并排 + 推荐卡，正在选的格子里直接放前 3 名；后禁 / 结果阵容每队一行，下面是矩阵 / 结果。段位图标是 `assets/game/rank_<段位>.png`（从游戏截图裁，没有时写段位名）。
+**RTA 助手（B14e1）**：左侧菜单「英雄图鉴」下面，`#/rta`，宽页面。五步手动模式：准备（双方段位、先后手、开战规则（双方都在优胜者以上才有））→ 预禁（`/rta/preban`；只填了一名时按它 `fixed`）→ 选秀（`/rta/advise`：轮到我方给推荐卡，轮到对方给对方可能的选择）→ 后禁（`advise` 的 `ban` 矩阵）→ 结果。布局参考 e7rtabot.com/draft（用户意见）：准备是一张居中卡片（段位 5 个图标：挑战者及以下合成一项、按挑战者发给引擎；开战规则和先后手是分段按钮；有一方不到优胜者时开战规则发 `null`（没有规则，海外这种局就是这么记的），B14h 前发的是「不知道」）；预禁 / 选秀右边一整列是英雄网格（`HeroGrid`，只放模型里有的英雄（`/rta/model` 的 `codes`，`inModel`，B14h 用户意见），按 `/rta/priors` 的被选次数排，预禁时按预禁比例）；选秀左边是信息条 + 双方阵容并排 + 推荐卡，正在选的格子里直接放前 3 名；后禁 / 结果阵容每队一行，下面是矩阵 / 结果。段位图标是 `assets/game/rank_<段位>.png`（从游戏截图裁，没有时写段位名）。
 - 局面（`lib/draft.ts`）按「我方 / 对方」记，整局按顺序存 10 手；发给引擎时 `apiState` 换成先手 F / 后手 S，后禁双方都填了才带上。撤销记录和当前局面在 `lib/draftStore.ts`（zustand，放在页面外，切页面不丢；准备里的段位和先后手记在 localStorage）。
 - 请求（`lib/rta.ts` 的 `useLatest`）：同一时间只发一个，在途时局面变了只记最新的；结果按局面缓存在页面外。引擎同一时间只跑一个搜索，所以前端不能让旧请求排队。
-- 信息条上是「当前胜率」（模型对当前局面的读数），推荐卡上是「预期」（搜索值），两者含义不同（B14e1 审核记录「发现」）；后禁这一步信息条改显示推荐行（已选时是选的那一行）的预期（`banHeadline`，用户意见）。开战规则只有四个按钮：有规则（双方都在优胜者以上）时玩家一定知道是哪条，没选不能开始；每局清空重选。先动概率（`first`）引擎给了才显示，随包没有速度表时整块不出现。
+- 信息条上是「当前胜率」（模型对当前局面的读数），推荐卡上是「预期」（搜索值），两者含义不同（B14e1 审核记录「发现」）；后禁这一步信息条改显示推荐行（已选时是选的那一行）的预期（`banHeadline`，用户意见）。开战规则只有四个按钮：有规则（双方都在优胜者以上）时玩家一定知道是哪条，没选不能开始；每局清空重选。先动概率（`first`）引擎给了才显示（B14h 起随包有速度表）；信息条加上「先动 x%」后 1280 宽放不下一行，1440 以下去掉「段位 / 开战规则 / 预禁」三个文字标签、1200 以下再去掉手数。
 
 **样式**：游戏风（原型见 `docs/prototypes/b09/d-epic.html`），配色和组件类在 `src/index.css`。背景是圣域（进入圣域时 UI 淡入前的一帧，`src/assets/bg_sanctuary.jpg`），用 CSS 压暗。只用系统字体（数字用 Bahnschrift）。
 

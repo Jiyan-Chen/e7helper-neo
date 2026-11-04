@@ -259,14 +259,19 @@ class _Search:
         self.main = _Net(adv.model, state, self.vocab, self.clock)
         self.second = _Net(adv.second, state, self.vocab, self.clock) if adv.second is not None else None
         self.pool = None
+        # 模型没见过的英雄（按 UNK 算）：局面里的（B14h 快照里去掉的新英雄）和英雄池里的
         self.unknown: list[str] = []
+        self.tokens = state.tokens()
+        for code in self.tokens:
+            if code and self.vocab.hero(code) < encode.FIRST_HERO and code not in self.unknown:
+                self.unknown.append(code)
         if pool is not None:
             self.pool = np.zeros(self.vocab.size, dtype=bool)
             for code in pool:
                 i = self.vocab.hero(code)
                 if i >= encode.FIRST_HERO:
                     self.pool[i] = True
-                else:
+                elif code not in self.unknown:
                     self.unknown.append(code)
         self.counts = adv.counts
         self.ban_rates = adv.ban_rates
@@ -578,8 +583,9 @@ class _Search:
         cur = float(d["raw"][0])
         m = d["matrix"][0]
         x, y, v = nash(m)
-        rows = [self.code(i) for i in d["rows"][0]]
-        cols = [self.code(i) for i in d["cols"][0]]
+        # 英雄编号从局面里取：模型没见过的英雄按 UNK 算，从模型编号换不回来
+        picks = self.tokens[encode.PICK_POS:encode.PICK_POS + N]
+        rows, cols = [picks[j] for j in BANNABLE[self.opp]], [picks[j] for j in BANNABLE[self.side]]
         stats = [{"code": rows[i], "worst": float(d["row_worst"][0, i]), "win": float(d["row_exp"][0, i]),
                   "score": float(d["row_score"][0, i])} for i in range(len(rows))]
         sec, sec_cur = None, None
@@ -747,8 +753,9 @@ class Advisor:
             return {"kind": meta.get("kind"), "run": meta.get("run"), "built": meta.get("built"),
                     "heroes": len(m.vocab.heroes), "trained_on": meta.get("trained_on"), "test_n11": tm}
 
+        # codes：主模型里有的英雄（B14h 用户意见：RTA 助手和英雄池只用这些，别的只在图鉴里看）
         return {"model": one(self.model), "second": one(self.second), "priors": self.priors.meta.get("built"),
-                "rare_picks": self.cfg.rare_picks}
+                "rare_picks": self.cfg.rare_picks, "codes": list(self.model.vocab.heroes)}
 
 
 def _with_top(cfg: SearchConfig, top: int | None) -> SearchConfig:
@@ -772,9 +779,14 @@ class _Preban:
                                rule_category=self.rule_category)
         return _Net(model, st, self.vocab, self.clock)
 
+    def pairs(self, role: str) -> list[tuple[tuple[str, str], float]]:
+        """数据里这个先后手的预禁组合，只留模型里有的英雄（B14h 用户意见：模型没训练进的英雄不进 RTA 助手）。"""
+        return [(p, s) for p, s in self.adv.priors.preban_pairs(role)
+                if all(self.vocab.hero(c) >= encode.FIRST_HERO for c in p)]
+
     def candidates(self, role: str) -> list[tuple[str, str]]:
         cfg = self.cfg
-        pairs = self.adv.priors.preban_pairs(role)
+        pairs = self.pairs(role)
         if not self.fixed:
             return [p for i, (p, s) in enumerate(pairs) if s >= cfg.preban_min_share or i < cfg.preban_keep_top]
         share: dict[str, float] = {}
@@ -809,10 +821,10 @@ class _Preban:
                     cands.append(p)
         per_role = {}
         for role in self.roles:
-            opp = self.adv.priors.preban_pairs(other(role))[:cfg.preban_opponents]
+            opp = self.pairs(other(role))[:cfg.preban_opponents]
             wts = np.array([s for _, s in opp])
             per_role[role] = {"theirs": [p for p, _ in opp], "w": wts / wts.sum(), "net": self.net(self.adv.model, role),
-                              "share": dict(self.adv.priors.preban_pairs(role)), "m": []}
+                              "share": dict(self.pairs(role)), "m": []}
         per_cand = sum(len(v["theirs"]) for v in per_role.values())
         step = max(1, cfg.batch * 4 // max(per_cand, 1))
         done = 0
@@ -854,7 +866,7 @@ class _Preban:
                     heroes.append({"code": h, "score": float(score[i]), "win": float(exp[i]), "partner": cands[i][1 - j]})
             if len(heroes) >= cfg.top:
                 break
-        theirs = {r: [{"heroes": list(p), "share": float(s)} for p, s in self.adv.priors.preban_pairs(other(r))[:5]]
+        theirs = {r: [{"heroes": list(p), "share": float(s)} for p, s in self.pairs(other(r))[:5]]
                   for r in self.roles}
         return {"phase": "preban", "side": self.roles[0] if len(self.roles) == 1 else None, "recommend": recs,
                 "heroes": heroes[:cfg.top], "theirs": theirs,

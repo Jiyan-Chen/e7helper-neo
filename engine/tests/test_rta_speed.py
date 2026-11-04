@@ -154,6 +154,55 @@ def test_build_and_evaluate():
     assert tab.tails["t0"]["legend"].sum() == pytest.approx(1.0) and tab.info()["heroes"] == 10
 
 
+def test_clean_hists():
+    """B14h：基础速度到「基础 × 1.25」那几档的孤立尖峰（没算装备）去掉；平滑的慢速配装、高档的配速尖峰不动。"""
+    hists = {
+        "fast": {"legend": [0, 2000, 1, 2, 1, 1, 1, 0, 2, 16000], "champion": [0, 0, 0, 0, 0, 0, 0, 0, 0, 500]},
+        "slow": {"legend": [9000, 16000, 3500, 400, 160, 0, 0, 0, 0, 0]},  # 基础 100：只看 110–130，比上一档少
+        "tuned": {"legend": [0, 0, 0, 0, 0, 1400, 7, 0, 0, 0]},  # 210–230 的配速，不是低档
+        "only": {"legend": [0, 800, 0, 0, 0, 0, 0, 0, 0, 0]},  # 全在低档：去掉就什么都没了，不动
+        "nobase": {"legend": [0, 2000, 0, 0, 0, 0, 0, 0, 0, 100]},
+    }
+    out, removed = speed.clean_hists(hists, {"fast": 129, "slow": 100, "tuned": 102, "only": 120})
+    assert out["fast"]["legend"] == [0, 0, 0, 2, 1, 1, 1, 0, 2, 16000]  # 129 × 1.25 + 5 = 166：110 / 130 / 150 三档
+    assert removed == [{"code": "fast", "grade": "legend", "share": round(2001 / 18008, 4)}]
+    for code in ("slow", "tuned", "only", "nobase"):
+        assert out[code] == hists[code]
+    assert out["fast"]["champion"] == hists["fast"]["champion"]
+
+
+def test_refit_low_restores_real_slow_builds():
+    """去掉的低档按开局行动条反推的低速比例补回：真的慢的补回来，瑕疵不补。"""
+    raw = {"slow": {"legend": [0, 8000, 0, 0, 0, 0, 0, 1000, 500, 500]},  # 基础 110：8 成在 130–150，真的慢
+           "fake": {"legend": [0, 3000, 0, 0, 0, 0, 0, 0, 0, 7000]},  # 3 成在低档，其实都是 290 以上
+           **{f"m{i}": {"legend": one_bin(5)} for i in range(4)}}  # 参照：210–230
+    base = {"slow": 110, "fake": 110}
+    clean, removed = speed.clean_hists(raw, base)
+    assert {r["code"] for r in removed} == {"slow", "fake"}
+    # 每场：参照 4 名行动条 50（210–230 中位 220 → 经过的时间 ≈ (50 − 2.5) / 220），slow 慢（约 140）、fake 快（约 320）
+    t = 47.5 / 220
+    matches = [[EnergyUnit(f"m{i}", "FS"[i % 2], "legend", 50) for i in range(4)]
+               + [EnergyUnit("slow", "F", "legend", round(140 * t + 2.5)), EnergyUnit("fake", "S", "legend", 72)]
+               for _ in range(80)]
+    out, restored = speed.refit_low(raw, clean, removed, matches, base)
+    by = {r["code"]: r for r in restored}
+    assert set(by) == {"slow"} and by["slow"]["n"] == 80
+    assert by["slow"]["share"] == pytest.approx(80 / 100)  # 全部低于 150，向 0 收缩 20 次
+    a = np.array(out["slow"]["legend"])
+    assert a.sum() == pytest.approx(10000) and a[1] == pytest.approx(8000)
+    assert out["fake"]["legend"][1] == 0  # 没补
+    # 反推不到 min_n 次的不补
+    assert speed.refit_low(raw, clean, removed, matches[:20], base)[1] == []
+
+
+def test_build_cleans_and_reports():
+    hists, matches = synthetic(n=600)
+    res = speed.build(hists, matches, season="pvp_rta_ss21", eval_limit=100, base_speeds={})
+    fit = res["data"]["fit"]
+    assert fit["test_raw_hists"] == fit["test_cleaned_only"] == fit["test_without_tail"]  # 没有基础速度：什么都没去掉
+    assert fit["low_removed"] == 0 and res["removed"] == [] and res["restored"] == []
+
+
 def test_load(tmp_path):
     assert speed.load(tmp_path / "none.json") is None
     path = tmp_path / "speed.json"

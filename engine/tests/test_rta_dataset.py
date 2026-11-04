@@ -57,6 +57,27 @@ def test_build_filters_and_sorts(built):
     assert ds.first_wins[cn].tolist() == [0, 1, 0, 1, 0, 1, 0]
 
 
+def test_build_servers_and_exclude(tmp_path):
+    """B14h：只用某些服、去掉含某些英雄（预禁 / 选人都算）的对局，写进 meta。"""
+    db = tmp_path / "crawl.sqlite"
+    conn = connect(db)
+    _insert(conn, "global", battle("g1", fmt="global"))
+    _insert(conn, "global", battle("g2", fmt="global", prebans=(("c9999", "c3002"), ("c3001", "c3003"))))
+    _insert(conn, "global", battle("g3", fmt="global", my=("c9999",) + MY[1:]))
+    _insert(conn, "cn", battle("c1"))
+    conn.commit()
+    conn.close()
+    ds = rds.build(db, servers=["global"], exclude=["c9999"], workers=1)
+    assert len(ds) == 1 and ds.meta["read"] == 3  # 国服的不读
+    assert ds.meta["per_server"] == {"cn": 0, "global": 1}
+    assert ds.meta["dropped"] == {"含 c9999": 2}
+    assert ds.meta["servers"] == ["global"] and ds.meta["exclude"] == ["c9999"]
+    assert "c9999" not in ds.codes
+    assert len(rds.build(db, workers=1)) == 4  # 默认两个服都读、什么都不去掉
+    with pytest.raises(ValueError):
+        rds.build(db, servers=["kr"], workers=1)
+
+
 def test_save_load_roundtrip(built, tmp_path):
     path = tmp_path / "ds.npz"
     built.save(path)

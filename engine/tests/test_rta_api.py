@@ -45,6 +45,7 @@ def test_model_info(client):
     assert d["model"]["kind"] == "fake" and d["second"] is None and d["rare_picks"] == 1000
     rules = d["options"]["rules"]  # B14e1：准备这一步的开战规则按钮
     assert {r["label"] for r in rules} == {"攻击", "防御", "抵抗", "特殊"} and all(r["tid"] and r["desc"] for r in rules)
+    assert d["codes"] == CODES  # B14h：模型里有的英雄，RTA 助手只放这些
 
 
 def test_priors(client, monkeypatch):
@@ -121,6 +122,16 @@ def test_pool_roundtrip_and_validation(client):
     assert d["heroes"] == [{"code": "c06", "speed": None}, {"code": "c05", "speed": 300}] and d["updated"]
     assert client.get("/api/rta/pool").json()["heroes"][1] == {"code": "c05", "speed": 300}
     assert client.put("/api/rta/pool", json={"heroes": [{"code": "c05", "speed": 999}]}).status_code == 422
+
+
+def test_pool_only_takes_heroes_in_model(client):
+    # B14h 用户意见：英雄池里也不要有模型没有的英雄
+    r = client.put("/api/rta/pool", json={"heroes": [{"code": "c05"}, {"code": "c98"}]})
+    assert r.status_code == 422 and r.json()["error"]["code"] == "not_in_model" and r.json()["error"]["detail"] == ["c98"]
+    rpool.save(rpool.Pool(heroes=[{"code": "c05", "speed": 280}, {"code": "c98", "speed": 300}]))  # 以前存的
+    assert client.get("/api/rta/pool").json()["heroes"] == [{"code": "c05", "speed": 280}]
+    d = client.post("/api/rta/advise", json={"side": "F", "state": _state(), "top": 2}).json()
+    assert d["pool"] == ["c05"] and d["unknown"] == []
 
 
 def test_advise_uses_saved_pool(client):

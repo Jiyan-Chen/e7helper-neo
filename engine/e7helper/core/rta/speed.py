@@ -3,6 +3,8 @@
 速度表（随包 `assets/data/rta/speed.json`，`e7helper rta speed` 生成）：
 - 290 以下：官方「英雄分析」按赛季 × 段位 × 英雄的速度直方图（`herostats.py`），口径「60 级 / 6 星满觉醒 /
   穿戴全部装备」，每档 20 速：110–130 … 270–290，最后一档「290 以上」。第 1 档混着很慢的和缺数据的。
+  B14h：直方图里有大量「没算装备」的记录（基础速度到「基础 × 1.25」那几档的孤立尖峰），先去掉（`clean_hists`），
+  再按开局行动条反推的低速比例把真的慢速配装补回（`refit_low`）。
 - 290 以上：官方只给占比，看不到 320、340 的一速。用开局行动条反推（`fit_tails`）：同场速度在中间档的英雄当参照，
   行动条 ≈ 开局随机 + 速度 × 经过的时间，参照英雄的速度已知（直方图中位数），就能算出经过的时间，再用它反推
   290 以上英雄的速度。290 以上再分 290–310 / 310–330 / 330–350 / 350–370 四档，每名英雄每个段位一份，
@@ -58,6 +60,15 @@ ANCHOR_LOW = 0.3
 ANCHOR_ENERGY = (20, 95)
 MIN_ANCHORS = 3
 SAMPLES = 4000
+# 官方直方图里「没算装备」的记录（B14h 用国际服快照时发现）：很多英雄在基础速度到「基础 × 1.25」（只算速度套）
+# 那几档有孤立的尖峰，传说段也有 10%–50%（修里 55%、苏琳 41%），不可能是真实配装。这几档（下边界 ≤ 基础 × 1.25
+# + CLEAN_MARGIN）里最高的一档比紧挨的上一档多 CLEAN_RATIO 倍以上，就整块去掉（`clean_hists`）。高档的配速尖峰
+# （小泡芙 210–230 占 87%）不动。
+CLEAN_RATIO = 5.0
+CLEAN_MARGIN = 5.0
+# 去掉的低档里有真的慢速配装（宝剑君主伊赛丽亚反推中位 130、八成低于 150）：用开局行动条反推的低速比例补回（`refit_low`）
+LOW_MIN = 30  # 这名英雄在这个段位至少反推这么多次才补
+LOW_SHRINK = 20.0  # 低速比例向 0（全是瑕疵）收缩的强度（相当于这么多次）
 
 
 def analysis_grade(grade: str | None) -> str | None:
@@ -374,16 +385,85 @@ def choose_jitter(table: SpeedTable, matches: Sequence[Sequence[EnergyUnit]], ch
     return best, scores
 
 
-def build(hists: dict[str, dict[str, list[int]]], matches: Sequence[Sequence[EnergyUnit]], *, season: str,
-          holdout: float = 0.2, eval_limit: int = 3000) -> dict:
+def _low_bins(base: float | None, margin: float = CLEAN_MARGIN) -> list[int]:
+    """不穿装备也到得了的低档（下边界 ≤ 基础 × 1.25 + margin），不含最后一档。"""
+    return [i for i in range(OFFICIAL_BINS - 1) if base and EDGES[i] <= base * 1.25 + margin]
+
+
+def clean_hists(hists: dict[str, dict[str, Sequence[float]]], base_speeds: dict[str, float], *,
+                ratio: float = CLEAN_RATIO) -> tuple[dict[str, dict[str, list[float]]], list[dict]]:
+    """去掉官方直方图里「没算装备」的低档尖峰（见 CLEAN_RATIO）。base_speeds：英雄的基础速度（英雄数据库的满觉醒属性），
+    没有的不动。返回 (清理后的直方图, 去掉的 [{code, grade, share}])。真的不堆速度的配装也会被去掉，由 `refit_low` 补回。"""
+    out: dict[str, dict[str, list[float]]] = {}
+    removed = []
+    for code, grades in hists.items():
+        low = _low_bins(base_speeds.get(code))
+        out[code] = {}
+        for g, h in grades.items():
+            a = [float(x) for x in h]
+            total, low_sum = sum(a), sum(a[i] for i in low)
+            if low and 0 < low_sum < total and max(a[i] for i in low) > ratio * max(a[low[-1] + 1], 1):
+                removed.append({"code": code, "grade": g, "share": round(low_sum / total, 4)})
+                for i in low:
+                    a[i] = 0.0
+            out[code][g] = a
+    return out, removed
+
+
+def refit_low(raw: dict[str, dict[str, Sequence[float]]], clean: dict[str, dict[str, list[float]]], removed: list[dict],
+              matches: Iterable[Sequence[EnergyUnit]], base_speeds: dict[str, float], *, min_n: int = LOW_MIN,
+              shrink: float = LOW_SHRINK) -> tuple[dict[str, dict[str, list[float]]], list[dict]]:
+    """`clean_hists` 去掉的低档里有多少是真的（不堆速度的配装，例如宝剑君主伊赛丽亚）：用开局行动条反推这名英雄在这个
+    段位的速度，低于低档上界的比例（向 0 收缩，强度 shrink 场；反推不到 min_n 次的当 0）就是低档该有的占比，
+    低档内部按官方原来的比例分，其余档按清理后的比例分。返回 (直方图, 补回的 [{code, grade, share, n}])。"""
+    table = SpeedTable.from_hists(clean, jitter=JITTER)
+    targets = {(r["code"], r["grade"]) for r in removed}
+    codes = {c for c, _ in targets}
+    implied: dict[tuple[str, str], list[float]] = defaultdict(list)
+    for units in matches:
+        if not any(u.code in codes for u in units):
+            continue
+        est = implied_speeds(table, units)
+        for u, sp in zip(units, est or ()):
+            key = (u.code, analysis_grade(u.grade))
+            if sp is not None and key in targets:
+                implied[key].append(sp)
+    out = {c: {g: list(h) for g, h in gs.items()} for c, gs in clean.items()}
+    restored = []
+    for r in removed:
+        code, g = r["code"], r["grade"]
+        low = _low_bins(base_speeds.get(code))
+        sp = implied.get((code, g), [])
+        cut = EDGES[low[-1] + 1]
+        share = sum(x < cut for x in sp) / (len(sp) + shrink) if len(sp) >= min_n else 0.0
+        if share <= 0:
+            continue
+        a = np.asarray(raw[code][g], dtype=float)
+        rest = np.asarray(out[code][g], dtype=float)
+        total = a.sum()
+        new = rest * ((1 - share) * total / rest.sum())
+        new[low] = a[low] * (share * total / a[low].sum())
+        out[code][g] = [round(float(x), 1) for x in new]
+        restored.append({"code": code, "grade": g, "share": round(share, 4), "n": len(sp)})
+    return out, restored
+
+
+def build(hists: dict[str, dict[str, list[float]]], matches: Sequence[Sequence[EnergyUnit]], *, season: str,
+          holdout: float = 0.2, eval_limit: int = 3000, base_speeds: dict[str, float] | None = None) -> dict:
     """官方直方图 + 有行动条的对局（按时间排好）→ speed.json 的内容。
 
     前 (1 − holdout) 的对局拟合尾部、选开局随机，最后 holdout 的对局验收（最多 eval_limit 场）。
+    base_speeds（英雄的基础速度）给了时先去掉「没算装备」的低档尖峰（`clean_hists`），再用拟合用的对局把真的慢速配装
+    补回来（`refit_low`），验收里另给「官方原样」「只去掉」两种（都不加尾部）对照。
     先按默认的开局随机拟合尾部，再带着尾部选开局随机（不带尾部时几名一速的分布一样，选不出来），
     选出来的和默认不同就按它重新拟合尾部。"""
     started = time.time()
     split = int(len(matches) * (1 - holdout))
     fit_on, test_on = list(matches[:split]), list(matches[split:])[-eval_limit:]
+    raw, removed, restored, cleaned = hists, [], [], None
+    if base_speeds is not None:
+        cleaned, removed = clean_hists(raw, base_speeds)
+        hists, restored = refit_low(raw, cleaned, removed, fit_on, base_speeds)
 
     def make(jitter: float, tails: dict) -> dict:
         return {
@@ -401,11 +481,16 @@ def build(hists: dict[str, dict[str, list[int]]], matches: Sequence[Sequence[Ene
             tails = fit_tails(SpeedTable.from_hists(hists, season=season, jitter=jitter), fit_on)
     data = make(jitter, tails)
     final = SpeedTable(data)
-    baseline = evaluate(SpeedTable.from_hists(hists, season=season, jitter=jitter), test_on)
+    no_tail = lambda h: evaluate(SpeedTable.from_hists(h, season=season, jitter=jitter), test_on)  # noqa: E731
     data["fit"] = {"matches": len(matches), "fit_on": len(fit_on), "test_on": len(test_on), "tail_used": tails["used"],
                    "jitter_scores": {str(k): v for k, v in scores.items()}, "test": evaluate(final, test_on),
-                   "test_without_tail": baseline, "seconds": round(time.time() - started, 1)}
-    return {"data": data, "check": tails["check"], "residuals": residuals(final, fit_on)}
+                   "test_without_tail": no_tail(hists)}
+    if cleaned is not None:
+        data["fit"].update(test_raw_hists=no_tail(raw), test_cleaned_only=no_tail(cleaned),
+                           low_removed=len(removed), low_restored=len(restored))
+    data["fit"]["seconds"] = round(time.time() - started, 1)
+    return {"data": data, "check": tails["check"], "residuals": residuals(final, fit_on), "removed": removed,
+            "restored": restored}
 
 
 def bundled_path() -> Path:

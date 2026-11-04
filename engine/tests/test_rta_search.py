@@ -107,6 +107,13 @@ def test_pool_limits_candidates_and_discounts_rare_heroes():
     assert out["unknown"] == ["c99"]
 
 
+def test_unknown_heroes_in_state_are_listed():
+    # B14h：快照里去掉的新英雄选进局面时按 UNK 算，也要列出来（和英雄池里的合在一起，不重复）
+    out = advisor().advise(state(["c98"]), "S", pool=["c05", "c99", "c98"])
+    assert out["unknown"] == ["c98", "c99"]
+    assert advisor().advise(state(["c00"]), "S")["unknown"] == []
+
+
 def test_trust_discounts_gain_by_commonness():
     # 一名常见度低的强英雄：自己那一手的提升被打折，排不到第一
     pop = dict(POP) | {"c03": -6.0}  # c03 比 c00 弱一点，但这里让它很少见
@@ -154,6 +161,14 @@ def test_ban_turn_matrix():
     score = 0.5 * expect.min(axis=1) + 0.5 * expect @ q
     assert b["recommend"] == b["rows"][int(np.argmax(score))]
     assert expect.min() - 1e-9 <= b["nash"]["value"] <= expect.max() + 1e-9
+
+
+def test_ban_matrix_keeps_unknown_heroes():
+    # B14h：模型没见过的英雄（按 UNK 算）在后禁矩阵里也要给出编号，页面才能记下禁了谁
+    picks = ["c98"] + CODES[1:10]  # c98 是先手方第 1 手
+    out = advisor().advise(state(picks), "S")
+    assert out["ban"]["rows"][0] == "c98" and None not in out["ban"]["rows"] + out["ban"]["cols"]
+    assert out["unknown"] == ["c98"]
 
 
 def test_ban_rates_weight_the_expectation():
@@ -228,6 +243,16 @@ def test_preban_candidates_come_from_data():
     assert recs[0]["win"] == pytest.approx(sig(mine + theirs) @ np.array([0.6, 0.4]))
     assert recs[0]["worst"] == pytest.approx(sig(mine + theirs).min())
     assert out["theirs"]["F"][0]["heroes"] == ["c00", "c01"]
+
+
+def test_preban_skips_heroes_not_in_model():
+    # B14h 用户意见：模型没训练进的英雄不进 RTA 助手，预禁推荐和「对方常见预禁」里都不出现
+    m = FakeModel(STRENGTH, POP, preban=0.5)
+    pre = {"F": [["c00", "c98", 70]] + PRE["F"], "S": [["c99", "c01", 70]] + PRE["S"]}
+    out = advisor(m, preban=pre).preban("F", grades=("emperor", "emperor"))
+    assert all("c98" not in r["heroes"] for r in out["recommend"])
+    assert all("c99" not in t["heroes"] for t in out["theirs"]["F"])
+    assert out["recommend"][0]["share"]["F"] == pytest.approx(50 / 170)  # 占比还是按全部数据算
 
 
 def test_preban_fixed_and_unknown_side():

@@ -18,7 +18,7 @@ import { useDraft } from "@/lib/draftStore";
 import { filterHeroes, type Hero, type HeroFilter } from "@/lib/heroes";
 import { qk } from "@/lib/query";
 import {
-  pct0, pct1, useLatest, type Advice, type AdviseBody, type PrebanAdvice, type PrebanBody, type RtaModelInfo, type RtaPriors,
+  inModel, pct0, pct1, useLatest, type Advice, type AdviseBody, type PrebanAdvice, type PrebanBody, type RtaModelInfo, type RtaPriors,
 } from "@/lib/rta";
 import { cn } from "@/lib/utils";
 
@@ -93,7 +93,7 @@ function Draft_({ model, priors }: { model: RtaModelInfo; priors: RtaPriors }) {
   const pickAdvice = advice.fresh && advice.data?.phase === "pick" ? advice.data : undefined;
   const suggest = useMemo(() => slotSuggest(pickAdvice), [pickAdvice]);
   const picker = (
-    <HeroPicker draft={draft} priors={priors} preban={preban.fresh ? preban.data : undefined} advice={pickAdvice}
+    <HeroPicker draft={draft} codes={model.codes} priors={priors} preban={preban.fresh ? preban.data : undefined} advice={pickAdvice}
       onPick={(code) => apply((d) => (step === "preban" ? addPrebanNext(d, code) : addPicks(d, [code])))} />
   );
 
@@ -192,9 +192,10 @@ function Steps({ step }: { step: Step }) {
   );
 }
 
-/** 右边的英雄网格：按本赛季出场次数排（预禁时按预禁次数），不能选的变灰，推荐的标名次。 */
-function HeroPicker({ draft, priors, preban, advice, onPick }: {
+/** 右边的英雄网格：只有模型里有的英雄，按本赛季出场次数排（预禁时按预禁次数），不能选的变灰，推荐的标名次。 */
+function HeroPicker({ draft, codes, priors, preban, advice, onPick }: {
   draft: Draft;
+  codes: string[];
   priors: RtaPriors;
   preban?: PrebanAdvice;
   advice?: Advice;
@@ -208,7 +209,8 @@ function HeroPicker({ draft, priors, preban, advice, onPick }: {
     const p = priors.heroes[h.code];
     return p ? (isPreban ? p.preban * 1e9 : 0) + p.picks : 0;
   }, [priors, isPreban]);
-  const shown = useMemo(() => filterHeroes(data.heroes, filter, score), [data, filter, score]);
+  const usable = useMemo(() => inModel(data.heroes, codes), [data, codes]);
+  const shown = useMemo(() => filterHeroes(usable, filter, score), [usable, filter, score]);
 
   // 推荐名次：预禁 → 我方预禁推荐里的英雄；轮到我方 → 推荐（两手回合按英雄）；轮到对方 → 对方可能选的
   const ranks = useMemo(() => {

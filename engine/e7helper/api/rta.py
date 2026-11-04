@@ -2,15 +2,15 @@
 
 | 路由 | 说明 |
 |---|---|
-| `GET /rta/model` | 随包模型、第二个模型、数据先验的信息；没有模型 503 `no_model` |
+| `GET /rta/model` | 随包模型、第二个模型、数据先验的信息，`codes` = 主模型里有的英雄（B14h）；没有模型 503 `no_model` |
 | `POST /rta/advise` | 当前局面：轮到我方 → `recommend`（5–8 个，两手回合另有按英雄的 `heroes`）；轮到对手 → `opponent`（可能怎么选、威胁）；选完 10 手 → `ban`（4 × 4 矩阵、推荐、纳什混合）；后禁也完了 → 只有胜率。局面不合法 422 `invalid_state`（detail 是中文问题列表） |
 | `POST /rta/preban` | 预禁推荐（先后手可以不知道、可以固定一名） |
 | `POST /rta/first` | 先动概率（B14d1）：两队英雄 + 段位 → 每方、每名英雄第一个行动的概率；没有速度表 503 `no_speed_data` |
-| `GET /rta/pool`、`PUT /rta/pool` | 英雄池（B14d1）：`{heroes: [{code, speed?}]}`，存在 `<数据目录>/modules/rta_draft/pool.json` |
+| `GET /rta/pool`、`PUT /rta/pool` | 英雄池（B14d1）：`{heroes: [{code, speed?}]}`，存在 `<数据目录>/modules/rta_draft/pool.json`；B14h 起只收模型里有的英雄（PUT 有别的 422 `not_in_model`，GET / advise 跳过以前存的） |
 | `GET /rta/priors` | 每名英雄本赛季的出场数据（B14e1，选秀页的英雄网格排序 / 标记用）：被选次数、后禁率、预禁率、是否冷门 |
 
 局面的格式和 `DraftState.to_dict()` 一样，按先手方 F / 后手方 S 分：`prebans`、`picks`（这一方按顺序的选人）、
-`banned`（F = 先手方被禁的那名）、`grades`（[先手方, 后手方]）、`rule`（`"unknown"` = 国服不知道，null = 没有规则，
+`banned`（F = 先手方被禁的那名）、`grades`（[先手方, 后手方]）、`rule`（`"unknown"` = 不知道（B14h 起是各条规则的平均），null = 没有规则，
 其余是 opening_rule_desc_tid）。`side` 是我方是先手还是后手。搜索一次 2–4 秒（`budget` 秒封顶，到时间返回浅一层的
 结果，`stats.truncated`）；同一局面的结果有缓存。
 
@@ -87,8 +87,17 @@ def build_rta_router() -> APIRouter:
         with loading:  # 第一次用时读模型（约 0.2 秒）
             return search.load()
 
+    def model_codes() -> set[str] | None:
+        """模型里有的英雄（B14h 用户意见：模型没训练进的英雄不进 RTA 助手和英雄池）；没有模型 = None（不检查）。"""
+        return set(advisor().model.vocab.heroes) if search.available() else None
+
+    def saved_pool() -> rpool.Pool:
+        """保存的英雄池，跳过模型里没有的（换了模型、或者 B14h 以前存的）。"""
+        p, codes = rpool.load(), model_codes()
+        return p if codes is None else p.model_copy(update={"heroes": [h for h in p.heroes if h.code in codes]})
+
     def speeds(extra: dict[str, int] | None, saved: rpool.Pool | None = None) -> dict[str, int]:
-        return {**(saved or rpool.load()).speeds, **(extra or {})}
+        return {**(saved or saved_pool()).speeds, **(extra or {})}
 
     @r.get("/rta/model", summary="模型信息")
     def model_info() -> dict:
@@ -119,7 +128,7 @@ def build_rta_router() -> APIRouter:
     @r.post("/rta/advise", summary="选秀推荐")
     def advise(body: AdviseIn) -> dict:
         adv = advisor()
-        saved = rpool.load()
+        saved = saved_pool()
         pool = body.pool if body.pool is not None else (saved.limit() if body.use_saved_pool else None)
         state = body.state.to_state()
         try:
@@ -145,10 +154,14 @@ def build_rta_router() -> APIRouter:
 
     @r.get("/rta/pool", summary="英雄池")
     def get_pool() -> dict:
-        return rpool.load().model_dump(mode="json")
+        return saved_pool().model_dump(mode="json")
 
     @r.put("/rta/pool", summary="保存英雄池")
     def put_pool(body: rpool.Pool) -> dict:
+        codes = model_codes()
+        bad = [h.code for h in body.heroes if codes is not None and h.code not in codes]
+        if bad:
+            raise ApiError(422, "not_in_model", f"模型里没有这些英雄：{'、'.join(bad)}", detail=bad)
         return rpool.save(body).model_dump(mode="json")
 
     @r.post("/rta/preban", summary="预禁推荐")
