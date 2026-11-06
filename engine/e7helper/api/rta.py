@@ -6,7 +6,7 @@
 | `POST /rta/advise` | 当前局面：轮到我方 → `recommend`（5–8 个，两手回合另有按英雄的 `heroes`）；轮到对手 → `opponent`（可能怎么选、威胁）；选完 10 手 → `ban`（4 × 4 矩阵、推荐、纳什混合）；后禁也完了 → 只有胜率。局面不合法 422 `invalid_state`（detail 是中文问题列表） |
 | `POST /rta/preban` | 预禁推荐（先后手可以不知道、可以固定一名） |
 | `POST /rta/first` | 先动概率（B14d1）：两队英雄 + 段位 → 每方、每名英雄第一个行动的概率；没有速度表 503 `no_speed_data` |
-| `GET /rta/pool`、`PUT /rta/pool` | 英雄池（B14d1）：`{heroes: [{code, speed?}]}`，存在 `<数据目录>/modules/rta_draft/pool.json`；B14h 起只收模型里有的英雄（PUT 有别的 422 `not_in_model`，GET / advise 跳过以前存的） |
+| `GET /rta/pool`、`PUT /rta/pool`、`DELETE /rta/pool` | 英雄池（B14d1）：`{heroes: [{code, speed?}], default}`，存在 `<数据目录>/modules/rta_draft/pool.json`；B14h 起只收模型里有的英雄（PUT 有别的 422 `not_in_model`，GET / advise 跳过以前存的）；B14e2 起没设置过时是默认的热门英雄（`default: true`，主模型里被选最多的 60 名），DELETE 删掉存的、回到默认 |
 | `GET /rta/priors` | 每名英雄本赛季的出场数据（B14e1，选秀页的英雄网格排序 / 标记用）：被选次数、后禁率、预禁率、是否冷门 |
 
 局面的格式和 `DraftState.to_dict()` 一样，按先手方 F / 后手方 S 分：`prebans`、`picks`（这一方按顺序的选人）、
@@ -14,7 +14,10 @@
 其余是 opening_rule_desc_tid）。`side` 是我方是先手还是后手。搜索一次 2–4 秒（`budget` 秒封顶，到时间返回浅一层的
 结果，`stats.truncated`）；同一局面的结果有缓存。
 
-B14d1：advise 不传 `pool` 时用保存的英雄池（`use_saved_pool: false` 不限制）；结果上加先动概率（我方先动的概率，
+B14d1：advise 不传 `pool` 时用保存的英雄池（`use_saved_pool: false` 不限制）；B14e2：没设置过用默认的热门英雄，
+英雄池里能选的（没被选、没被禁）不够这一轮要选的名数时这一轮不限制，结果里 `pool_short: true`（存的英雄池是空的
+也是这样）；轮到对手时 `opponent.win` 和每种选法的 `win` 是「我方的读数」（之后我方从英雄池里选最好的回应，见
+`search.py`）。结果上加先动概率（我方先动的概率，
 `first` / 每个推荐的 `first` / 后禁矩阵的 `ban.first`，见 `speed.annotate`），胜率不变。我方英雄的速度用英雄池里填的，
 请求里的 `speeds` 优先。
 """
@@ -92,8 +95,13 @@ def build_rta_router() -> APIRouter:
         return set(advisor().model.vocab.heroes) if search.available() else None
 
     def saved_pool() -> rpool.Pool:
-        """保存的英雄池，跳过模型里没有的（换了模型、或者 B14h 以前存的）。"""
-        p, codes = rpool.load(), model_codes()
+        """保存的英雄池，跳过模型里没有的（换了模型、或者 B14h 以前存的）；没设置过 = 默认的热门英雄（B14e2）。"""
+        p, codes = rpool.load_saved(), model_codes()
+        if p is None:
+            if codes is None:
+                return rpool.Pool(default=True)
+            adv = advisor()
+            return rpool.default(adv.priors.picks, adv.model.vocab.heroes)
         return p if codes is None else p.model_copy(update={"heroes": [h for h in p.heroes if h.code in codes]})
 
     def speeds(extra: dict[str, int] | None, saved: rpool.Pool | None = None) -> dict[str, int]:
@@ -129,7 +137,8 @@ def build_rta_router() -> APIRouter:
     def advise(body: AdviseIn) -> dict:
         adv = advisor()
         saved = saved_pool()
-        pool = body.pool if body.pool is not None else (saved.limit() if body.use_saved_pool else None)
+        # 存的英雄池是空的也照样传（[] → 每一轮都「能选的不够」，推荐全部英雄并提示）
+        pool = body.pool if body.pool is not None else (saved.codes if body.use_saved_pool else None)
         state = body.state.to_state()
         try:
             out = adv.advise(state, body.side, pool=pool, top=body.top, budget=body.budget)
@@ -163,6 +172,11 @@ def build_rta_router() -> APIRouter:
         if bad:
             raise ApiError(422, "not_in_model", f"模型里没有这些英雄：{'、'.join(bad)}", detail=bad)
         return rpool.save(body).model_dump(mode="json")
+
+    @r.delete("/rta/pool", summary="英雄池恢复默认")
+    def reset_pool() -> dict:
+        rpool.reset()
+        return saved_pool().model_dump(mode="json")
 
     @r.post("/rta/preban", summary="预禁推荐")
     def preban(body: PrebanIn) -> dict:

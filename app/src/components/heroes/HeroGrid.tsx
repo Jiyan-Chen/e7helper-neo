@@ -1,5 +1,5 @@
 // 英雄头像、筛选条和头像网格：英雄图鉴（B13）和 RTA 助手（B14e1）共用。
-import { Search } from "lucide-react";
+import { Check, Search } from "lucide-react";
 import type { ReactNode } from "react";
 import { api } from "@/lib/api";
 import { gameIcon } from "@/lib/gameIcons";
@@ -44,13 +44,17 @@ export function HeroIcon({ hero, data, size, plain, className }: {
   );
 }
 
-/** 一行筛选按钮。iconOnly：只画图标（名字放在鼠标提示里），没有「全部」，再点一次取消。 */
-export function FilterRow<T extends string | number>({ label, value, options, onChange, iconOnly }: {
+/**
+ * 一行筛选按钮。iconOnly：只画图标（名字放在鼠标提示里），没有「全部」，再点一次取消。
+ * shrink：窗口不到 1200 宽时有图标的按钮只画图标（B14e2 英雄池模式，右边有一栏，放不下一行）。
+ */
+export function FilterRow<T extends string | number>({ label, value, options, onChange, iconOnly, shrink }: {
   label: string;
   value: T | null;
   options: { value: T; label: string; color?: string; icon?: string }[];
   onChange: (v: T | null) => void;
   iconOnly?: boolean;
+  shrink?: boolean;
 }) {
   if (iconOnly) {
     return (
@@ -72,18 +76,21 @@ export function FilterRow<T extends string | number>({ label, value, options, on
       <button type="button" className={cn("tab", value === null && "active")} onClick={() => onChange(null)}>全部</button>
       {options.map((o) => (
         <button key={o.value} type="button" className={cn("tab inline-flex items-center gap-1.5", value === o.value && "active")}
-          onClick={() => onChange(value === o.value ? null : o.value)}>
+          title={shrink ? o.label : undefined} onClick={() => onChange(value === o.value ? null : o.value)}>
           {o.icon ? <img src={o.icon} alt="" className="size-4" draggable={false} />
             : o.color && <span className="size-2 rounded-full" style={{ background: o.color }} />}
-          {o.label}
+          <span className={cn(shrink && (o.icon || o.color) && "max-[1199px]:sr-only")}>{o.label}</span>
         </button>
       ))}
     </div>
   );
 }
 
-/** 搜索框 + 属性 / 职业（/ 星级）筛选。onEnter：在搜索框里按 Enter；compact：窄栏用，属性和职业只画图标。 */
-export function HeroFilters({ data, filter, onChange, rarity = true, onEnter, inputWidth = "w-72", compact, children }: {
+/**
+ * 搜索框 + 属性 / 职业（/ 星级）筛选。onEnter：在搜索框里按 Enter；compact：窄栏用，属性和职业只画图标；
+ * shrink：窗口不到 1200 宽时属性和职业只画图标。
+ */
+export function HeroFilters({ data, filter, onChange, rarity = true, onEnter, inputWidth = "w-72", compact, shrink, children }: {
   data: HeroList;
   filter: HeroFilter;
   onChange: (patch: Partial<HeroFilter>) => void;
@@ -91,15 +98,16 @@ export function HeroFilters({ data, filter, onChange, rarity = true, onEnter, in
   onEnter?: () => void;
   inputWidth?: string;
   compact?: boolean;
+  shrink?: boolean;
   /** 搜索框右边的内容（例如「x / y 名」） */
   children?: ReactNode;
 }) {
   const rows = (
     <>
-      <FilterRow label="属性" value={filter.element} iconOnly={compact}
+      <FilterRow label="属性" value={filter.element} iconOnly={compact} shrink={shrink}
         options={ELEMENTS.map((e) => ({ value: e, label: data.labels.element[e] ?? e, color: ELEMENT_COLORS[e], icon: gameIcon(`element_${e}`) }))}
         onChange={(element) => onChange({ element })} />
-      <FilterRow label="职业" value={filter.role} iconOnly={compact}
+      <FilterRow label="职业" value={filter.role} iconOnly={compact} shrink={shrink}
         options={ROLES.map((r) => ({ value: r, label: data.labels.role[r] ?? r, icon: gameIcon(`role_${r}`) }))}
         onChange={(role) => onChange({ role })} />
     </>
@@ -127,10 +135,20 @@ export function HeroFilters({ data, filter, onChange, rarity = true, onEnter, in
   );
 }
 
-/** 网格里一格的附加状态（RTA 助手：不能选的变灰、推荐名次角标）。 */
+/** 英雄池里的英雄（B14e2）：网格一格右上角的金色小勾。 */
+export function PoolMark({ size = 18 }: { size?: number }) {
+  return (
+    <span className="pointer-events-none absolute top-0.5 right-1 grid place-items-center rounded-full bg-gold text-black shadow"
+      style={{ width: size, height: size }} aria-label="英雄池">
+      <Check style={{ width: size * 0.65, height: size * 0.65 }} strokeWidth={3.5} />
+    </span>
+  );
+}
+
+/** 网格里一格的附加状态（RTA 助手：不能选的变灰、推荐名次角标；英雄池：勾选）。 */
 export interface HeroCellDecor {
   disabled?: boolean;
-  /** 左上角的角标 */
+  /** 角标（推荐名次在左上、英雄池的勾在右上） */
   badge?: ReactNode;
   /** 金色描边 */
   highlight?: boolean;

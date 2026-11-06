@@ -6,6 +6,7 @@ import type {
 } from "./types";
 import type { Flow, FlowSummary, UserTemplate } from "./flow";
 import type { HeroBuilds, HeroDetail, HeroList, HeroUpdateResult } from "./heroes";
+import type { PoolHero, RtaPool } from "./pool";
 import type { AdviseBody, Advice, PrebanAdvice, PrebanBody, RtaModelInfo, RtaPriors } from "./rta";
 
 export interface UserTemplateSaveBody {
@@ -147,11 +148,16 @@ export class Api {
   heroAssetUrl = (name: string) => `${this.url}/api/hero-icons/${encodeURIComponent(name)}${this.tokenQuery()}`;
   artifactIconUrl = (code: string) => `${this.url}/api/artifacts/${encodeURIComponent(code)}/icon${this.tokenQuery()}`;
 
-  // RTA 选秀（B14c / B14e1）
+  // RTA 选秀（B14c / B14e1 / B14e2）
   rtaModel = () => this.get<RtaModelInfo>("/api/rta/model");
   rtaPriors = () => this.get<RtaPriors>("/api/rta/priors");
   rtaAdvise = (body: AdviseBody) => this.request<Advice>("POST", "/api/rta/advise", body);
   rtaPreban = (body: PrebanBody) => this.request<PrebanAdvice>("POST", "/api/rta/preban", body);
+  // 英雄池（B14e2）：只收模型里有的英雄（别的 422 not_in_model）
+  rtaPool = () => this.get<RtaPool>("/api/rta/pool");
+  rtaSavePool = (heroes: PoolHero[]) => this.request<RtaPool>("PUT", "/api/rta/pool", { heroes });
+  /** 恢复默认（删掉存的，回到默认的热门英雄） */
+  rtaResetPool = () => this.request<RtaPool>("DELETE", "/api/rta/pool");
 
   private tokenQuery() {
     return this.token ? `?token=${encodeURIComponent(this.token)}` : "?";

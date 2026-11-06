@@ -115,8 +115,34 @@ def _table():
                                        season="pvp_rta_ss21")
 
 
+def test_default_pool_takes_the_most_picked_heroes():
+    pool = rpool.default({"a": 10, "b": 30, "c": 20, "d": 30}, ["a", "b", "c"], n=2)
+    assert pool.default and pool.codes == ["b", "c"]  # d 不在模型里
+    assert rpool.default({"a": 5, "b": 5}, n=5).codes == ["a", "b"]  # 一样多按编号
+
+
+def test_pool_default_reset_and_empty(client):
+    # B14e2 审核：没设置过 = 默认的热门英雄（假先验里 30 名一样多，按编号；默认 60 名，全都在）
+    d = client.get("/api/rta/pool").json()
+    assert d["default"] and [h["code"] for h in d["heroes"]] == CODES and d["updated"] == ""
+    out = client.post("/api/rta/advise", json={"side": "F", "state": _state(), "top": 2}).json()
+    assert out["pool"] == CODES and not out["pool_short"]
+    # 存了就不是默认的；DELETE 回到默认
+    assert client.put("/api/rta/pool", json={"heroes": [{"code": "c05"}]}).json()["default"] is False
+    assert client.get("/api/rta/pool").json()["default"] is False
+    d = client.delete("/api/rta/pool").json()
+    assert d["default"] and len(d["heroes"]) == len(CODES) and not rpool.default_path().exists()
+    # 存成空的：不当成没设置过，每一轮都「能选的不够」、推荐全部英雄
+    client.put("/api/rta/pool", json={"heroes": []})
+    assert client.get("/api/rta/pool").json() | {"updated": ""} == {"format": 1, "updated": "", "heroes": [], "default": False}
+    out = client.post("/api/rta/advise", json={"side": "F", "state": _state(), "top": 2}).json()
+    assert out["pool"] == [] and out["pool_short"] and [r["heroes"] for r in out["recommend"]] == [["c00"], ["c01"]]
+    # 文件坏了当成没设置过
+    rpool.default_path().write_text("{坏的", encoding="utf-8")
+    assert client.get("/api/rta/pool").json()["default"]
+
+
 def test_pool_roundtrip_and_validation(client):
-    assert client.get("/api/rta/pool").json()["heroes"] == []
     d = client.put("/api/rta/pool", json={"heroes": [{"code": "c05", "speed": 280}, {"code": "c06"},
                                                      {"code": "c05", "speed": 300}]}).json()
     assert d["heroes"] == [{"code": "c06", "speed": None}, {"code": "c05", "speed": 300}] and d["updated"]
@@ -141,6 +167,15 @@ def test_advise_uses_saved_pool(client):
     d = client.post("/api/rta/advise", json={"side": "F", "state": _state(), "top": 2, "use_saved_pool": False}).json()
     assert [r["heroes"][0] for r in d["recommend"]] == ["c00", "c01"] and d["pool"] is None
     assert d["first"] is None  # 没有速度表
+
+
+def test_advise_saved_pool_short(client):
+    # B14e2：轮到后手方选 2 名，保存的英雄池里能选的只剩 1 名 → 这一轮不限制
+    client.put("/api/rta/pool", json={"heroes": [{"code": c} for c in ("c00", "c05")]})
+    d = client.post("/api/rta/advise", json={"side": "S", "state": _state(["c00"]), "top": 2}).json()
+    assert d["pool_short"] and set(d["recommend"][0]["heroes"]) == {"c01", "c02"}
+    d = client.post("/api/rta/advise", json={"side": "F", "state": _state(), "top": 2}).json()
+    assert not d["pool_short"] and [r["heroes"] for r in d["recommend"]] == [["c00"], ["c05"]]
 
 
 def test_advise_first_mover(client, monkeypatch):

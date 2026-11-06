@@ -1,19 +1,34 @@
 // 英雄图鉴（B13）：全部英雄的头像网格，搜索、按属性 / 职业 / 星级筛选，点开看详情（HeroDetailDialog）；可以联网更新数据。
+// B14e2：「英雄池」按钮进入英雄池模式（#/heroes?pool=1，PoolEditor）；从 RTA 助手进来的（&from=rta）返回 RTA 助手。
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { RefreshCw } from "lucide-react";
+import { ListChecks, RefreshCw } from "lucide-react";
 import { useMemo, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router";
 import { HeroDetailDialog } from "@/components/heroes/HeroDetailDialog";
 import { HeroFilters, HeroGrid } from "@/components/heroes/HeroGrid";
+import { PoolEditor } from "@/components/heroes/PoolEditor";
 import { toast } from "@/components/ui/Toast";
 import { ApiError, api, errorMessage } from "@/lib/api";
-import { filterHeroes, type Hero, type HeroFilter } from "@/lib/heroes";
+import { filterHeroes, type Hero, type HeroFilter, type HeroList } from "@/lib/heroes";
 import { qk } from "@/lib/query";
 import { dayTime } from "@/lib/time";
 import { cn } from "@/lib/utils";
 
 export function HeroesPage() {
-  const qc = useQueryClient();
   const { data, isLoading } = useQuery({ queryKey: qk.heroes, queryFn: () => api().heroes(), staleTime: Infinity });
+  const [params, setParams] = useSearchParams();
+  const navigate = useNavigate();
+  if (params.get("pool") === "1") {
+    if (!data) return <p className="px-[22px] py-4 text-muted">加载中…</p>;
+    const fromRta = params.get("from") === "rta";
+    return <PoolEditor data={data} exitLabel={fromRta ? "返回 RTA 助手" : "返回图鉴"}
+      onExit={() => (fromRta ? navigate("/rta") : setParams({}))} />;
+  }
+  return <Gallery data={data} isLoading={isLoading} onPool={() => setParams({ pool: "1" })} />;
+}
+
+function Gallery({ data, isLoading, onPool }: { data: HeroList | undefined; isLoading: boolean; onPool: () => void }) {
+  const qc = useQueryClient();
   const [filter, setFilter] = useState<HeroFilter>({ query: "", element: null, role: null, rarity: null });
   const [open, setOpen] = useState<Hero | null>(null);
   const [updating, setUpdating] = useState(false);
@@ -45,6 +60,9 @@ export function HeroesPage() {
         <button type="button" className="btn btn-sm btn-bronze" disabled={updating} onClick={() => void update()}>
           <RefreshCw className={cn("size-4", updating && "animate-spin")} />
           {updating ? "更新中…" : "检查更新"}
+        </button>
+        <button type="button" className="btn btn-sm btn-bronze" disabled={!data} onClick={onPool}>
+          <ListChecks className="size-4" />英雄池
         </button>
       </div>
 

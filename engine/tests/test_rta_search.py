@@ -107,6 +107,39 @@ def test_pool_limits_candidates_and_discounts_rare_heroes():
     assert out["unknown"] == ["c99"]
 
 
+def test_pool_short_round_is_not_limited():
+    # B14e2：这一轮要选 2 名，英雄池里能选的只剩 1 名（c00 已被先手选走）→ 这一轮推荐全部英雄
+    out = advisor().advise(state(["c00"]), "S", pool=["c00", "c05"])
+    assert out["pool_short"] and out["recommend"]
+    assert set(out["recommend"][0]["heroes"]) == {"c01", "c02"}
+    assert all(r["pool_only"] == [] for r in out["recommend"])
+    # 预禁掉的也不算能选的：池里只有被预禁的英雄
+    out = advisor().advise(state([]), "F", pool=["c25", "c26"])
+    assert out["pool_short"] and out["recommend"][0]["heroes"] == ["c00"]
+    # 池里全是模型没见过的英雄 = 能选的 0 名
+    out = advisor().advise(state([]), "F", pool=["c99"])
+    assert out["pool_short"] and out["recommend"][0]["heroes"] == ["c00"] and out["unknown"] == ["c99"]
+
+
+def test_pool_enough_round_is_limited():
+    out = advisor().advise(state(["c00"]), "S", pool=["c05", "c06"])
+    assert not out["pool_short"]
+    assert [sorted(r["heroes"]) for r in out["recommend"]] == [["c05", "c06"]]
+    out = advisor().advise(state([]), "F", pool=["c05", "c06", "c07"])
+    assert not out["pool_short"] and {r["heroes"][0] for r in out["recommend"]} == {"c05", "c06", "c07"}
+    assert advisor().advise(state([]), "F")["pool_short"] is False  # 没有英雄池
+
+
+def test_pool_short_later_round_is_not_limited():
+    # 先手第 1 手在池里选；第 3 层我方再回应要选 2 名，池里只剩 1 名 → 那一轮也不限制（还能算到第 3 层）
+    out = advisor().advise(state([]), "F", pool=["c05", "c06"])
+    assert not out["pool_short"]
+    best = out["recommend"][0]
+    assert best["heroes"][0] in ("c05", "c06") and best["depth"] == 3
+    reply = best["threat"]["reply"]
+    assert len(reply) == 2 and not set(reply) <= {"c05", "c06"}
+
+
 def test_unknown_heroes_in_state_are_listed():
     # B14h：快照里去掉的新英雄选进局面时按 UNK 算，也要列出来（和英雄池里的合在一起，不重复）
     out = advisor().advise(state(["c98"]), "S", pool=["c05", "c99", "c98"])
@@ -141,6 +174,42 @@ def test_their_turn_lists_likely_picks_and_threats():
     assert [x["prob"] for x in likely] == sorted((x["prob"] for x in likely), reverse=True)
     assert [x["win"] for x in threats] == sorted(x["win"] for x in threats)
     assert sum(x["prob"] for x in likely) <= 1.0 + 1e-9
+
+
+def test_their_turn_uses_our_reading_with_the_pool():
+    # B14e2 审核（用户意见：始终用我方的读数）：对手每种选法之后的胜率 = 我方从英雄池里挑的最好回应的预期
+    weak = [f"c{i:02d}" for i in range(18, 25)]
+    out = advisor().advise(state(["c00"]), "F", pool=weak)
+    opp = out["opponent"]
+    assert opp["win"] is not None and not out["stats"]["truncated"]
+    assert all(x["win"] < x["now"] for x in opp["likely"])  # 池里都是弱的：比不知道英雄池的模型读数低
+    wins = [x["win"] for x in opp["likely"]]
+    assert min(wins + [t["win"] for t in opp["threats"]]) - 1e-9 <= opp["win"] <= max(wins) + 1e-9
+    free = advisor().advise(state(["c00"]), "F")["opponent"]  # 不限英雄
+    assert free["win"] > opp["win"]
+    assert [x["win"] for x in opp["threats"]] == sorted(x["win"] for x in opp["threats"])
+    # 和之后轮到我方时推荐第 1 名的预期是一个口径：对方真的选了最可能的那组，我方那一轮的推荐第 1 名
+    top = opp["likely"][0]["heroes"]
+    mine = advisor().advise(state(["c00"] + top), "F", pool=weak)["recommend"][0]
+    assert set(mine["heroes"]) <= set(weak)
+
+
+def test_their_last_pick_reads_the_ban_game():
+    # 对手选最后一手（我方先手、已选 9 手）：之后直接后禁，胜率 = 后禁推荐行的预期
+    picks = CODES[3:12]
+    m = FakeModel(STRENGTH, POP | {"c01": 8.0})  # 对手几乎一定选 c01：可信度接近 1，修正很小
+    out = advisor(m).advise(state(picks), "F")
+    assert out["turn"] == "theirs"
+    opp = out["opponent"]
+    assert opp["win"] is not None and all(len(x["heroes"]) == 1 for x in opp["likely"])
+    assert opp["likely"][0]["heroes"] == ["c01"]
+    ban = advisor(m).advise(state(picks + ["c01"]), "F")["ban"]
+    row = ban["row_stats"][ban["rows"].index(ban["recommend"])]
+    assert opp["likely"][0]["win"] == pytest.approx(row["win"], abs=0.005)
+    # 少见的选法加上修正（对手的回应只往我方有利的方向修），不会比后禁推荐行的预期低
+    for x in opp["likely"][1:4]:
+        b = advisor(m).advise(state(picks + x["heroes"]), "F")["ban"]
+        assert x["win"] >= b["row_stats"][b["rows"].index(b["recommend"])]["win"] - 1e-9
 
 
 # —— 后禁 ——

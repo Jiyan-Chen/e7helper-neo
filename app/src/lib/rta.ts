@@ -1,4 +1,4 @@
-// RTA 选秀推荐接口（/api/rta/*，B14c / B14d1 / B14e1）的数据形状和请求调度。胜率一律是我方的。
+// RTA 选秀推荐接口（/api/rta/*，B14c / B14d1 / B14e1 / B14e2）的数据形状和请求调度。胜率一律是我方的。
 import { useEffect, useRef, useState } from "react";
 import type { ApiState, Side } from "./draft";
 
@@ -56,6 +56,7 @@ export interface Recommend {
   close: boolean;
   /** 数据少的英雄 */
   rare: string[];
+  /** 只因为在英雄池里才推荐的冷门英雄（数据少） */
   pool_only: string[];
   responses: Reply[];
   threat: Reply | null;
@@ -78,7 +79,10 @@ export interface HeroRec {
 export interface Choice {
   heroes: string[];
   prob: number;
+  /** 之后我方的胜率：我方再从英雄池里选最好的回应的预期（B14e2 第 2 轮审核；时间不够没算到的是模型读数） */
   win: number;
+  /** 模型读数（不知道英雄池） */
+  now?: number;
 }
 
 export interface BanAdvice {
@@ -107,9 +111,14 @@ export interface Advice {
   unknown: string[];
   recommend?: Recommend[];
   heroes?: HeroRec[];
-  opponent?: { likely: Choice[]; threats: Choice[] };
+  /** win = 按对方选法的先验加权的「我方的读数」（B14e2 第 2 轮审核）；一个都没算到时是 null */
+  opponent?: { likely: Choice[]; threats: Choice[]; win?: number | null };
   ban?: BanAdvice;
   first: { mine: number; partial: boolean } | null;
+  /** 这次推荐用的英雄池（null = 不限制） */
+  pool?: string[] | null;
+  /** 英雄池里能选的不够这一轮，这一轮推荐的是全部英雄（B14e2） */
+  pool_short?: boolean;
   stats: { ms: number; truncated: boolean; depth: number };
 }
 
@@ -142,6 +151,13 @@ export interface AdviseBody {
   state: ApiState;
 }
 
+/**
+ * advise 的请求兼缓存键（B14e2）：引擎始终按保存的英雄池推荐，键里带上英雄池的保存时间，英雄池改了（选人范围、
+ * 填的速度都会变结果）就重算。adviceBody 从键里取回请求。
+ */
+export const adviceKey = (body: AdviseBody, poolUpdated: string) => JSON.stringify({ body, pool: poolUpdated });
+export const adviceBody = (key: string) => (JSON.parse(key) as { body: AdviseBody }).body;
+
 export interface PrebanBody {
   side: Side;
   grades: [string | null, string | null];
@@ -160,13 +176,29 @@ export interface Latest<T> {
   retry: () => void;
 }
 
-/** 胜率等比例：0.5612 → "56.1%" */
 /** 只留模型里有的英雄（B14h 用户意见：模型没训练进的英雄不放进 RTA 助手）。 */
 export function inModel<T extends { code: string }>(heroes: readonly T[], codes: readonly string[]): T[] {
   const set = new Set(codes);
   return heroes.filter((h) => set.has(h.code));
 }
 
+/**
+ * 推荐卡上「数据少」的标记（B14e2）：数据少的英雄都是只因为在英雄池里才推荐的，标「英雄池」；
+ * 有不是因为英雄池的，标「数据少」（两种合成一个标记，完整意思在鼠标提示里）。没有数据少的英雄返回 null。
+ */
+export function rareTag(rare: readonly string[], poolOnly: readonly string[], name: (code: string) => string) {
+  if (!rare.length) return null;
+  const names = rare.map(name).join("、");
+  const pooled = rare.filter((c) => poolOnly.includes(c));
+  const tip = `对局数据少，胜率估计不太准：${names}`;
+  if (pooled.length === rare.length) return { label: `英雄池：${names}`, title: `你英雄池里的英雄，${tip}` };
+  return {
+    label: `数据少：${names}`,
+    title: pooled.length ? `${tip}（${pooled.map(name).join("、")}是因为在你的英雄池里才推荐的）` : tip,
+  };
+}
+
+/** 胜率等比例：0.5612 → "56.1%" */
 export const pct1 = (p: number) => `${(p * 100).toFixed(1)}%`;
 export const pct0 = (p: number) => `${Math.round(p * 100)}%`;
 
@@ -184,6 +216,23 @@ export function banHeadline(ban: BanAdvice, chosen: string | null): { code: stri
     ? cells.reduce((a: number, v, j) => a + (v as number) * q[j], 0) / total
     : null;
   return { code, win: ban.row_stats[i].win, first };
+}
+
+/**
+ * 选秀这一步信息条上的胜率：始终用「我方的读数」（B14e2 审核，用户意见），不用模型对当前局面的读数（它不知道
+ * 英雄池，相当于假设我方像一般玩家那样选，池里没有强势英雄时比每个推荐都高）。
+ * - 轮到我方：推荐第 1 名（只在英雄池里选；池里不够这一轮时是全部英雄里选）的预期和先动；
+ * - 轮到对方：对方按先验的几种选法、我方再从英雄池里选最好的回应的预期（opponent.win），先动是目前双方在场的。
+ * 不是选秀、还没算出来时返回 null（照常显示模型读数）。
+ */
+export function pickHeadline(a: Advice): { turn: "mine" | "theirs"; heroes: string[]; win: number; first: number | null } | null {
+  if (a.phase !== "pick") return null;
+  if (a.turn === "mine") {
+    const r = a.recommend?.[0];
+    return r ? { turn: "mine", heroes: r.heroes, win: r.win, first: r.first ?? null } : null;
+  }
+  const w = a.opponent?.win;
+  return w != null ? { turn: "theirs", heroes: [], win: w, first: a.first?.mine ?? null } : null;
 }
 
 /**

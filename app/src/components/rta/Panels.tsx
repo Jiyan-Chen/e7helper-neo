@@ -7,7 +7,7 @@ import {
   GRADE_CHOICES, PICKS, PREBANS, needsRule, prebanTarget, ruleApplies, turn, type Draft, type Setup, type Side, type Team,
 } from "@/lib/draft";
 import {
-  banHeadline, pct0, pct1, type Advice, type Choice, type Latest, type PrebanAdvice, type Recommend, type Reply, type RtaOptions,
+  banHeadline, pct0, pct1, pickHeadline, rareTag, type Advice, type Choice, type Latest, type PrebanAdvice, type Recommend, type Reply, type RtaOptions,
 } from "@/lib/rta";
 import { cn } from "@/lib/utils";
 import { Face, Faces, RankIcon, Segmented, Spinner, Tag, Win, gradeLabel, useName } from "./bits";
@@ -56,21 +56,20 @@ const CARD_GRID = "grid grid-cols-[repeat(auto-fill,minmax(310px,1fr))] gap-2";
 const CHOICE_GRID = "grid grid-cols-[repeat(auto-fill,minmax(195px,1fr))] gap-2";
 const PAIR_GRID = "grid max-w-[560px] grid-cols-5 gap-2";
 
-/** 推荐卡上的标记（固定一行，放不下的截掉；完整意思在鼠标提示里）。 */
+/** 推荐卡上的标记（固定一行，放不下的截掉；完整意思在鼠标提示里）。rare = 「数据少 / 英雄池」那个标记（rareTag）。 */
 function Marks({ close, second, win, rare, children }: {
   close?: boolean;
   second?: { win: number; spread: number } | null;
   win: number;
-  rare?: string[];
+  rare?: { label: string; title: string } | null;
   children?: ReactNode;
 }) {
-  const name = useName();
   return (
     <span className="flex h-[18px] min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
       {children}
       {close && <Tag title="和第一名差不到 1 个百分点">差距小</Tag>}
       {second && <Tag tone="warn" title={`两个模型的预期差 ${Math.abs(Math.round((second.win - win) * 100))} 个百分点（另一个模型 ${pct1(second.win)}）`}>分歧大</Tag>}
-      {rare && rare.length > 0 && <Tag tone="warn" title={`这些英雄的对局数据少：${rare.map(name).join("、")}`}>{`数据少：${rare.map(name).join("、")}`}</Tag>}
+      {rare && <Tag tone="warn" title={rare.title}>{rare.label}</Tag>}
     </span>
   );
 }
@@ -169,10 +168,17 @@ export function InfoBar({ draft, options, advice }: { draft: Draft; options: Rta
   const name = useName();
   const d = advice.data;
   const sep = <span className="h-4 w-px bg-white/12" />;
-  // 后禁这一步显示推荐行（我方已选禁谁时用选的那一行）的预期，其余时候是模型对当前局面的读数
+  // 始终用「我方的读数」（B14e2 审核，用户意见）：选秀时我方回合是推荐第 1 名的预期、对方回合是对方按常见选法、
+  // 我方再从英雄池里回应的预期；后禁这一步是推荐行（我方已选禁谁时用选的那一行）的预期；结果是最后的胜率
   const head = d?.phase === "ban" && d.ban ? banHeadline(d.ban, draft.bans.mine) : null;
-  const win = head ? head.win : d?.win;
-  const first = head ? head.first : d?.first?.mine ?? null;
+  const pick = !head && d ? pickHeadline(d) : null;
+  const win = head ? head.win : pick ? pick.win : d?.win;
+  const first = head ? head.first : pick ? pick.first : d?.first?.mine ?? null;
+  const label = head ? `禁${name(head.code)}后` : pick ? "预期" : d?.phase === "done" ? "胜率" : "当前胜率";
+  const model = d ? `（不知道英雄池的模型读数 ${pct1(d.win)}）` : "";
+  const tip = head ? `我方禁${name(head.code)}、对方按常见后禁`
+    : pick?.turn === "mine" ? `推荐第 1 名（${pick.heroes.map(name).join("、")}）的预期${d?.pool_short ? "（英雄池里能选的不够，这一轮是全部英雄里选）" : "，只在英雄池里选"}${model}`
+      : pick ? `对方按常见的选法、我方再从英雄池里选最好的回应的预期${model}` : undefined;
   // 加上先动概率后 1280 宽放不下一行（B14h）：1440 以下去掉三个文字标签，1200 以下再去掉手数
   return (
     <div className="panel flex flex-none flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2 text-sm max-[1199px]:gap-x-2 max-[1199px]:px-3">
@@ -194,9 +200,8 @@ export function InfoBar({ draft, options, advice }: { draft: Draft; options: Rta
         <Tag tone="warn" title={d.unknown.map(name).join("、")}>{`模型没见过：${d.unknown.length} 名`}</Tag>
       )}
       {win !== undefined && (
-        <span className={cn("flex items-baseline gap-2 transition-opacity", !advice.fresh && "opacity-50")}
-          title={head ? `我方禁${name(head.code)}、对方按常见后禁` : undefined}>
-          <span className="text-xs text-muted">{head ? `禁${name(head.code)}后` : "当前胜率"}</span>
+        <span className={cn("flex items-baseline gap-2 transition-opacity", !advice.fresh && "opacity-50")} title={tip}>
+          <span className="text-xs text-muted">{label}</span>
           <Win p={win} className="text-xl font-bold" />
           {first !== null && <span className="text-xs text-muted">先动 <span className="num text-sm text-ink">{pct0(first)}</span></span>}
         </span>
@@ -343,6 +348,7 @@ function ReplyChip({ r, danger }: { r: Reply; danger?: boolean }) {
 }
 
 function RecCard({ r, rank, onPick }: { r: Recommend; rank: number; onPick: () => void }) {
+  const name = useName();
   return (
     <button type="button" onClick={onPick}
       className="flex cursor-pointer flex-col gap-1.5 rounded-xl border border-white/8 bg-[var(--panel-hi)] px-3 py-2 text-left transition-colors hover:border-gold/60">
@@ -357,7 +363,7 @@ function RecCard({ r, rank, onPick }: { r: Recommend; rank: number; onPick: () =
         </span>
       </span>
       <span className="flex pl-6">
-        <Marks close={r.close} second={r.uncertain ? r.second : null} win={r.win} rare={r.rare} />
+        <Marks close={r.close} second={r.uncertain ? r.second : null} win={r.win} rare={rareTag(r.rare, r.pool_only, name)} />
       </span>
       {(r.responses.length > 0 || r.threat) && (
         <span className="grid grid-cols-4 gap-1 pl-6 text-[10px]">
@@ -377,10 +383,13 @@ export function MinePanel({ draft, q, onPick }: { draft: Draft; q: Latest<Advice
     <Shell title={`轮到我方选 ${t?.slots ?? 0} 名`} status={q.loading && <Spinner />}>
       <Body q={q} ok={(d) => d.phase === "pick" && d.turn === "mine"}>
         {(d) => (
-          <div className={CARD_GRID}>
-            {(d.recommend ?? []).map((r, i) => (
-              <RecCard key={r.heroes.join()} r={r} rank={i + 1} onPick={() => onPick(r.heroes)} />
-            ))}
+          <div className="flex flex-col gap-1.5">
+            {d.pool_short && <div className="text-xs text-warn">英雄池里能选的不够，这一轮推荐全部英雄</div>}
+            <div className={CARD_GRID}>
+              {(d.recommend ?? []).map((r, i) => (
+                <RecCard key={r.heroes.join()} r={r} rank={i + 1} onPick={() => onPick(r.heroes)} />
+              ))}
+            </div>
           </div>
         )}
       </Body>

@@ -1,6 +1,6 @@
 # HANDOFF
 
-> 新会话从这里读起。上次更新：2026-11-04（B14h 已通过）
+> 新会话从这里读起。上次更新：2026-11-07（B14e2 已通过）
 
 ## 当前进度
 - **B01 骨架 + 模块契约 + MuMu 设备层**：✅ 已通过，记录见 [reviews/B01.md](reviews/B01.md)。
@@ -51,7 +51,13 @@
   - 随包英雄数据补上 Fribbels 还没有的新英雄（e7.wiki 数据）：391 名，新增茉萝、兔女郎黑手党优芬妮。
   - 开发版试用补的：后禁矩阵编号从局面取；信息条加上先动后收紧。审核第 1 轮（用户意见）：**模型没训练进的英雄不进 RTA 助手和英雄池**，只在图鉴里看。
   - 全量 `1182 passed, 9 skipped`（审核第 1 轮之前跑的；之后 RTA 测试 174 个、前端 46 个都跑过）。
-- 下一块：**B14e2 RTA：英雄池**（见下面「下一块」）。B14d2（站位 / 快速分析 / 英雄统计）往后放，等 ss22 赛季更新、数据重采后和 B14g 一起做（用户意见）。
+- **B14e2 RTA：英雄池**：✅ 已通过，记录见 [reviews/B14e2.md](reviews/B14e2.md)。方案 11-03 定好（B14h.md 末尾），开工时没有新的试用反馈。
+  - 开工时工作区停在 B14e1：**B14h 的提交 `c08469c` 在分支 `claude/b14e2-rta-hero-pool-390fbe` 上、没进 main**，先把 B14e2 的分支（`claude/b14e2-rta-hero-pool-6a846c`）快进到它再开工；所以 B14e2 的分支上是 B14h + B14e2。合进 main 时两块一起进。
+  - 图鉴「英雄池」模式（`#/heroes?pool=1`）：只列模型里的英雄、按发布日期排，点头像勾选，右栏速度（50–400，不填 = 按段位的常见速度），改了 400ms 后自动保存。
+  - RTA 助手：始终按英雄池推荐我方选人（预禁推荐不管英雄池）；顶栏「英雄池 N 名」+「编辑」；网格打勾 +「只看我的」；推荐卡「英雄池：名字」标记；池里能选的不够这一轮时这一轮推荐全部英雄（`pool_short`）。
+  - 审核 2 轮（用户意见）：信息条始终用**我方的读数**（我方回合 = 推荐第 1 名的预期；对方回合 = 引擎新算的「对方常见选法 → 我方从英雄池里挑回应」的预期，p95 2.3 秒）；**去掉「只推荐我的英雄」开关**，没设置过时**默认用本赛季最常被选的 60 名**（占选人 93%，不写进文件），图鉴里「恢复默认」。
+  - 全量 `1192 passed, 9 skipped`；前端 58 个。
+- 下一块：**B14f RTA：画面识别**（见下面「下一块」）。B14d2（站位 / 快速分析 / 英雄统计）往后放，等 ss22 赛季更新、数据重采后和 B14g 一起做（用户意见）。
 
 ## 已有能力
 ### 设备（B01）
@@ -210,7 +216,7 @@
 - 左侧菜单「英雄图鉴」下面「RTA 助手」，`#/rta`，宽页面（不显示右侧栏）。文件：`src/pages/DraftPage.tsx`（页面框架、请求、右边英雄网格）、`src/components/rta/`（`Panels.tsx` 各步面板 + 信息条、`TeamColumn.tsx` 阵容栏、`bits.tsx` 小部件：头像 / 段位图标 / 分段按钮 / 胜率颜色 / 标记）、`src/lib/draft.ts`（局面：选人顺序、保护位、预禁 / 选人 / 后禁、段位 5 项、开战规则、转成引擎格式）、`draftStore.ts`（当前局面 + 撤销，放在页面外）、`rta.ts`（接口数据形状、`useLatest`、`banHeadline`）。
 - 局面按「我方 / 对方」记、整局按顺序存 10 手；发给引擎时 `apiState` 换成先手 / 后手，后禁双方都填了才带上。段位「挑战者及以下」按 `challenger` 发；双方都在优胜者以上才有开战规则（必须选，每局清空），否则发 `null`（没有规则；B14h 前发 `unknown`）。
 - 请求「只要最新的」：同一时间只发一个，在途时局面变了只记最新的；结果按局面缓存在页面外（撤销、切页面不用再算）。引擎在途的搜索取消不了。
-- 胜率：信息条是「当前胜率」（模型对当前局面的读数），推荐卡是「预期」（搜索值）；后禁这一步信息条显示「禁 X 后」= 推荐行（或已选那一行）的预期（用户意见）。先动概率引擎给了才显示（B14h 起随包有速度表：信息条、推荐卡、后禁矩阵每格、结果都有）；信息条 1440 宽以下去掉三个文字标签、1200 以下去掉手数，才放得下一行。
+- 胜率：推荐卡是「预期」（搜索值）；信息条 B14e2 起在选秀时也是「预期」= 我方的读数（我方回合推荐第 1 名的、对方回合 `opponent.win`，`lib/rta.ts` 的 `pickHeadline`；用户意见：不用不知道英雄池的模型读数，鼠标提示里还有）；后禁这一步信息条显示「禁 X 后」= 推荐行（或已选那一行）的预期（用户意见）；结果是「胜率」。先动概率引擎给了才显示（B14h 起随包有速度表：信息条、推荐卡、后禁矩阵每格、结果都有）；信息条 1440 宽以下去掉三个文字标签、1200 以下去掉手数，才放得下一行。
 - 右边网格**只放主模型里有的英雄**（`/rta/model` 的 `codes`，`lib/rta.ts` 的 `inModel`；B14h 用户意见）。
 - 英雄网格是共用组件 `src/components/heroes/HeroGrid.tsx`（图鉴也用）：`HeroIcon`、`FilterRow`（`iconOnly`）、`HeroFilters`（`compact`、`onEnter`）、`HeroGrid`（`decor`：变灰、角标）；`filterHeroes(heroes, filter, score?)` 按 score 排。
 - 段位图标 `app/src/assets/game/rank_{challenger,champion,warlord,emperor,legend}.png`：世界竞技场 › 排名 › 赛季奖励截图，`python tools/cut_icons.py <截图> ../app/src/assets/game --grabcut --max 128 rank_legend:370,248,150,152 rank_emperor:370,400,150,150 rank_warlord:370,550,150,150 rank_champion:370,700,150,150 rank_challenger:60,195,220,195`（挑战者用左边「我的段位」大图标）。
@@ -305,6 +311,15 @@
 - 只放模型里的英雄（用户意见）：`/api/rta/model` 的 `codes`；RTA 页网格、预禁组合（`_Preban.pairs`）只用它们；`PUT /api/rta/pool` 有别的 422 `not_in_model`，GET / advise 跳过以前存的。`advise` 的 `unknown` 也列局面里模型没见过的英雄（命令行 / 接口直接传时才有）。
 - 测试：`test_rta_dataset.py`、`test_rta_speed.py`、`test_heroes.py`、`test_rta_search.py`、`test_rta_api.py` 里加的 9 个；前端 `rta.test.ts` 加 `inModel`。
 
+### RTA 英雄池（B14e2，详见 architecture.md「先动概率 / 英雄池」「GUI / 英雄图鉴、RTA 助手」和 reviews/B14e2.md）
+- 引擎：
+  - `core/rta/pool.py`：`load_saved()`（没设置过 / 文件坏了 = None）、`default(picks, codes, n=60)`（主模型里训练时被选最多的 60 名，`Pool.default = True`，不写进文件，重训后跟着变）、`reset()`（删文件）；`load()` 还是「没有 = 空」（命令行用）。
+  - 接口：`GET /api/rta/pool` 没设置过返回默认的；`DELETE /api/rta/pool` 恢复默认；advise 始终传存的英雄池（存成空的也传 → 每一轮 `pool_short`、推荐全部英雄）。
+  - `search.py`：英雄池里能选的（先验 > 0）不到这一轮要选的名数时不限制（`limited` / `eligible(need)`，根上记 `pool_short`，第 3 层同样）；**轮到对手时**算我方的读数：最可能的 8 种 + 模型读数最差的 4 种选法，各自 `reply_value`（我方从池里先验前 16 名挑回应、分数 ½ 预期 + ½ 最坏、按对手再下一轮先验前 12 名），`opponent.win` 按先验加权，模型读数留在每项的 `now`。
+  - 命令行 `rta advise` / `rta sim` 打印 `pool_short` 的提示，`rta sim` 在这种回合允许选池外的英雄。
+- 前端：`lib/pool.ts`（勾选 / 速度 / `parseSpeed` / `autoSave`：400ms 防抖、同一时间一个请求、`RESET` 恢复默认也排队、离开页面 `flush`）、`components/heroes/PoolEditor.tsx`（图鉴英雄池模式；从 RTA 助手进来带 `&from=rta`，按钮「返回 RTA 助手」）、`HeroGrid.tsx` 的 `PoolMark` 和筛选 `shrink`（1200 以下属性 / 职业只画图标）、`DraftPage.tsx` 的 `PoolInfo` 和网格「只看我的」、`lib/rta.ts` 的 `adviceKey`（缓存键带英雄池 `updated`）/ `pickHeadline` / `rareTag`。
+- 测试：`test_rta_search.py`（池不够 3 个、对方回合 2 个）、`test_rta_api.py`（池不够、默认英雄池 2 个）；前端 `pool.test.ts`（7）、`rta.test.ts`（加 5）。
+
 ### 模块与 CLI（B01，B03 / B08 更新）
 - 模块：继承 `TaskModule` / `AssistantModule`，放到 `e7helper/modules/<id>/` 就会被自动发现。参考 `modules/hello/`。
 - CLI：`doctor`、`bench`、`screenshot`、`tap`、`modules`、`run <id> [-c JSON] [-t 超时]`（经 runtime）、`scene [-f 图片] [--dismiss] [--watch]`、`capture`（新增 `--tap`）、`match`、`ocr`、`serve`（B08）、`heroes [词] [--update [--bundled]]`（B13）、`rta probe|crawl|report`（B14a，子命令组）、`rta dataset|train|eval|export|model|predict|sim|watch`（B14b）、`rta advise|preban|priors|audit`（B14c）、`rta first|herostats|speed`、`rta crawl --backfill`（B14d1）。
@@ -398,6 +413,10 @@
   - 自对弈 ≥ 90% 的 4 局（超过我定的 2%）按现状接受（审核通过，没有另提意见）；
   - 和 e7rtabot 的对抗对比：站长在 Discord 同意小规模、限频（每 3–5 秒一次请求）。网站条款原本禁止自动访问，以后要再跑，先问用户；
   - 开局行动条（`energyGauge`）的采集和用法放到 B14d 开工时定（用户决定）。
+- B14e2（2026-11-07 审核通过，均为用户意见 / 选择）：
+  - 方案（11-03）：图鉴英雄池模式按发布日期排；预禁推荐完全不管英雄池；英雄池只放模型里有的英雄（B14h）；
+  - 第 1 / 2 轮审核：信息条**始终用我方的读数**（「始终使用自己这儿的读数」：不显示不知道英雄池的模型读数，对方回合也要按我方从英雄池里回应来算）；**去掉「只推荐我的英雄」开关、始终按英雄池推荐**，**默认配置热门英雄**（「以防止玩家没有配置而无法进行推荐」）；
+  - 我定的、用户没有异议：默认 60 名、默认的不写进文件、「恢复默认」= 删文件、存成空的 = 每一轮推荐全部英雄并提示、池不够这一轮就这一轮不限制（以后几轮的搜索也一样）、推荐卡上只因为英雄池才推荐的冷门英雄标「英雄池」、信息条用推荐第 1 名的预期（不是卡片里预期最高的那张）。
 - B14h（2026-11-04 审核通过，均为用户意见 / 选择）：
   - **RTA 数据以后只用国际服**（国服已同步国际服，国服数据质量不行）：快照、速度表都只用海外；
   - 还没养成的新英雄（B14h 是侦探茉萝）采集照常存，**不进训练**（快照 `--exclude`）；
@@ -420,16 +439,14 @@
   - **采集以后再说**（用户）：国服补采、能力值快照、随包速度表都没跑，工具和步骤保留（B14h 用国际服做了，见「重训流程」）。
   - **B14d2 往后放**（用户，审核通过后）：站位 / 快速分析 / 英雄统计等 ss22 赛季更新、数据重采后和 B14g 一起做；B14e 先做五步 BP 页面和英雄池，快速分析、英雄统计页跟着 B14d2 往后放。
 
-## 下一块：B14e2 RTA：英雄池
-**方案已和用户定好**（2026-11-03），全文在 reviews/B14h.md 末尾「B14e2 方案」，开工时直接用，不用再问一遍；开工时只确认有没有新的试用反馈。要点：
-- **图鉴里的英雄池**：图鉴顶部「检查更新」旁边加「英雄池」按钮进入英雄池模式；**只列主模型里有的英雄**（`GET /api/rta/model` 的 `codes`，B14h 用户意见：模型没训练进的只在平时的图鉴里看），**按发布日期排**（用户选）；点头像勾选 / 取消，右边一列是已勾的英雄 + 速度输入（空 = 按段位的常见速度，50–400）+「全部清空」，改了 400 ms 后自动 `PUT /api/rta/pool`（引擎会拒收模型外的英雄，422 `not_in_model`）。
-- **RTA 助手页**：英雄池不空时顶栏有「只推荐我的英雄（N 名）」开关（默认开、记在本机，对应 advise 的 `use_saved_pool`）+「编辑」；英雄池空时是「设置英雄池」。只影响我方选人推荐。网格里英雄池的英雄有小标记、筛选「只看我的」；推荐卡 `pool_only` 标「英雄池」。
-- **英雄池里能选的不够这一轮**：这一轮不限制并提示；引擎 advise 加这个判断和 `pool_short`（现在会返回空推荐）。
-- **预禁推荐完全不管英雄池**（用户选）。
-- **重算**：英雄池用 react-query 读，保存后失效；`adviceCache` 的键带上英雄池的 `updated` 和开关状态。
-- 先动概率：英雄池里填的速度用在 `speed.annotate`（B14h 起随包有速度表，页面上能直接看到）。
-- 沿用 B14e1 的做法：布局对齐（列宽固定的网格、每张卡行数一样）、按 1280×800 和 1100 宽用 DOM 量；说明只讲功能。
-- **不做**：快速分析、英雄统计、站位（B14d2）；画面识别（B14f）。
+## 下一块：B14f RTA：画面识别
+ROADMAP：助手模块 `rta_draft` 读帧自动跟随——阶段、双方段位、先后手、每个位置的英雄、预禁 / 后禁；用户打几场 RTA 采 fixture（**只截图、不点击**）；验收 fixture + 单元测试 + 实测一局。B14a 的草案只有一句：先请用户打几场 RTA 截图，再定认头像的方法（头像模板 / 名字 OCR + `heroes().find`）。开工时细化方案、和用户确认后再动手；工作量大，按习惯拆子块（例如 B14f1 采 fixture + 识别引擎 / B14f2 RTA 助手页自动跟随），拆法先问用户。
+要先定的：
+- **截图怎么采**：用户在 MuMu 里打 RTA，我只截图（`e7helper screenshot` / 设备层截帧），每个阶段（准备、预禁、选秀每一手、后禁、结果）各几张，双方先后手都要；国服简中界面。
+- **认什么**：当前阶段、轮到谁、双方段位、先后手、开战规则（优胜者以上）、预禁 4 名、10 手各是谁（含保护位）、后禁；站位 1–4 对应游戏里哪个格子（B14a 留下的问题）。
+- **认头像的方法**：随包头像（`heroes().icon(编号)`，112×112）做模板 / 特征比对，或者认名字（OCR + `find`）；只在模型里的英雄之外还要能认出「模型没见过的」（例如茉萝，B14h：页面上录不进去，识别后要提示）。
+- **接进页面**：`AssistantModule` 只读帧、可以和任务并行（架构见 architecture.md「模块契约」）；RTA 助手页现在是手动录入（`lib/draft.ts` 的局面 + `draftStore`），识别结果怎么填进去（自动跟随 / 用户确认）要和用户定。英雄池数据已经放在 `<数据目录>/modules/rta_draft/pool.json`（模块编号就是 `rta_draft`）。
+- 能直接用的：`core/vision`（模板匹配、OCR，B02）、`core/scene`（场景识别，B03）、事件总线的帧订阅（B03 / B08 WebSocket）。
 
 ## 往后放：B14d2 RTA：站位 / 快速分析 / 英雄统计（等 ss22 赛季更新、数据重采后和 B14g 一起做，用户意见）
 设计草案在 reviews/B14a.md「后续块的设计草案 / B14d」，ROADMAP 的 B14d2 一行也有。开工时细化、和用户确认后再动手。要做的：
@@ -451,7 +468,7 @@
 3. 切分训练 `rta train -m hybrid --d 128 --layers 3 --lambda 1 --epochs 30` + 对照 `-m fm --k 16`；`rta eval` 和上一版的模型比（**先复制上一版的 run 再评估**，见「坑」）。
 4. 全量 `--full --calibration-from <切分 run> --epochs <最佳轮>`；`rta export <全量 run> --metrics-from <切分 run>`、`rta export <切分 run> --out assets/data/rta/second`。
 5. 新旧主模型的直接比较：另建一份含最后一天的快照放到 `holdout\`，取那一天（B14h 的脚本只在会话临时目录里，做法见 reviews/B14h.md「留出日」）。
-6. `rta priors`、`tools/rta_trust.py`、`rta audit`（机器空闲时跑，计时要和上一版同机对比）、`rta speed`、`rta model --check`；全量单元测试放后台。
+6. `rta priors`、`tools/rta_trust.py`、`rta audit`（机器空闲时跑，计时要和上一版同机对比）、`rta speed`、`rta model --check`；全量单元测试放后台。默认英雄池（被选最多的 60 名，B14e2）跟着新的 priors / 主模型自动变，不用管；存过英雄池的玩家里新模型没有的英雄会被跳过。
 7. 冻结引擎重新打包时带上新的 `assets/data/rta/`。
 
 ## 坑
@@ -567,6 +584,11 @@
   - 不带 `-d` 的 `rta train / eval / export / priors / audit` 用 `datasets\` 里**修改时间最新**的快照：额外建的快照（留出用的）放别的目录。
   - 采集库 `battles.day` 是完整时间戳；按天统计别在 sqlite 里全表 group by（几分钟都出不来），取出来在 Python 里数。
   - 官方速度直方图里混着「没算装备」的记录（基础速度或 × 1.25 那一档的孤立尖峰），`rta speed` 默认清理；B14d1 时用国服数据没发现。
+- **B14e2 的几个坑**：
+  - **停掉 `pnpm dev` 的后台任务后 Vite 还在**（node `vite.js` 子进程留着、1420 端口占着，之后 `pnpm tauri dev` 会起不来）：按命令行找到这个工作区的 `vite.js` 进程结束掉（`Get-NetTCPConnection -LocalPort 1420` → `Win32_Process` 看命令行再 `Stop-Process`）。
+  - 浏览器面板里用脚本连着点：改了段位 / 开战规则后马上点「开始预禁」会点到还没重新渲染的灰按钮（什么都不发生）；每步之间等 0.3–0.5 秒，或者每步单独调用。
+  - Git Bash 里 `python -`（系统 Python）`print` 带 emoji 的字符串会 GBK 报错（`UnicodeEncodeError`），但前面的写文件已经做了；要打印就加 `-X utf8`。
+  - 新会话的工作区从 main 开：前面的块还没合进 main 时（B14e2 开工时 B14h 就不在 main 上），先看 `git worktree list` / 各分支，把本分支快进到上一块的提交再开工。
 - **全量单元测试约 23 分钟**：别用 `timeout 900` 之类包着跑（B14d1 被它中途杀掉过），放后台跑、等通知。
 - **桌面版窗口默认 1280×800**（`tauri.conf.json`），最窄 1100（`App.tsx` 的 `min-w-[1100px]`）：新页面按这两个尺寸核对（浏览器面板 `resize_window`），别只看 1440×900（B14e1 一开始就是只看了大尺寸）。
 - **浏览器面板里 radix 下拉框（`Select`）点不中选项**（B14e1，面板隐藏时尤其明显）：按坐标、按元素引用、按键盘都不稳。用脚本派发 `pointerdown` / `pointerup`（`pointerType: "mouse"`）先打开触发器，等 0.4 秒，再对选项派发同样的事件。普通按钮直接 `click()` 就行。

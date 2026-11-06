@@ -1206,6 +1206,8 @@ def _print_advice(out: dict, db) -> None:
     _print_first(out.get("first"), db)
     if out.get("unknown"):
         console.print(f"[yellow]英雄池里这些模型没有数据，不推荐：{'、'.join(map(nm, out['unknown']))}[/]")
+    if out.get("pool_short"):
+        console.print("[yellow]英雄池里能选的不够，这一轮推荐全部英雄[/]")
     recs = out.get("recommend") or []
     if recs:
         t = Table("#", "推荐", "分数", "预期", "被针对时", "差距", "这一手常见度", "两模型差", "我方先动", "对手最可能的回应",
@@ -1645,13 +1647,17 @@ def rta_sim(
         st = state
         for c in codes:
             st = sim.with_pick(st, who, c)
-        return not st.problems() and (who != side or my_pool is None or all(c in my_pool for c in codes))
+        # 英雄池里能选的不够这一轮时这一轮不限制（B14e2，pool_short）
+        return not st.problems() and (who != side or my_pool is None or pool_short or all(c in my_pool for c in codes))
+
+    pool_short = False
 
     while state.n_picks < len(rules.PICK_ORDER):
         n = state.n_picks
         mover = rules.mover(n)
         if mover == side:
             out = adv.advise(state, side, pool=my_pool)
+            pool_short = bool(out.get("pool_short"))
             _print_advice(out, db)
             left = rules.left_in_turn(n)
             codes = ask(f"第 {n + 1} 手 · 你选（{left} 名以内，回车 = 第一个推荐）：", left,

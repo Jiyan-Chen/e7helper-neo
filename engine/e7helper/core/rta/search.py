@@ -10,7 +10,8 @@ adv.preban("F", grades=("legend", "emperor"))    # 预禁推荐（先后手不�
 轮到我方时的搜索：
 1. 候选只从选人头先验里取：这一手常见度 ≥ 0.5%，或常见度前 40 且训练数据里被选过 ≥ 1000 次（冷门英雄的搭档 /
    克制项学得不准，B14b 审核；不筛的话一层贪心 85% 挑到冷门英雄，B14c 开工测量）。英雄池里过不了筛的冷门英雄
-   也算候选（靠下面的折扣压住）。
+   也算候选（靠下面的折扣压住）。英雄池里能选的（没被选、没被禁）不够这一轮要选的名数时，这一轮不限制
+   （B14e2：根上的这一轮标 `pool_short`，第 3 层我方再回应也按同样的规则）。
 2. 扣掉少见选择的高估：一手的单步变化里对出手方有利的那部分，有 (1 − 可信度) 当成模型的高估，从这一手之后的
    所有结果里扣掉（冷门英雄的高估在它上场后一直都在，后面几手、后禁都会带着）。可信度 = q / (q + 1.5%)
    （q = 这一手的常见度）× min(1, 被选次数 / 1000)。按切分模型在没见过的测试期上量的：模型说「这一手能提升」的
@@ -24,6 +25,10 @@ adv.preban("F", grades=("legend", "emperor"))    # 预禁推荐（先后手不�
 5. 搜到选秀结束时叶子用后禁博弈的值：4 × 4 矩阵每行 ½ 最坏 + ½ 预期（对方按数据里的后禁率），取最好的一行。
 6. 有截止时间：第 2 / 3 层按候选的名次一个个算，到时间就停；没算到的候选按浅一层的结果排在后面。
 第二个模型（切分训练的，没见过最后 14 天）只给最后列出的推荐重算第 2 层，两个模型的差当不确定性。
+
+轮到对手时（B14e2 审核，用户意见：始终用我方的读数，不用不知道英雄池的模型读数）：对手最可能的几种选法和
+模型读数最差的几种，各自往下算「我方这一轮从英雄池里挑最好的回应（先验前 16 名）→ 对手再下一轮按先验回应」，
+每种选法之后的胜率 = 那个回应的预期（同推荐卡的「预期」），`opponent.win` = 按选法的先验加权。
 返回的胜率一律是「我方」的。
 """
 
@@ -64,6 +69,8 @@ class SearchConfig:
     threats3: int = 2  # 再加最坏的几个
     replies: int = 12  # 第 3 层我方再回应：先验前几名
     opp_list: int = 16  # 轮到对手时：两手回合取先验前几名两两组合
+    their_replies: int = 16  # 轮到对手时算「我方的读数」：我方回应取先验前几名（英雄池里的）
+    reply_cands: int = 4  # 再往下算对手回应的我方回应个数
     alpha: float = 0.5  # 分数 = alpha × 最坏 + (1 − alpha) × 预期
     close_gap: float = 0.01  # 和第一名差不到这个 = 差距不明显
     uncertain_gap: float = 0.05  # 两个模型差这么多 = 不确定
@@ -259,6 +266,7 @@ class _Search:
         self.main = _Net(adv.model, state, self.vocab, self.clock)
         self.second = _Net(adv.second, state, self.vocab, self.clock) if adv.second is not None else None
         self.pool = None
+        self.pool_short = False  # 英雄池里能选的不够这一轮（这一轮推荐全部英雄）
         # 模型没见过的英雄（按 UNK 算）：局面里的（B14h 快照里去掉的新英雄）和英雄池里的
         self.unknown: list[str] = []
         self.tokens = state.tokens()
@@ -335,19 +343,26 @@ class _Search:
         return rows * (16 if end == N else 1)
 
     # —— 候选 ——
-    def eligible(self, prior: np.ndarray, mine: bool) -> list[int]:
+    def limited(self, prior: np.ndarray, need: int) -> bool:
+        """我方这一轮只在英雄池里选？没有英雄池、或池里能选的（先验 > 0 = 没被选、没被禁）不到 need 名时不限制。"""
+        return self.pool is not None and int(np.count_nonzero(self.pool & (prior > 0))) >= need
+
+    def eligible(self, prior: np.ndarray, mine: bool, need: int = 1) -> list[int]:
         """先验 prior [V]（不能选的是 0）→ 候选（按先验从高到低）。我方有英雄池时只在池里选，
-        池里过不了筛的冷门英雄排在最后（靠打折压住）。"""
+        池里过不了筛的冷门英雄排在最后（靠打折压住）；池里能选的不到这一轮要选的 need 名时不限制（B14e2）。"""
         cfg = self.cfg
         ids = np.flatnonzero(prior > 0)
-        if mine and self.pool is not None:
+        pool = mine and self.limited(prior, need)
+        if pool:
             ids = ids[self.pool[ids]]
         ids = ids[np.argsort(-prior[ids], kind="stable")]
         top = np.arange(len(ids)) < cfg.keep_top
         ok = (prior[ids] >= cfg.min_common) | (top & (self.counts[ids] >= cfg.rare_picks))
         keep = [int(i) for i in ids[ok]]
-        if mine and self.pool is not None:
+        if pool:
             keep += [int(i) for i in ids[~ok] if self.counts[i] < cfg.rare_picks]
+            if len(keep) < need:  # 池很大、够数的都排在前 40 名以后又不常见：池里能选的全算
+                keep = [int(i) for i in ids]
         return keep
 
     def trust(self, ids: Sequence[int], prior: np.ndarray) -> float:
@@ -457,7 +472,9 @@ class _Search:
     def my_turn(self) -> dict:
         cfg, n = self.cfg, self.n
         self.cur, prior0 = self.root(self.main, pick=True)
-        moves1 = self.moves(n, self.eligible(prior0, mine=True), prior0, mine=True)
+        k = rules.left_in_turn(n)
+        self.pool_short = self.pool is not None and not self.limited(prior0, k)
+        moves1 = self.moves(n, self.eligible(prior0, mine=True, need=k), prior0, mine=True)
         n1 = n + rules.left_in_turn(n)
         cands = []
         for mv, r in zip(moves1, self.evaluate(self.main, [((), moves1)], mine=True, pick=True, force=True)[0]):
@@ -515,7 +532,7 @@ class _Search:
             items = []
             for i in pick:
                 r = c.responses[i][1]
-                ids = self.eligible(r.probs, mine=True)[:cfg.replies]
+                ids = self.eligible(r.probs, mine=True, need=rules.left_in_turn(n2))[:cfg.replies]
                 items.append((c.res.line + r.line, self.moves(n2, ids, r.probs, mine=True)))
             if not self.clock.affordable(self.cost(sum(len(m.variants) for _, ms in items for m in ms), n3)):
                 break
@@ -568,13 +585,69 @@ class _Search:
         if rules.left_in_turn(n) == 2:
             ids = ids[:cfg.opp_list]
         moves = self.their_moves((), n, ids, prior0)
-        res = self.evaluate(self.main, [((), moves)], mine=False, pick=False, force=True)[0]
-        items = [{"heroes": [self.code(i) for i in r.line], "prob": mv.prior,
-                  "win": r.value + correction(mv.trust, r.raw - cur, False)} for mv, r in zip(moves, res)]
-        likely = sorted(items, key=lambda x: -x["prob"])[:cfg.top]
-        threats = sorted(items, key=lambda x: x["win"])[:3]
+        n1 = n + rules.left_in_turn(n)
+        res = self.evaluate(self.main, [((), moves)], mine=False, pick=n1 < N, force=True)[0]
+        items, keep = [], []
+        for mv, r in zip(moves, res):
+            corr = correction(mv.trust, r.raw - cur, False)
+            # 选完 10 手：后禁博弈推荐行的预期（同后禁这一步信息条上的）；否则先放模型读数，下面换成我方的读数
+            now = (r.exp if n1 == N else r.value) + corr
+            items.append({"heroes": [self.code(i) for i in r.line], "prob": mv.prior, "win": now, "now": now})
+            keep.append((r, corr))
+        # 我方的读数（B14e2 审核）：最可能的几种 + 模型读数最差的几种，往下算我方从英雄池里挑的回应
+        likely = sorted(range(len(items)), key=lambda i: -items[i]["prob"])[:cfg.top]
+        worst = [i for i in sorted(range(len(items)), key=lambda i: items[i]["now"]) if i not in likely][:cfg.threats]
+        done = []
+        for i in likely + worst:
+            r, corr = keep[i]
+            if n1 < N:
+                v = self.reply_value(r.line, r.probs, r.raw, n1)
+                if v is None:  # 时间不够：剩下的还是模型读数（stats.truncated）
+                    break
+                items[i]["win"] = v + corr
+            done.append(i)
+        p = sum(items[i]["prob"] for i in done)
+        expected = sum(items[i]["prob"] * items[i]["win"] for i in done) / p if p > 0 else None
+        threats = sorted((items[i] for i in done), key=lambda x: x["win"])[:3]
         sec = self.root(self.second)[0] if self.second is not None else None
-        return {**self.head("pick", "theirs", cur, sec), "opponent": {"likely": likely, "threats": threats}}
+        return {**self.head("pick", "theirs", cur, sec),
+                "opponent": {"likely": [items[i] for i in likely], "threats": threats, "win": expected}}
+
+    def reply_value(self, parent: tuple[int, ...], probs: np.ndarray, raw0: float, n1: int) -> float | None:
+        """对手走完 parent（从根局面往下的 fills，之后已选 n1 手、轮到我方）之后「我方的读数」：我方这一轮从英雄池里挑
+        最好的回应（先验前 their_replies 名；分数 = ½ 预期 + ½ 最坏，按对手下一轮先验前 responses 名的回应算），
+        返回这个回应的预期（含我方回应的修正，同推荐卡的「预期」）。raw0 = parent 之后模型给的我方胜率。时间不够返回 None。"""
+        cfg = self.cfg
+        k1 = rules.left_in_turn(n1)
+        n2 = n1 + k1
+        mv1 = self.moves(n1, self.eligible(probs, mine=True, need=k1)[:cfg.their_replies], probs, mine=True)
+        r1 = self.evaluate(self.main, [(parent, mv1)], mine=True, pick=True)
+        if r1 is None or not mv1:
+            return None
+        cands = [(r, correction(mv.trust, r.raw - raw0, True)) for mv, r in zip(mv1, r1[0])]
+        a = cfg.alpha
+        if n2 == N:  # 我方这一轮选完就到后禁：叶子是后禁博弈
+            return max(((a * (r.worst + c) + (1 - a) * (r.exp + c), r.exp + c) for r, c in cands))[1]
+        top = sorted(cands, key=lambda x: -(x[0].value + x[1]))[:cfg.reply_cands]
+        items = []
+        for r, _ in top:
+            line = parent + r.line
+            items.append((line, self.their_moves(line, n2, self.eligible(r.probs, mine=False)[:cfg.responses], r.probs)))
+        r2 = self.evaluate(self.main, items, mine=False, pick=False)
+        if r2 is None:
+            return None
+        best = None
+        for (r, c), (_, rmoves), rres in zip(top, items, r2):
+            if rres:
+                v = np.array([x.value + correction(m.trust, x.raw - r.raw, False) for m, x in zip(rmoves, rres)])
+                q = np.array([max(m.prior, 1e-12) for m in rmoves])
+                exp, low = float(q @ v / q.sum()), float(v.min())
+            else:
+                exp = low = r.value
+            score = a * (low + c) + (1 - a) * (exp + c)
+            if best is None or score > best[0]:
+                best = (score, exp + c)
+        return best[1]
 
     # —— 后禁 ——
     def ban_turn(self) -> dict:
@@ -625,7 +698,7 @@ class _Search:
         recs = []
         for rank, c in enumerate(shown):
             line = list(c.res.line)
-            in_pool = self.pool is not None
+            in_pool = self.pool is not None and not self.pool_short
             item = {"heroes": [self.code(h) for h in line], "protected": self.code(line[prot]) if prot is not None else None,
                     "score": c.score, "win": c.win, "worst": c.low,
                     "now": c.res.value + c.corr, "trust": c.move.trust,
@@ -659,7 +732,8 @@ class _Search:
                 if len(heroes) >= cfg.top:
                     break
             heroes = heroes[:cfg.top]
-        return {**self.head("pick", "mine", self.cur, self.second_cur), "recommend": recs, "heroes": heroes}
+        return {**self.head("pick", "mine", self.cur, self.second_cur), "recommend": recs, "heroes": heroes,
+                "pool_short": self.pool_short}
 
     def run(self) -> dict:
         if self.state.state == encode.POSTBAN:
