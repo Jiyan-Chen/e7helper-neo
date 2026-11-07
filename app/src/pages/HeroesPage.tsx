@@ -11,6 +11,7 @@ import { toast } from "@/components/ui/Toast";
 import { ApiError, api, errorMessage } from "@/lib/api";
 import { filterHeroes, type Hero, type HeroFilter, type HeroList } from "@/lib/heroes";
 import { qk } from "@/lib/query";
+import { useHasRta } from "@/lib/store";
 import { dayTime } from "@/lib/time";
 import { cn } from "@/lib/utils";
 
@@ -18,16 +19,19 @@ export function HeroesPage() {
   const { data, isLoading } = useQuery({ queryKey: qk.heroes, queryFn: () => api().heroes(), staleTime: Infinity });
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
-  if (params.get("pool") === "1") {
-    if (!data) return <p className="px-[22px] py-4 text-muted">加载中…</p>;
+  const hasRta = useHasRta(); // 英雄池只给 RTA 助手用，正式版不带 RTA 时没有
+  if (params.get("pool") === "1" && hasRta !== false) {
+    if (!data || hasRta === null) return <p className="px-[22px] py-4 text-muted">加载中…</p>;
     const fromRta = params.get("from") === "rta";
     return <PoolEditor data={data} exitLabel={fromRta ? "返回 RTA 助手" : "返回图鉴"}
       onExit={() => (fromRta ? navigate("/rta") : setParams({}))} />;
   }
-  return <Gallery data={data} isLoading={isLoading} onPool={() => setParams({ pool: "1" })} />;
+  return <Gallery data={data} isLoading={isLoading} onPool={hasRta ? () => setParams({ pool: "1" }) : null} />;
 }
 
-function Gallery({ data, isLoading, onPool }: { data: HeroList | undefined; isLoading: boolean; onPool: () => void }) {
+function Gallery({ data, isLoading, onPool }: {
+  data: HeroList | undefined; isLoading: boolean; onPool: (() => void) | null;
+}) {
   const qc = useQueryClient();
   const [filter, setFilter] = useState<HeroFilter>({ query: "", element: null, role: null, rarity: null });
   const [open, setOpen] = useState<Hero | null>(null);
@@ -61,9 +65,11 @@ function Gallery({ data, isLoading, onPool }: { data: HeroList | undefined; isLo
           <RefreshCw className={cn("size-4", updating && "animate-spin")} />
           {updating ? "更新中…" : "检查更新"}
         </button>
-        <button type="button" className="btn btn-sm btn-bronze" disabled={!data} onClick={onPool}>
-          <ListChecks className="size-4" />英雄池
-        </button>
+        {onPool && (
+          <button type="button" className="btn btn-sm btn-bronze" disabled={!data} onClick={onPool}>
+            <ListChecks className="size-4" />英雄池
+          </button>
+        )}
       </div>
 
       <section className="panel flex flex-col gap-2 px-4 py-3">

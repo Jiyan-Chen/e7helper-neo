@@ -10,7 +10,7 @@ import { api } from "@/lib/api";
 import { isDev } from "@/lib/env";
 import { useModules } from "@/lib/hooks";
 import { setModuleNames } from "@/lib/labels";
-import { useEngine } from "@/lib/store";
+import { useEngine, useHasRta } from "@/lib/store";
 import { menuModules, moduleUI } from "@/modules/registry";
 import { CapturePage } from "@/pages/CapturePage";
 import { DraftPage } from "@/pages/DraftPage";
@@ -83,6 +83,13 @@ function ModuleRoute() {
   return <ModulePage key={id} moduleId={id} />;
 }
 
+/** 正式版打包时不带 RTA：引擎说没有就回首页；还没连上引擎时先不画。 */
+function RtaRoute() {
+  const hasRta = useHasRta();
+  if (hasRta === null) return null;
+  return hasRta ? <DraftPage /> : <Navigate to="/" replace />;
+}
+
 function Home() {
   const { data: modules } = useModules();
   if (!modules) return null;
@@ -105,7 +112,7 @@ const router = createHashRouter([
       { path: "flows/:id", element: <FlowEditorPage /> },
       { path: "templates", element: <TemplatesPage /> },
       { path: "heroes", element: <HeroesPage /> },
-      { path: "rta", element: <DraftPage /> },
+      { path: "rta", element: <RtaRoute /> },
       ...(isDev ? [{ path: "capture", element: <CapturePage /> }] : []),
       { path: "*", element: <Navigate to="/" replace /> },
     ],

@@ -57,9 +57,10 @@ pnpm typecheck
 
 ## 打包（B10，详见 architecture.md「打包发布」）
 ```
-cd engine && python -m uv run --group build python packaging/build.py   # 冻结引擎 + 冒烟测试
+cd engine && python -m uv run --group build python packaging/build.py   # 冻结引擎 + 冒烟测试（加 --no-rta = 不带 RTA 的正式版）
 cd app && pnpm bundle                                                    # NSIS 安装包（带上冻结引擎）
 ```
+- 发布分两种（0.3.0 起）：正式版不带 RTA（`--no-rta`），测试版带 RTA（GitHub 上标预发布）；两种都是面向玩家的打包版，GUI 按引擎 `/api/status` 的 `features.rta` 显示 RTA 页面。仓库在 GitHub `Jiyan-Chen/e7helper-neo`（私有，只推 main 和版本标签）。
 - 用 `python -m uv pip install` 装包时一定要加 `--python .venv/Scripts/python.exe`：经 `python -m uv` 调用时默认装进全局 Python。
 
 ## 本机环境（开发者）

@@ -24,6 +24,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from e7helper import __version__
+from e7helper.features import features, has_rta
 from e7helper.modules import Module, ModuleRegistryError
 
 from .auth import LOCAL_HOSTS, AuthConfig, HostCheckMiddleware, require_token
@@ -31,7 +32,6 @@ from .capture import FrameCache, build_capture_router
 from .flows import build_flows_router
 from .engine import ApiError, Engine
 from .heroes import build_heroes_router
-from .rta import build_rta_router
 from .scheduler import Scheduler, ScheduleSpec
 from .ws import Hub, build_ws_router, encode_jpeg
 
@@ -74,6 +74,7 @@ class Services:
         sched = self.scheduler.snapshot()
         return {
             "version": __version__,
+            "features": features(),
             "uptime": round(time.time() - e.started_at, 1),
             "device": e.device_info(),
             "task": e.current_task(),
@@ -173,7 +174,10 @@ def create_app(
     app.include_router(build_capture_router(engine, frames), prefix="/api", dependencies=[Depends(require_token)])
     app.include_router(build_flows_router(engine, services.scheduler, frames), prefix="/api", dependencies=[Depends(require_token)])
     app.include_router(build_heroes_router(), prefix="/api", dependencies=[Depends(require_token)])
-    app.include_router(build_rta_router(), prefix="/api", dependencies=[Depends(require_token)])
+    if has_rta():  # 正式版打包时可以不带 RTA（packaging/build.py --no-rta）
+        from .rta import build_rta_router
+
+        app.include_router(build_rta_router(), prefix="/api", dependencies=[Depends(require_token)])
     _mount_module_routes(app, engine)
     app.include_router(build_ws_router(services))
     return app

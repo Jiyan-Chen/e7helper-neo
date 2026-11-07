@@ -34,6 +34,8 @@ export interface TaskRecord {
 
 export interface Status {
   version: string;
+  /** 这个版本带了哪些可选功能（正式版打包时可以不带 RTA）；旧引擎没有这个字段 */
+  features?: { rta?: boolean };
   uptime: number;
   device: DeviceInfo;
   task: TaskRecord | null;

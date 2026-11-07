@@ -456,6 +456,12 @@ pnpm bundle                                                       # = tauri buil
 ```
 产物：`engine/dist/e7engine/`（约 270MB，350 个文件），安装包 `app/src-tauri/target/release/bundle/nsis/第七史诗助手_<版本>_x64-setup.exe`（约 96MB）。
 
+**两种版本**（发布 0.3.0 起）：
+- **正式版**（不带 RTA）：`build.py --no-rta`。`e7engine.spec` 读环境变量 `E7_NO_RTA=1`，不收 `e7helper.core.rta` / `e7helper.api.rta`（`collect_submodules` 过滤 + `excludes`），也不带 `assets/data/rta`（模型、priors、速度表）。冒烟测试改成核对没有 RTA 模型、`/api/rta/model` 是 404。
+- **测试版 / 开发**（带 RTA）：不加参数。
+- 引擎按代码在不在决定挂不挂 RTA 接口（`e7helper/features.py` 的 `has_rta()`），`GET /api/status`（和 WS 的 hello）带 `features: {"rta": bool}`。GUI 只看这个字段（`lib/store.ts` 的 `useHasRta()`）：没有 RTA 时菜单不显示「RTA 助手」、`#/rta` 回首页、图鉴没有「英雄池」按钮。前端只有一份，用哪种引擎打包就是哪种版本，`pnpm bundle` 不用加参数。
+- 两种版本先后打的时候：每次 `build.py` 都会先删掉 `dist/e7engine/` 再冻结，所以打完一种马上 `pnpm bundle`，再打另一种。
+
 **引擎冻结**（`engine/packaging/`）：PyInstaller **onedir**（onefile 每次启动要解压 270MB）。
 | 文件 | 职责 |
 |---|---|

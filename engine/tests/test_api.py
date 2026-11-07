@@ -417,6 +417,19 @@ def test_status(client):
     s = client.get("/api/status").json()
     assert s["device"]["connected"] and s["task"] is None
     assert s["scheduler"] == {"paused": False, "schedules": 0, "next": None}
+    assert s["features"] == {"rta": True}  # 开发环境代码都在
+
+
+def test_without_rta(engine, monkeypatch):
+    # 正式版（packaging/build.py --no-rta）：没有 RTA 代码时不挂接口，status 告诉 GUI
+    import e7helper.api.app as api_app
+
+    monkeypatch.setattr(api_app, "has_rta", lambda: False)
+    monkeypatch.setattr(api_app, "features", lambda: {"rta": False})
+    with _client(engine) as c:
+        assert c.get("/api/status").json()["features"] == {"rta": False}
+        assert c.get("/api/rta/model").status_code == 404
+        assert c.get("/api/heroes").status_code == 200
 
 
 # ---------------------------------------------------------------- WebSocket

@@ -30,6 +30,10 @@ export const useEngine = create<EngineStore>(() => ({
   flowStep: null,
 }));
 
+/** 引擎带不带 RTA 助手（正式版打包时不带）；还没拿到状态时是 null。 */
+export const useHasRta = (): boolean | null =>
+  useEngine((s) => (s.status ? s.status.features?.rta === true : null));
+
 let socket: EngineSocket | null = null;
 let statusTimer: ReturnType<typeof setTimeout> | null = null;
 

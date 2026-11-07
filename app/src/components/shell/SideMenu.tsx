@@ -3,7 +3,7 @@ import { NavLink } from "react-router";
 import { Ornament } from "@/components/ui/Ornament";
 import { isDev } from "@/lib/env";
 import { useModules, useSchedules } from "@/lib/hooks";
-import { useEngine } from "@/lib/store";
+import { useEngine, useHasRta } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { menuModules, moduleUI } from "@/modules/registry";
 
@@ -19,6 +19,7 @@ export function SideMenu() {
   const { data: modules } = useModules();
   const { data: schedules } = useSchedules();
   const running = useEngine((s) => s.status?.task?.module);
+  const hasRta = useHasRta();
   const list = menuModules(modules ?? []);
   const flowRunning = running === "custom_flow";
   const flowScheduled = schedules?.schedules.some((s) => s.module === "custom_flow" && s.enabled);
@@ -60,10 +61,12 @@ export function SideMenu() {
         <BookUser className="size-6 flex-none" />
         <span className="truncate">英雄图鉴</span>
       </NavLink>
-      <NavLink to="/rta" className={({ isActive }) => cn("menu-item", isActive && "active")}>
-        <Swords className="size-6 flex-none" />
-        <span className="truncate">RTA 助手</span>
-      </NavLink>
+      {hasRta && (
+        <NavLink to="/rta" className={({ isActive }) => cn("menu-item", isActive && "active")}>
+          <Swords className="size-6 flex-none" />
+          <span className="truncate">RTA 助手</span>
+        </NavLink>
+      )}
       <Ornament className="mx-[18px] my-2.5" />
       {PAGES.map((p) => (
         <NavLink key={p.to} to={p.to} className={({ isActive }) => cn("menu-item minor", isActive && "active")}>

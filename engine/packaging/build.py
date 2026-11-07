@@ -3,6 +3,7 @@
 在 engine/ 下：
     python -m uv run --group build python packaging/build.py            # 检查版本号 → PyInstaller → 冒烟测试
     python -m uv run --group build python packaging/build.py --smoke    # 只对已有产物做冒烟测试
+    python -m uv run --group build python packaging/build.py --no-rta   # 正式版：不带 RTA（代码、模型都不进产物）
 
 冒烟测试不碰设备：`serve --no-connect --paused`，数据目录用临时目录。
 """
@@ -20,6 +21,7 @@ import sys
 import tempfile
 import time
 import tomllib
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -52,14 +54,15 @@ def check_versions() -> str:
     return version
 
 
-def build() -> None:
+def build(no_rta: bool) -> None:
     shutil.rmtree(DIST, ignore_errors=True)
     started = time.time()
+    env = {**os.environ, "E7_NO_RTA": "1" if no_rta else "0"}  # e7engine.spec 读
     subprocess.run(
         [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean",
          "--distpath", str(ENGINE / "dist"), "--workpath", str(ENGINE / "build"),
          str(ENGINE / "packaging" / "e7engine.spec")],
-        cwd=ENGINE, check=True,
+        cwd=ENGINE, check=True, env=env,
     )
     print(f"PyInstaller 完成：{time.time() - started:.0f} 秒")
 
@@ -77,7 +80,7 @@ def _run(args: list[str], env: dict[str, str]) -> str:
     return text
 
 
-def smoke() -> None:
+def smoke(no_rta: bool) -> None:
     if not EXE.exists():
         sys.exit(f"找不到 {EXE}，先构建")
     with tempfile.TemporaryDirectory(prefix="e7smoke-") as tmp:
@@ -99,19 +102,25 @@ def smoke() -> None:
             sys.exit(f"OCR 异常：\n{text}")
         print(f"[ok] 模板匹配；OCR 模型加载并识别出 {found.group(1)} 条文字")
 
-        # B14b：随包的 RTA 模型能加载、和 parity 样例一致；训练用的 torch / onnx 不进产物
-        text = _run(["rta", "model", "--check"], env)
-        if "parity 通过" not in text:
-            sys.exit(f"RTA 模型核对失败：\n{text}")
         leaked = [p.name for p in (DIST / "_internal").iterdir() if p.name.split(".")[0] in ("torch", "onnx", "onnxscript")]
         if leaked:
             sys.exit(f"产物里不该有训练依赖：{leaked}")
-        print("[ok] RTA 模型加载并通过 parity 核对；产物里没有 torch / onnx")
+        rta_data = DIST / "_internal" / "assets" / "data" / "rta"
+        if no_rta:
+            if rta_data.exists():
+                sys.exit(f"正式版不该带 RTA 模型：{rta_data}")
+            print("[ok] 正式版：没有 RTA 模型；产物里没有 torch / onnx")
+        else:
+            # B14b：随包的 RTA 模型能加载、和 parity 样例一致；训练用的 torch / onnx 不进产物
+            text = _run(["rta", "model", "--check"], env)
+            if "parity 通过" not in text:
+                sys.exit(f"RTA 模型核对失败：\n{text}")
+            print("[ok] RTA 模型加载并通过 parity 核对；产物里没有 torch / onnx")
 
-        _smoke_serve(env, Path(tmp))
+        _smoke_serve(env, Path(tmp), no_rta)
 
 
-def _smoke_serve(env: dict[str, str], data: Path) -> None:
+def _smoke_serve(env: dict[str, str], data: Path, no_rta: bool) -> None:
     info_path = data / "api.json"
     log = (data / "serve.log").open("wb")
     started = time.time()
@@ -149,6 +158,7 @@ def _smoke_serve(env: dict[str, str], data: Path) -> None:
         assert {m["id"] for m in mods} == EXPECTED_MODULES, mods
         _, status = call("/api/status")
         assert status["device"]["connected"] is False and status["scheduler"]["paused"] is True, status
+        assert status["features"] == {"rta": not no_rta}, status
         _, detail = call("/api/modules/daily")
         assert "properties" in detail["config_schema"], detail
         print("[ok] REST：modules / status / config_schema")
@@ -181,16 +191,15 @@ def _smoke_serve(env: dict[str, str], data: Path) -> None:
             assert r.read(4) == b"RIFF"
         print(f"[ok] 英雄数据库：随包 {hs['count']} 名，头像、技能详情和技能图标可读")
 
-        # B14c：选秀推荐（随包两个模型 + priors.json），预算给短一点，只看能出结果
-        _, info = call("/api/rta/model")
-        assert info["model"]["heroes"] > 200 and info["second"] and info["priors"], info
-        state = {"prebans": {"F": ["c2186", "c6005"], "S": ["c2181", "c2185"]}, "picks": {"F": [], "S": []},
-                 "grades": ["emperor", "emperor"], "rule": "unknown"}
-        _, adv = call("/api/rta/advise", "POST", {"side": "F", "state": state, "budget": 1.0})
-        assert adv["turn"] == "mine" and len(adv["recommend"]) == 8 and adv["recommend"][0].get("second"), adv
-        _, pre = call("/api/rta/preban", "POST", {"side": "S", "grades": ["emperor", "emperor"], "budget": 1.0})
-        assert len(pre["recommend"]) == 8, pre
-        print(f"[ok] RTA 选秀推荐：advise {adv['stats']['ms']} ms、preban {pre['stats']['ms']} ms，第二个模型和 priors 都在")
+        if no_rta:
+            try:
+                call("/api/rta/model")
+                sys.exit("正式版不该有 RTA 接口")
+            except urllib.error.HTTPError as e:
+                assert e.code == 404, e.code
+            print("[ok] 正式版：status 的 features.rta = false，没有 RTA 接口")
+        else:
+            _smoke_rta(call)
 
         asyncio.run(_smoke_ws(url))
         print("[ok] WebSocket：/ws hello、/ws/frames 未连接状态")
@@ -204,6 +213,19 @@ def _smoke_serve(env: dict[str, str], data: Path) -> None:
         if proc.poll() is None:
             proc.kill()
         log.close()
+
+
+def _smoke_rta(call) -> None:
+    # B14c：选秀推荐（随包两个模型 + priors.json），预算给短一点，只看能出结果
+    _, info = call("/api/rta/model")
+    assert info["model"]["heroes"] > 200 and info["second"] and info["priors"], info
+    state = {"prebans": {"F": ["c2186", "c6005"], "S": ["c2181", "c2185"]}, "picks": {"F": [], "S": []},
+             "grades": ["emperor", "emperor"], "rule": "unknown"}
+    _, adv = call("/api/rta/advise", "POST", {"side": "F", "state": state, "budget": 1.0})
+    assert adv["turn"] == "mine" and len(adv["recommend"]) == 8 and adv["recommend"][0].get("second"), adv
+    _, pre = call("/api/rta/preban", "POST", {"side": "S", "grades": ["emperor", "emperor"], "budget": 1.0})
+    assert len(pre["recommend"]) == 8, pre
+    print(f"[ok] RTA 选秀推荐：advise {adv['stats']['ms']} ms、preban {pre['stats']['ms']} ms，第二个模型和 priors 都在")
 
 
 async def _smoke_ws(url: str) -> None:
@@ -225,15 +247,17 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--smoke", action="store_true", help="只对已有产物做冒烟测试")
     parser.add_argument("--no-smoke", action="store_true", help="只构建，不做冒烟测试")
+    parser.add_argument("--no-rta", action="store_true", help="正式版：不带 RTA 选秀助手（代码、模型都不进产物）")
     args = parser.parse_args()
 
     check_versions()
+    print("正式版（不带 RTA）" if args.no_rta else "完整版（带 RTA）")
     if not args.smoke:
-        build()
+        build(args.no_rta)
     size, count = dir_size(DIST)
     print(f"产物 {DIST}：{size / 1e6:.0f} MB，{count} 个文件")
     if not args.no_smoke:
-        smoke()
+        smoke(args.no_rta)
         print("冒烟测试通过")
 
 
