@@ -1,6 +1,6 @@
 # HANDOFF
 
-> 新会话从这里读起。上次更新：2026-11-07（B14e2 已通过）
+> 新会话从这里读起。上次更新：2026-11-07（B14e2 已通过；发布 0.3.0 正式版 + 0.4.0-beta.1 测试版）
 
 ## 当前进度
 - **B01 骨架 + 模块契约 + MuMu 设备层**：✅ 已通过，记录见 [reviews/B01.md](reviews/B01.md)。
@@ -57,6 +57,10 @@
   - RTA 助手：始终按英雄池推荐我方选人（预禁推荐不管英雄池）；顶栏「英雄池 N 名」+「编辑」；网格打勾 +「只看我的」；推荐卡「英雄池：名字」标记；池里能选的不够这一轮时这一轮推荐全部英雄（`pool_short`）。
   - 审核 2 轮（用户意见）：信息条始终用**我方的读数**（我方回合 = 推荐第 1 名的预期；对方回合 = 引擎新算的「对方常见选法 → 我方从英雄池里挑回应」的预期，p95 2.3 秒）；**去掉「只推荐我的英雄」开关**，没设置过时**默认用本赛季最常被选的 60 名**（占选人 93%，不写进文件），图鉴里「恢复默认」。
   - 全量 `1192 passed, 9 skipped`；前端 58 个。
+- **发布 0.3.0（正式版）+ 0.4.0-beta.1（测试版）**（2026-11-07，B14e2 之后用户要求；见「打包」）：
+  - 仓库推到 GitHub **`Jiyan-Chen/e7helper-neo`（私有）**，只推 main 和版本标签（`claude/…` 分支都已合进 main，不推）；remote `origin`。
+  - 正式版不带 RTA（新加的 `build.py --no-rta`，标签 `v0.3.0`），测试版带 RTA、在 GitHub 上标预发布（标签 `v0.4.0-beta.1`）；两个版本号、可见性、推送范围都是用户选的。
+  - 用户说「先不做画面识别」：B14f 还是下一块，但什么时候开工等用户说。
 - 下一块：**B14f RTA：画面识别**（见下面「下一块」）。B14d2（站位 / 快速分析 / 英雄统计）往后放，等 ss22 赛季更新、数据重采后和 B14g 一起做（用户意见）。
 
 ## 已有能力
@@ -225,7 +229,11 @@
 ### 打包（B10，详见 architecture.md「打包发布」和 reviews/B10.md）
 - `cd engine && python -m uv run --group build python packaging/build.py`：检查 5 处版本号 → PyInstaller onedir → 冒烟测试（不碰设备）。产物 `engine/dist/e7engine/` 约 272MB、352 个文件。
 - `cd app && pnpm bundle`（= `tauri build --config src-tauri/tauri.bundle.conf.json`）：安装包 `app/src-tauri/target/release/bundle/nsis/第七史诗助手_<版本>_x64-setup.exe`，约 96MB。
-- **当前发布 0.2.0**（2026-10-20，B12c 之后）：引擎 `dist/e7engine/` 272MB、446 个文件，冒烟测试全过；安装包 `第七史诗助手_0.2.0_x64-setup.exe` 97.39 MiB（Rust release 编译 3 分 35 秒）。没装，直接跑 `target/release/e7helper.exe`（临时数据目录、`--no-connect --paused`）：5.1 秒拉起随包 `engine/e7engine.exe`，`/api/health` 版本 0.2.0；关窗口后引擎退出、api.json 删除。冻结版的 `GET /api/modules/secret_shop/report` 实测能用。这个包不含 B13（B13 之后才合进 main）。下次发版改 5 处版本号（`build.py` 会检查）。
+- **当前发布 0.3.0 + 0.4.0-beta.1**（2026-11-07，B14e2 之后，GitHub Releases）：
+  - 正式版 0.3.0：`build.py --no-rta`，引擎 282MB、2631 个文件（比 0.2.0 多的是 B13 的英雄头像和技能图标），冒烟测试全过；安装包 105.41 MiB。直接跑 `target/release/e7helper.exe`（临时数据目录）：9 秒拉起随包引擎，版本 0.3.0、`features.rta = false`、`/api/rta/model` 404；开发版前端连这个引擎：菜单没有 RTA 助手、`#/rta` 回首页、图鉴没有英雄池按钮。
+  - 测试版 0.4.0-beta.1：引擎 290MB、2641 个文件，冒烟测试全过（advise 1218 ms、preban 1059 ms）；安装包 111.06 MiB。直接跑 `target/release/e7helper.exe`：6.7 秒拉起随包引擎，版本 0.4.0-beta.1、`features.rta = true`、模型 274 名、默认英雄池 60 名。NSIS 接受带预发布后缀的版本号。版本号带预发布后缀：`uv.lock` 里规范成 `0.4.0b1`，其他 5 处原样，`build.py` 比的是 5 处原文。
+  - 发版步骤：`python packaging/bump_version.py <版本号>`（改 5 处版本号，再 `uv lock` + `cargo update --workspace --offline`）→ 提交、打标签 → `build.py [--no-rta]` → `pnpm bundle`（`CARGO_TARGET_DIR` 指到主工作区的 `app/src-tauri/target` 可以复用 Rust 编译缓存）→ 先把安装包复制出来再打下一种 → `git push origin main --tags` → `gh release create <标签> <安装包> --notes-file …`（测试版加 `--prerelease`）。
+- **上一次发布 0.2.0**（2026-10-20，B12c 之后）：引擎 `dist/e7engine/` 272MB、446 个文件，冒烟测试全过；安装包 `第七史诗助手_0.2.0_x64-setup.exe` 97.39 MiB（Rust release 编译 3 分 35 秒）。没装，直接跑 `target/release/e7helper.exe`（临时数据目录、`--no-connect --paused`）：5.1 秒拉起随包 `engine/e7engine.exe`，`/api/health` 版本 0.2.0；关窗口后引擎退出、api.json 删除。冻结版的 `GET /api/modules/secret_shop/report` 实测能用。这个包不含 B13（B13 之后才合进 main）。下次发版改 5 处版本号（`build.py` 会检查）。
 - 引擎冻结：`engine/packaging/`（`entry.py`、`e7engine.spec`、`build.py`）；冻结后 `paths.FROZEN`，`ENGINE_ROOT = sys._MEIPASS`；解释器开 `-X utf8`。
 - `engine.rs`：release 构建拉起 `<资源目录>/engine/e7engine.exe serve --port 0`；debug 构建照旧用 venv；`E7_ENGINE_DIR` / `E7_ENGINE_ARGS` / `E7_DATA_DIR` 两种构建都认。
 - 应用名「第七史诗助手」，exe `e7helper.exe`；NSIS `installMode: both`、简体中文；当前用户默认装到 `%LOCALAPPDATA%\Programs\第七史诗助手`。

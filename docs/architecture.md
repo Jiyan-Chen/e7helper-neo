@@ -467,6 +467,7 @@ pnpm bundle                                                       # = tauri buil
 |---|---|
 | `entry.py` | 入口，等同 `e7helper` 命令（`app(prog_name="e7engine")`） |
 | `e7engine.spec` | `collect_submodules("e7helper")`（模块按 pkgutil 自动发现）、`uvicorn`、`websockets`（按字符串导入）；`assets/` 和 `collect_data_files("rapidocr")`（配置和 onnx 模型）；解释器选项 `-X utf8`；控制台程序（GUI 拉起时加 `CREATE_NO_WINDOW`） |
+| `bump_version.py` | 发版时改 5 处版本号，再更新 `uv.lock` / `Cargo.lock`（发布 0.3.0 起） |
 | `build.py` | 检查 5 处版本号一致（`e7helper/__init__.py`、`pyproject.toml`、`package.json`、`tauri.conf.json`、`Cargo.toml`），构建，冒烟测试（`modules`、`match`、`ocr`、`serve --no-connect --paused` 的 REST / WS / 帧频道 / shutdown，数据目录用临时目录，不碰设备） |
 - 冻结后 `paths.FROZEN = True`，`ENGINE_ROOT` = `sys._MEIPASS`（即 `e7engine/_internal/`），模板在 `_internal/assets/`。开发版的模板采集在打包版里会写进安装目录；玩家模板（B11）在数据目录，不受安装目录权限影响。
 - **冻结版忽略 `PYTHON*` 环境变量**（PyInstaller 的隔离配置）：`PYTHONIOENCODING` 不起作用，所以 spec 里直接开 UTF-8 模式；引擎里的文件读写和子进程输出都显式写了编码，不受影响。
