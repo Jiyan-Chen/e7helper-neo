@@ -1,6 +1,6 @@
 [project]
 name = "e7helper"
-version = "0.2.0"
+version = "0.3.0"
 description = "第七史诗国服 · MuMu 专用助手引擎"
 requires-python = ">=3.12"
 dependencies = [
