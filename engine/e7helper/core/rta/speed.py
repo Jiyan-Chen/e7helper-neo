@@ -16,10 +16,15 @@
 
 先动概率：每名英雄按自己的段位抽速度（蒙特卡洛），到 100 的时间 = (100 − 开局行动条) ÷ 速度，最先到的先动。
 同样的输入结果相同（固定随机种子）。
+
+B14g1：胜率模型分三种「谁先动」，用的时候按先动概率混合（段位只用来算先动概率）。`FirstCalc` 是同一个模型的快速版
+（按分布积分、不抽样，一批阵容一次算完），`state_first_probs` / `match_first_probs` 给选秀局面 / 训练快照的对局用；
+选秀中间还没选的那几手用「这一手常被选的英雄」的混合补（`slot_counts`）。
 """
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import math
 import time
@@ -232,6 +237,273 @@ def first_mover(table: SpeedTable, units: Sequence[Unit], *, n: int = SAMPLES, s
         heroes[k]["p"] = float(share[k])
         sides[u.side] += float(share[k])
     return {"sides": dict(sides), "heroes": heroes}
+
+
+# —— 快速先动概率（B14g：胜率按先动概率混合，评估和搜索里一次要算几千到几十万个阵容） ——
+
+# 「等效速度」网格：到 100 的时间 = 100 ÷ 它（640 … 40，每档 2），覆盖开局加行动条的英雄和英雄池里填的 50–400
+GRID_SPEEDS = np.arange(640.0, 39.0, -2.0)
+GRID = 100.0 / GRID_SPEEDS
+QUAD = 8  # 开局随机按几个点积分
+CAP_LEVELS = 8  # 有限速英雄（赫尔赛蒂）时按她的速度分几档分别算再平均
+TEAM = rules.PICKS_PER_SIDE - 1  # 上场 4 名
+
+
+def _integrate(log_a: np.ndarray, log_b: np.ndarray) -> np.ndarray:
+    """两方「最先到的时间」的对数生存函数 [B, K] → a 方先到的概率 [B]：∫ P(T_b > x) d(−P(T_a > x))（梯形）。"""
+    sa, sb = np.exp(log_a), np.exp(log_b)
+    ones = np.ones((len(sa), 1))
+    pa = np.concatenate([ones, sa], axis=1)
+    pb = np.concatenate([ones, sb], axis=1)
+    return ((pa[:, :-1] - pa[:, 1:]) * 0.5 * (pb[:, :-1] + pb[:, 1:])).sum(axis=1)
+
+
+class FirstCalc:
+    """快速先动概率（B14g），和 `first_mover` 同一个模型，但按速度分布直接积分、不抽样，一批阵容一次算完。
+
+    每名英雄到 100 的时间 t = (100 − 开局行动条) ÷ 速度，开局行动条 = 开局随机 U(0, jitter) + 开局效果；一方最先到的
+    时间 T = min t，英雄之间独立，所以 P(T > x) = Π P(t > x)（对数相加），P(a 方先动) = ∫ P(T_b > x) d(−P(T_a > x))。
+    时间按 GRID 离散，每名英雄（段位、填的速度、限速）的对数生存函数缓存起来。
+    - 一方不到 4 名时用「占位」补还没选的那几手：slot_weights（一方第 k 手各英雄被选的次数，k = 0…4）给了就是
+      「这一手随便一名被选的英雄」（先选的多是快的，后面几手偏慢），否则用 weights（不分第几手的被选次数），都没有用
+      这个段位官方直方图的合计（偏慢：官方合计按配装数，RTA 里常选的多是快的）。模型没见过的英雄（编号 None）也用后两种。
+    - 赫尔赛蒂把其他英雄的速度限制在她的 90% 以下，英雄不再独立：按她的速度分 CAP_LEVELS 档分别算再平均。
+    """
+
+    def __init__(self, table: SpeedTable, *, weights: dict[str, float] | None = None,
+                 slot_weights: Sequence[dict[str, float]] | None = None, levels: int = CAP_LEVELS):
+        self.table = table
+        self.levels = levels
+        self.weights = _normalize(weights)
+        self.slot_weights = [_normalize(w) for w in slot_weights] if slot_weights else None
+        self._cache: dict[tuple, np.ndarray] = {}
+
+    def _rule(self, code: str | None) -> dict:
+        return (self.table.rules.get(code) or {}) if code else {}
+
+    def _survival(self, code: str | None, grade: str | None, speed: float | None, cap: float | None) -> np.ndarray:
+        """[K] P(t > GRID[k])，code None = 官方直方图的合计。"""
+        push = float(self._rule(code).get("push") or 0.0)
+        jitter = self.table.jitter
+        if speed:
+            s = min(float(speed), cap) if cap else float(speed)
+            room = 100.0 - push - GRID * s  # 开局随机 < room 才比 x 晚到
+            return np.clip(room / jitter, 0.0, 1.0) if jitter > 0 else (room > 0).astype(float)
+        p = self.table.dist(code, grade) if code else None
+        if p is None:
+            p = self.table.average(grade)
+        cdf = np.concatenate([[0.0], np.cumsum(p / p.sum())])
+        r = push + jitter * (np.arange(QUAD) + 0.5) / QUAD
+        y = (100.0 - np.minimum(r, 100.0))[:, None] / GRID[None, :]  # 要比 x 晚到，速度得低于 y
+        f = np.interp(y, EDGES, cdf)
+        if cap:
+            f = np.where(y >= cap, 1.0, f)
+        return f.mean(axis=0)
+
+    def _mixture(self, weights: dict[str, float], grade: str | None, cap: float | None) -> np.ndarray:
+        return np.log(np.maximum(sum(w * np.exp(self.log_survival(c, grade, None, cap)) for c, w in weights.items()),
+                                 1e-300))
+
+    def log_survival(self, code: str | None, grade: str | None = None, speed: float | None = None,
+                     cap: float | None = None) -> np.ndarray:
+        """[K] log P(t > GRID[k])。code None = 不分第几手的占位（模型没见过的英雄也用它）；speed = 填的速度；
+        cap = 被限速到多少。"""
+        key = (code, analysis_grade(grade), speed, cap)
+        hit = self._cache.get(key)
+        if hit is None:
+            hit = (self._mixture(self.weights, grade, cap) if code is None and self.weights
+                   else np.log(np.maximum(self._survival(code, grade, speed, cap), 1e-300)))
+            self._cache[key] = hit
+        return hit
+
+    def fills(self, grade: str | None, cap: float | None = None) -> np.ndarray:
+        """[TEAM + 1, K]：一方已经有 m 名时，补上第 m … TEAM − 1 手的占位之和（m ≥ TEAM 是 0）。"""
+        key = ("#fills", analysis_grade(grade), cap)
+        hit = self._cache.get(key)
+        if hit is None:
+            slots = [self._mixture(self.slot_weights[k], grade, cap) if self.slot_weights and self.slot_weights[k]
+                     else self.log_survival(None, grade, None, cap) for k in range(TEAM)]
+            hit = np.zeros((TEAM + 1, len(GRID)))
+            for m in range(TEAM - 1, -1, -1):
+                hit[m] = hit[m + 1] + slots[m]
+            self._cache[key] = hit
+        return hit
+
+    def tables(self, codes: Sequence[str | None], grade: str | None, speeds: dict[str, float] | None = None,
+               cap: float | None = None) -> np.ndarray:
+        """一组编号（例如 [None, None] + 词表）→ [len(codes) + TEAM + 1, K] 对数生存表：每个编号一行（None = 占位），
+        最后 TEAM + 1 行是 `fills`（已有 m 名时补上的占位）。"""
+        speeds = speeds or {}
+        rows = [self.log_survival(c, grade, speeds.get(c) if c else None, cap) for c in codes]
+        return np.concatenate([np.stack(rows), self.fills(grade, cap)])
+
+    def team_log(self, ids: np.ndarray, table: np.ndarray, pad: int = 0) -> np.ndarray:
+        """ids [B, m]（table 的行号，pad = 空位）→ 这一方最先到的时间的对数生存函数 [B, K]；不到 4 名用占位补。"""
+        ids = np.asarray(ids, dtype=np.int64).reshape(len(ids), -1)
+        real = ids != pad
+        out = (table[ids] * real[..., None]).sum(axis=1)
+        return out + table[len(table) - TEAM - 1 + np.minimum(real.sum(axis=1), TEAM)]
+
+    def prob_ids(self, ids_a: np.ndarray, ids_b: np.ndarray, table_a: np.ndarray, table_b: np.ndarray,
+                 pad: int = 0, chunk: int = 4096) -> np.ndarray:
+        """一批阵容（行号，两方各一份表）→ a 方先动的概率 [B]（不管限速英雄，见 `prob_batch`）。"""
+        out = np.empty(len(ids_a))
+        for s in range(0, len(ids_a), chunk):
+            out[s:s + chunk] = _integrate(self.team_log(ids_a[s:s + chunk], table_a, pad),
+                                          self.team_log(ids_b[s:s + chunk], table_b, pad))
+        return out
+
+    def cap_levels(self, u: Unit) -> list[float]:
+        """限速英雄的速度分几档（填了速度就是那一个）：分布的 (i + ½) / levels 分位数。"""
+        if u.speed:
+            return [float(u.speed)]
+        p = self.table.dist(u.code, u.grade)
+        if p is None:
+            p = self.table.average(u.grade)
+        return self.table.quantiles(p, [(i + 0.5) / self.levels for i in range(self.levels)])
+
+    def prob_batch(self, ids_a: np.ndarray, ids_b: np.ndarray, codes: Sequence[str | None],
+                   grades: tuple[str | None, str | None] = (None, None),
+                   speeds: tuple[dict[str, float] | None, dict[str, float] | None] = (None, None),
+                   pad: int = 0) -> np.ndarray:
+        """一批阵容（codes 的行号，两方各自一个段位）→ a 方先动的概率 [B]。有限速英雄的行按她的速度分档、
+        其余英雄限速后分别算再平均。"""
+        ids_a = np.asarray(ids_a, dtype=np.int64).reshape(len(ids_a), -1)
+        ids_b = np.asarray(ids_b, dtype=np.int64).reshape(len(ids_b), -1)
+        tabs = [self.tables(codes, grades[i], speeds[i]) for i in (0, 1)]
+        out = np.empty(len(ids_a))
+        rest = np.ones(len(ids_a), dtype=bool)
+        for c in {i for i, code in enumerate(codes) if code and self._rule(code).get("cap")}:
+            for side, ids in enumerate((ids_a, ids_b)):
+                rows = (ids == c).any(axis=1) & rest
+                if not rows.any():
+                    continue
+                rest &= ~rows
+                code = codes[c]
+                acc = np.zeros(int(rows.sum()))
+                levels = self.cap_levels(Unit("", code, grades[side], (speeds[side] or {}).get(code)))
+                for v in levels:
+                    cap = float(self._rule(code)["cap"]) * v
+                    t = [self.tables(codes, grades[i], speeds[i], cap) for i in (0, 1)]
+                    t[side][c] = self.log_survival(code, grades[side], v, None)
+                    acc += self.prob_ids(ids_a[rows], ids_b[rows], t[0], t[1], pad)
+                out[rows] = acc / len(levels)
+        if rest.any():
+            out[rest] = self.prob_ids(ids_a[rest], ids_b[rest], tabs[0], tabs[1], pad)
+        return out
+
+    def prob(self, a: Sequence[Unit], b: Sequence[Unit], grades: tuple[str | None, str | None] = (None, None)) -> float:
+        """a 方先动的概率（单个阵容，英雄按这一方的选人顺序）。每方不到 4 名时用各自段位（grades）的占位补还没选的
+        那几手；Unit.grade 没填的用这一方的段位。"""
+        units = [*a, *b]
+        cap_unit = next((u for u in units if self._rule(u.code).get("cap")), None)
+        levels = self.cap_levels(Unit("", cap_unit.code, cap_unit.grade or grades[0 if cap_unit in a else 1],
+                                      cap_unit.speed)) if cap_unit else [None]
+        total = 0.0
+        for v in levels:
+            cap = float(self._rule(cap_unit.code)["cap"]) * v if cap_unit else None
+
+            def side(units: Sequence[Unit], grade: str | None) -> np.ndarray:
+                acc = np.zeros(len(GRID))
+                for u in units:
+                    if u is cap_unit:
+                        acc += self.log_survival(u.code, u.grade or grade, v, None)
+                    else:
+                        acc += self.log_survival(u.code, u.grade or grade, u.speed, cap)
+                return acc + self.fills(grade, cap)[min(len(units), TEAM)]
+
+            total += float(_integrate(side(a, grades[0])[None], side(b, grades[1])[None])[0])
+        return total / len(levels)
+
+
+def _normalize(weights: dict[str, float] | None) -> dict[str, float] | None:
+    total = sum(w for w in (weights or {}).values() if w > 0)
+    return {c: w / total for c, w in weights.items() if w > 0} if total else None
+
+
+def slot_counts(tokens: np.ndarray, codes: Sequence[str]) -> list[dict[str, int]]:
+    """训练快照的 tokens（-1 = 空位）→ 一方第 k 手（k = 0…4，两方合在一起）各英雄被选的次数（`FirstCalc` 的占位用）。"""
+    out = []
+    for k in range(rules.PICKS_PER_SIDE):
+        cols = [5 + _ORDER_SLOTS[s][k] for s in rules.SIDES]  # encode.PICK_POS = 5
+        v = tokens[:, cols].ravel()
+        counts = np.bincount(v[v >= 0], minlength=len(codes))
+        out.append({codes[i]: int(c) for i, c in enumerate(counts) if c})
+    return out
+
+
+def _side_options(picks: Sequence[str], banned: str | None) -> list[list[str]]:
+    """一方最后上场的可能：后禁了就去掉被禁的；5 名都在、还没后禁时 = 去掉一名可被禁的（保护位除外）的各种情况。"""
+    if banned:
+        return [[c for c in picks if c != banned]]
+    if len(picks) > TEAM:
+        return [[c for j, c in enumerate(picks) if j != i] for i in range(len(picks)) if i != rules.PROTECTED_SLOT]
+    return [list(picks)]
+
+
+POSTBAN_STATE = 2 * rules.PICKS_PER_SIDE + 1  # 后禁之后的局面编号（= encode.POSTBAN，这里不 import encode）
+_ORDER_SLOTS = {s: [k for k, x in enumerate(rules.PICK_ORDER) if x == s] for s in rules.SIDES}
+
+
+def state_first_probs(calc: FirstCalc, states: Sequence, speeds: dict[str, dict[str, float]] | None = None) -> np.ndarray:
+    """每个选秀局面（encode.DraftState）先手方先动的概率 [B]：双方目前在场的英雄（后禁了去掉被禁的），不到 4 名用
+    各自段位的占位补；5 名都在、还没后禁时对各种被禁的情况平均。speeds = {"F": {编号: 速度}, "S": {...}}（英雄池里填的）。"""
+    speeds = speeds or {}
+    out = np.empty(len(states))
+    for i, st in enumerate(states):
+        g = {"F": st.grades[0], "S": st.grades[1]}
+        opts = {s: _side_options(st.picks.get(s, []), st.banned.get(s) if st.state == POSTBAN_STATE else None)
+                for s in rules.SIDES}
+        unit = lambda s, c: Unit(s, c, g[s], (speeds.get(s) or {}).get(c))  # noqa: E731
+        ps = [calc.prob([unit("F", c) for c in f], [unit("S", c) for c in sd], (g["F"], g["S"]))
+              for f in opts["F"] for sd in opts["S"]]
+        out[i] = float(np.mean(ps))
+    return out
+
+
+def first_pair(calc: FirstCalc, states: Sequence, speeds: dict[str, dict[str, float]] | None = None
+               ) -> tuple[np.ndarray, np.ndarray]:
+    """选秀局面 → (按双方段位 + 英雄池速度算的先动概率, 同一阵容按一般玩家（不知道段位、没填速度）算的)，
+    就是 `model.mix` / `RtaModel.win` 的 first / ref（B14g1：段位、速度只通过这两者的差影响胜率）。"""
+    ref_states = [dataclasses.replace(st, grades=(None, None)) for st in states]
+    return state_first_probs(calc, states, speeds), state_first_probs(calc, ref_states, None)
+
+
+def match_first_probs(calc: FirstCalc, tokens: np.ndarray, codes: Sequence[str], grade_ids: np.ndarray) -> np.ndarray:
+    """训练快照的对局（`Dataset.tokens` 的行、英雄表、`Dataset.grades` 段位档编号）→ 每场 12 个局面先手方先动的概率
+    [N, 12]，规则同 `state_first_probs`（评估三头模型用）。"""
+    n = len(tokens)
+    out = np.empty((n, POSTBAN_STATE + 1))
+    buckets = [None, *rules.GRADE_BUCKETS]  # 段位档编号 → 段位档（0 = 不知道）
+    names = [None, *codes]  # tokens 的下标 + 1 → 编号（-1 空位 → 0）
+    idx = tokens.astype(np.int64) + 1
+    pick_ids = idx[:, 5:5 + 2 * rules.PICKS_PER_SIDE]  # encode.PICK_POS = 5
+    ban_ids = idx[:, 15:17]  # encode.BAN_POS
+    gf, gs = grade_ids[:, 0], grade_ids[:, 1]
+    groups = [(a, b, (gf == a) & (gs == b)) for a in np.unique(gf) for b in np.unique(gs)]
+    for state in range(POSTBAN_STATE + 1):
+        k = min(state, 2 * rules.PICKS_PER_SIDE)
+        side_ids = {s: pick_ids[:, [j for j in _ORDER_SLOTS[s] if j < k]] for s in rules.SIDES}
+        if state == POSTBAN_STATE:  # 去掉被禁的那名（换成空位）
+            for t, s in enumerate(rules.SIDES):
+                ids = side_ids[s].copy()
+                ids[ids == ban_ids[:, [t]]] = 0
+                side_ids[s] = ids
+        opts = {}
+        for s in rules.SIDES:  # 5 名都在、还没后禁：去掉一名可被禁的各种情况
+            ids = side_ids[s]
+            if ids.shape[1] > TEAM and state != POSTBAN_STATE:
+                opts[s] = [np.delete(ids, i, axis=1) for i in range(ids.shape[1]) if i != rules.PROTECTED_SLOT]
+            else:
+                opts[s] = [ids]
+        acc = np.zeros(n)
+        for fa in opts["F"]:
+            for sb in opts["S"]:
+                for a, b, m in groups:
+                    if m.any():
+                        acc[m] += calc.prob_batch(fa[m], sb[m], names, (buckets[a], buckets[b]))
+        out[:, state] = acc / (len(opts["F"]) * len(opts["S"]))
+    return out
 
 
 # —— 从开局行动条反推 290 以上（开发用：rta speed） ——

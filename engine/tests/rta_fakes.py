@@ -72,7 +72,8 @@ def battle(seq: int | str = 1, *, me_first: bool = True, my=MY, enemy=ENEMY, my_
 
 
 def synthetic_dataset(n: int = 1500, heroes: int = 40, days: int = 30, seed: int = 0):
-    """B14b：合法选秀的合成快照（不用采集库）。c0 / c1 / c2 是强英雄（在哪边哪边大概率赢），给训练测试一个能学到的信号。"""
+    """B14b：合法选秀的合成快照（不用采集库）。c0 / c1 / c2 是强英雄（在哪边哪边大概率赢），给训练测试一个能学到的信号。
+    B14g：谁先动随机（一半一半，四分之一记成不知道）；c3 是「先动才厉害」的英雄：所在的一方先动 +2、后动 −1。"""
     import numpy as np
 
     from e7helper.core.rta import encode, rules
@@ -81,6 +82,7 @@ def synthetic_dataset(n: int = 1500, heroes: int = 40, days: int = 30, seed: int
     rng = np.random.default_rng(seed)
     tokens = np.full((n, encode.SEQ_LEN), -1, dtype=np.int16)
     first_wins = np.zeros(n, dtype=np.int8)
+    first_mover = np.zeros(n, dtype=np.int8)
     for i in range(n):
         drawn = rng.choice(heroes, 14, replace=False)
         tokens[i, 1:5] = drawn[:4]
@@ -90,13 +92,21 @@ def synthetic_dataset(n: int = 1500, heroes: int = 40, days: int = 30, seed: int
         tokens[i, 15] = f[rng.choice([0, 1, 3, 4])]  # 保护位（第 3 手）不能被禁
         tokens[i, 16] = s_[rng.choice([0, 1, 3, 4])]
         score = sum(h in f for h in (0, 1, 2)) - sum(h in s_ for h in (0, 1, 2))
+        f_first = rng.random() < 0.5
+        on_field = {"F": set(f) - {tokens[i, 15]}, "S": set(s_) - {tokens[i, 16]}}
+        if 3 in on_field["F"]:
+            score += (2 if f_first else -1) / 1.5
+        if 3 in on_field["S"]:
+            score -= (2 if not f_first else -1) / 1.5
         first_wins[i] = rng.random() < 1 / (1 + np.exp(-1.5 * score))
+        first_mover[i] = -1 if rng.random() < 0.25 else int(f_first)
     grades = rng.integers(4, encode.N_GRADES, size=(n, 2)).astype(np.int8)
     return Dataset(
         codes=[f"c{i}" for i in range(heroes)], rule_table=[("rta_cs_dodge_down_desc", "rta_openingrule_category_6")],
         tokens=tokens, grades=grades, rule=rng.choice([-2, -1, 0], n).astype(np.int16),
         server=rng.integers(0, 2, n).astype(np.int8), day=np.sort(rng.integers(739900, 739900 + days, n)).astype(np.int32),
-        first_wins=first_wins, turns=np.full(n, 10, dtype=np.int16), meta={"season": "test", "kept": n},
+        first_wins=first_wins, turns=np.full(n, 10, dtype=np.int16), first_mover=first_mover,
+        meta={"season": "test", "kept": n},
     )
 
 

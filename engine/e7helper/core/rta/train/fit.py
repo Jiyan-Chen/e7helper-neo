@@ -50,6 +50,10 @@ class TrainConfig:
     # 训练时把开战规则换成「不知道」的概率（B14h）：只用海外数据后训练集里没有「不知道」（原来只有国服是），
     # 这样「不知道」学到的是各条规则的平均，CLI / 接口默认的 unknown 才有意义
     rule_unknown_rate: float = 0.1
+    # B14g：不看段位（战绩站的段位是赛后的，会把比赛结果漏进来）、胜率头分三种「谁先动」。
+    # 旧 run 的设置里没有这两项，读的时候按旧结构（grades=True、first=False），见 load_run
+    grades: bool = False
+    first: bool = True
     min_picks: int = 30
     test_days: int = 7
     val_days: int = 7
@@ -118,14 +122,36 @@ def _lr_at(step: int, total: int, cfg: TrainConfig) -> float:
     return cfg.lr * (0.05 + 0.95 * 0.5 * (1 + math.cos(math.pi * min(1.0, frac))))
 
 
+def win_loss_np(win: np.ndarray, y: np.ndarray, head: np.ndarray) -> float:
+    """和 nets.win_loss_of 同一口径的胜率损失（numpy，验证 / 训练子集用）。"""
+    p = evaluate.sigmoid(win)
+    ll = lambda q, t: -(t * np.log(np.clip(q, 1e-7, 1)) + (1 - t) * np.log(np.clip(1 - q, 1e-7, 1)))  # noqa: E731
+    if win.ndim == 2:
+        return float(ll(p, y[:, None]).mean())
+    lu = ll(p[..., encode.HEAD_U], y[:, None]).mean(1)
+    known = head < encode.HEAD_U
+    pf = np.take_along_axis(p, np.minimum(head, encode.HEAD_S)[:, None, None].repeat(p.shape[1], 1), 2)[..., 0]
+    lf = ll(pf, y[:, None]).mean(1)
+    return float((lu.sum() + lf[known].sum()) / (len(lu) + known.sum()))
+
+
 def _val(model, data: dict, size: int, device: str, champ: np.ndarray, lam: float) -> dict:
-    """验证：两种损失 + n = 10 / 11 的胜率指标（全部 / 双方 ≥ 优胜者）+ 选人命中率。"""
+    """验证：两种损失 + n = 10 / 11 的胜率指标（全部 / 双方 ≥ 优胜者）+ 选人命中率。
+    B14g 三头模型：n10 / n11 用「不知道」的头（和旧模型同口径，曲线页照旧），另给知道谁先动的对局上
+    实际先动方那个头的 n11（`n11_first`）和同一批对局上「不知道」的头（`n11_first_u`）。"""
     out = evaluate.infer(model, data["heroes"], data["ctx"], size, device=device)
     y = data["y"]
     win = out["win"]
     p = evaluate.sigmoid(win)
-    win_loss = float(np.mean([metrics.log_loss(p[:, n], y) for n in range(encode.N_STATES)]))
+    win_loss = win_loss_np(win, y, data["head"])
     res = {"win_loss": win_loss}
+    if win.ndim == 3:
+        head = data["head"]
+        known = head < encode.HEAD_U
+        pf = np.where(head[:, None] == encode.HEAD_F, p[..., encode.HEAD_F], p[..., encode.HEAD_S])
+        res["n11_first"] = metrics.win_metrics(pf[known, encode.POSTBAN], y[known])
+        res["n11_first_u"] = metrics.win_metrics(p[known, encode.POSTBAN, encode.HEAD_U], y[known])
+        p = p[..., encode.HEAD_U]
     for n in (10, 11):
         res[f"n{n}"] = metrics.win_metrics(p[:, n], y)
         res[f"n{n}_champ"] = metrics.win_metrics(p[champ, n], y[champ])
@@ -141,10 +167,10 @@ def _val(model, data: dict, size: int, device: str, champ: np.ndarray, lam: floa
 
 def _train_eval(model, data: dict, size: int, device: str) -> dict:
     """训练子集上（评估模式：不 dropout、不换 UNK）的胜率损失，和验证集的同一口径对比。"""
-    p = evaluate.sigmoid(evaluate.infer(model, data["heroes"], data["ctx"], size, device=device)["win"])
+    win = evaluate.infer(model, data["heroes"], data["ctx"], size, device=device)["win"]
     y = data["y"]
-    return {"train_win_loss": float(np.mean([metrics.log_loss(p[:, n], y) for n in range(encode.N_STATES)])),
-            "train_n11": metrics.log_loss(p[:, encode.POSTBAN], y)}
+    p = evaluate.sigmoid(win[..., encode.HEAD_U] if win.ndim == 3 else win)
+    return {"train_win_loss": win_loss_np(win, y, data["head"]), "train_n11": metrics.log_loss(p[:, encode.POSTBAN], y)}
 
 
 def train(ds: Dataset, cfg: TrainConfig, *, out_dir: Path | None = None, stop: threading.Event | None = None,
@@ -166,12 +192,13 @@ def train(ds: Dataset, cfg: TrainConfig, *, out_dir: Path | None = None, stop: t
     train_sub = {k: v[sub_rows] for k, v in train_np.items()} if cfg.train_eval and val_np is not None else None
     champ = ds.champion_plus()[parts["val"]] if val_np is not None else None
     size = vocab.size
-    model = nets.build(cfg.model, size, vocab.n_rules, d=cfg.d, layers=cfg.layers, heads=cfg.heads,
-                       dropout=cfg.dropout, k=cfg.k).to(device)
+    model = nets.build(cfg.model, size, vocab.n_rules, grades=cfg.grades, first=cfg.first, d=cfg.d, layers=cfg.layers,
+                       heads=cfg.heads, dropout=cfg.dropout, k=cfg.k).to(device)
     params = sum(p.numel() for p in model.parameters())
     config = {**asdict(cfg), "device": device, "run": str(run), "params": params, "vocab_size": size,
               "n_rules": vocab.n_rules, "data": {k: int(len(v)) for k, v in parts.items()},
               "dataset_meta": {k: ds.meta.get(k) for k in ("season", "until", "first_day", "last_day", "kept")},
+              "first_known": {k: int((ds.first_mover[v] >= 0).sum()) for k, v in parts.items()},
               "torch": torch.__version__}
     (run / "config.json").write_text(json.dumps(config, ensure_ascii=False, indent=1), encoding="utf-8")
     vocab.save(run / "vocab.json")
@@ -179,6 +206,7 @@ def train(ds: Dataset, cfg: TrainConfig, *, out_dir: Path | None = None, stop: t
     heroes = torch.as_tensor(train_np["heroes"], device=device)
     ctx = torch.as_tensor(train_np["ctx"], device=device)
     y = torch.as_tensor(train_np["y"], device=device)
+    head = torch.as_tensor(train_np["head"], device=device)
     n_train = len(y)
     steps_per_epoch = math.ceil(n_train / cfg.batch)
     total = steps_per_epoch * cfg.epochs if not cfg.max_steps else cfg.max_steps
@@ -203,7 +231,7 @@ def train(ds: Dataset, cfg: TrainConfig, *, out_dir: Path | None = None, stop: t
                 if stop is not None and stop.is_set():
                     raise KeyboardInterrupt
                 idx = perm[b * cfg.batch:(b + 1) * cfg.batch]
-                h, c, yy = heroes[idx], ctx[idx], y[idx]
+                h, c, yy, hd = heroes[idx], ctx[idx], y[idx], head[idx]
                 if cfg.unk_rate > 0:
                     swap = (torch.rand(h.shape, device=device) < cfg.unk_rate) & (h >= encode.FIRST_HERO)
                     h = torch.where(swap, torch.full_like(h, encode.UNK), h)
@@ -213,7 +241,7 @@ def train(ds: Dataset, cfg: TrainConfig, *, out_dir: Path | None = None, stop: t
                     c[:, 2] = torch.where(hide, torch.full_like(c[:, 2], encode.RULE_UNKNOWN), c[:, 2])
                 for group in opt.param_groups:
                     group["lr"] = _lr_at(step, total, cfg)
-                win_loss, pick_ce, _, _ = nets.losses(model, h, c, yy, size)
+                win_loss, pick_ce, _, _ = nets.losses(model, h, c, yy, size, hd if cfg.first else None)
                 loss = win_loss + cfg.lam * pick_ce if pick_ce is not None else win_loss
                 opt.zero_grad(set_to_none=True)
                 loss.backward()
@@ -280,7 +308,7 @@ def train(ds: Dataset, cfg: TrainConfig, *, out_dir: Path | None = None, stop: t
 
     calibration = cfg.calibration
     if val_np is not None and (run / "val_logits.npy").exists():
-        calibration = evaluate.fit_calibration(np.load(run / "val_logits.npy"), val_np["y"])
+        calibration = evaluate.fit_calibration(np.load(run / "val_logits.npy"), val_np["y"], val_np["head"])
         ckpt = torch.load(run / "best.pt", map_location="cpu", weights_only=False)
         ckpt["calibration"] = calibration
         torch.save(ckpt, run / "best.pt")
@@ -306,8 +334,11 @@ def load_run(run: Path, device: str = "cpu") -> tuple[torch.nn.Module, encode.Vo
     """读 run 目录的 best.pt → (模型, 词表, checkpoint)。"""
     ckpt = torch.load(run / "best.pt", map_location=device, weights_only=False)
     cfg = ckpt["config"]
-    model = nets.build(cfg["model"], ckpt["n_heroes"], ckpt["n_rules"], d=cfg["d"], layers=cfg["layers"],
-                       heads=cfg["heads"], dropout=cfg["dropout"], k=cfg["k"])
+    # B14g 之前的 run 设置里没有 grades / first：旧结构（看段位、一个胜率头）
+    cfg.setdefault("grades", True)
+    cfg.setdefault("first", False)
+    model = nets.build(cfg["model"], ckpt["n_heroes"], ckpt["n_rules"], grades=cfg["grades"], first=cfg["first"],
+                       d=cfg["d"], layers=cfg["layers"], heads=cfg["heads"], dropout=cfg["dropout"], k=cfg["k"])
     model.load_state_dict(ckpt["state_dict"])
     model.to(device).eval()
     return model, encode.Vocab.from_dict(ckpt["vocab"]), ckpt

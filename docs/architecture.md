@@ -184,7 +184,7 @@ db.artifacts()                # 神器编号 → {name（中文）, name_en}
 | `POST /api/heroes/update` | 联网更新；正在更新 409 `busy`，下载失败 502 `update_failed` |
 
 ## RTA 选秀 `e7helper.core.rta`（B14 起）
-世界竞技场选秀助手的引擎部分，不依赖设备。B14 拆成 a–g 几块（数据 → 模型 → 选秀推荐 → 分析功能（d1 先动 / 英雄池，d2 站位 / 快速分析 / 英雄统计）→ 页面 → 画面识别 → ss22 重训加先动），目前有对局数据（B14a）、胜率 / 选人模型（B14b）、选秀推荐（B14c）、先动概率和英雄池（B14d1）；GUI 的选秀页见「GUI / RTA 选秀（B14e1）」。
+世界竞技场选秀助手的引擎部分，不依赖设备。B14 拆成 a–g 几块（数据 → 模型 → 选秀推荐 → 分析功能（d1 先动 / 英雄池，d2 站位 / 快速分析 / 英雄统计）→ 页面 → 画面识别 → 重训加先动（g1 模型 / g2 搜索接入）），目前有对局数据（B14a）、胜率 / 选人模型（B14b，B14g1 起不看段位、分三种「谁先动」）、选秀推荐（B14c）、先动概率和英雄池（B14d1）；GUI 的选秀页见「GUI / RTA 选秀（B14e1）」。
 ```python
 from e7helper.core.rta import rules, parse_battle
 rules.PICK_ORDER                     # ("F","S","S","F","F","S","S","F","F","S")，F = 先手方
@@ -224,24 +224,28 @@ from e7helper.core.rta import model
 from e7helper.core.rta.encode import DraftState
 m = model.load()                                   # 随包 assets/data/rta/（onnxruntime，不要 torch）
 st = DraftState(prebans={"F": [...], "S": [...]}, picks={"F": [...], "S": [...]}, grades=("legend", "emperor"), rule="unknown")
-m.win([st])                                        # 「先手方赢」的概率（后手方 = 1 − p）
+m.win([st])                                        # 「先手方赢」的概率（后手方 = 1 − p）；不给先动概率 = 不知道谁先动
+m.win([st], first=[0.7])                           # B14g1：按「先手方先动」的概率混合先动 / 后动两种胜率
+m.heads([st])                                      # B14g1：[B, 3] 先手方先动 / 后手方先动 / 不知道 三种情况
 m.next_picks(st, k=8)                              # 下一手（轮到的一方）最可能选的 [(编号, 概率)]
 m.evaluate(states)                                 # 一批局面一次前向：win [B] + picks [B, V]（B14c 搜索用）
 ```
 | 文件 | 职责 |
 |---|---|
-| `encode.py` | 训练和运行共用的编码：一场 = 17 个 token（0 CTX、1–4 预禁、5–14 选秀、15–16 双方被禁的），类型 / 位置编号、注意力掩码（0–4 互相可见、之后因果）、12 个局面的读出位置（已选 n 手读 4 + n，后禁后读 16）、选人标签（连选 2 名的回合两名各 0.5）；`Vocab`（英雄词表 + 开战规则表，没见过的规则按类别兜底）、`DraftState`（运行时的局面）、`pick_mask` |
+| `encode.py` | 训练和运行共用的编码：一场 = 17 个 token（0 CTX、1–4 预禁、5–14 选秀、15–16 双方被禁的），类型 / 位置编号、注意力掩码（0–4 互相可见、之后因果）、12 个局面的读出位置（已选 n 手读 4 + n，后禁后读 16）、选人标签（连选 2 名的回合两名各 0.5）；`Vocab`（英雄词表 + 开战规则表，没见过的规则按类别兜底）、`DraftState`（运行时的局面）、`pick_mask`；B14g1：胜率头 `FIRST_HEADS`（F 先手方先动 / S 后手方先动 / U 不知道）、`first_heads`（快照的 `first_mover` → 头编号）。ctx 还是 [先手方段位档, 后手方段位档, 开战规则]（旧模型要用），新模型不看前两项 |
 | `dataset.py` | 训练数据快照：采集库一个赛季 → 多进程解析、过滤（解析失败 / `m` 开头英雄 / 0 回合 / 截止日之后 / 不在 `servers` 里的服 / 含 `exclude` 里英雄的对局，预禁和被禁也算）、编码 → `F:\e7helper-data\rta\datasets\<赛季>-<截止日>.npz`；按日期切分（最后 7 天测试、再前 7 天验证）；`state(row, n)` 还原某场在局面 n 的 `DraftState` |
 | `metrics.py` | log loss、Brier、AUC、ECE / 校准表、选人命中前 k |
 | `model.py` | 运行时：读 `model.onnx` + `meta.json`（词表、温度、训练数据、测试指标）+ `parity.json`；`win` / `next_picks` / `evaluate` / `check()`（parity 核对，冻结引擎的冒烟测试用） |
 | `train/`（不随包，要 torch） | `nets.py`（混合结构 `HybridTransformer`、纯 Transformer 和三个基线：只看段位的逻辑回归、英雄强度、因子分解机）、`fit.py`（训练循环、按验证集的胜率保存最好的一轮、可选早停、恒定 / 余弦学习率、每轮在训练子集上同口径评估、Platt 校准，过程写进 run 目录）、`evaluate.py`（按局面 / 子集的指标、热度基线）、`export.py`（ONNX + parity）、`watch.py`（训练曲线页） |
 
-- 输入：一场选秀的 17 个 token，每个 = 英雄嵌入 + 类型嵌入（7 种）+ 位置嵌入；CTX 再加双方段位档 + 开战规则（海外四条 / 无 / 「不知道」）。B14h 起训练集只有海外，没有「不知道」：训练时以 10% 的概率把规则换成「不知道」（`TrainConfig.rule_unknown_rate`，`rta train --rule-unknown`），学到的是各条规则的平均。胜率一律是**先手方**赢的概率。
+- 输入：一场选秀的 17 个 token，每个 = 英雄嵌入 + 类型嵌入（7 种）+ 位置嵌入；CTX 再加开战规则（海外四条 / 无 / 「不知道」）。B14h 起训练集只有海外，没有「不知道」：训练时以 10% 的概率把规则换成「不知道」（`TrainConfig.rule_unknown_rate`，`rta train --rule-unknown`），学到的是各条规则的平均。胜率一律是**先手方**赢的概率。
+- **段位不进胜率模型**（B14g1，用户原则：段位只影响「谁先动」的判断，胜率由英雄 BP 计算，再按先动概率混合）：战绩站的 `grade_code` / `enemy_grade_code` 是赛后的段位，把比赛结果漏了进来（相差两档的对局段位高的一方全胜，差一档的旧模型还没选人就有 AUC 0.63），B14h 及以前的模型学成了「段位高的一定赢」（0.4.0-beta.1 里「挑战者及以下 vs 战神」推荐的预期只有 3.1%）。`TrainConfig.grades`（默认 False；`rta train --with-grades` 只做对比）。
+- **三种「谁先动」**（B14g1，`TrainConfig.first`，默认 True；`--no-first` 只做对比）：胜率头输出 [.., 3] = 先手方先动 / 后手方先动 / 不知道时先手方赢的 logit。Transformer 的胜率头 `Linear(d→3)`；因子分解机另加 `FirstTerm`：Δ = 每个局面一个常数 + 在场英雄各自的「先动敏感度」tₕ 之和（不分哪一方：先手方先动 +Δ、后手方先动 −Δ），所以先动 / 后动的差 = Transformer 两个头的差 + 2Δ，按阵容变；「不知道」是单独的头（不是两者的平均：有的阵容几乎总是先动）。选人头不变（选秀时还不知道谁先动）。训练用快照的 `first_mover`（实际谁先动）：每场都算「不知道」头的 BCE，知道谁先动的（B14h 快照 76.6%，测试期全部）再算那一方先动的头，一起平均；校准每个头一组（先手方先动的头只用先手方先动的对局拟合，「不知道」用全部），`meta.json` 的 `calibration` = {"F", "S", "U"}，`first_heads` / `grades` / `format: 2`。用的时候按先动概率混合：π × 先手方先动时的 + (1 − π) × 后手方先动时的（`model.mix`）。π（`model.effective_first`）= σ(logit π速度 + w · (logit q − logit π一般))：π速度 = 速度表按双方各自段位 + 英雄池速度 + 开局规则算的（`speed.FirstCalc`），π一般 = 同一阵容按一般玩家（不知道段位、没填速度）算的（`speed.first_pair` 一次给出两个），q = 模型自己隐含的先动概率（「不知道」的头 = q × 先手方先动时 + (1 − q) × 后手方先动时，由三个头反推），w = 差² / (差² + 0.1²)（差 = 两种胜率之差）。也就是：抢一速要紧的阵容以模型从对局里学到的「一般玩家这一局谁先动」为底，段位 / 速度只带来速度表上的变化量；谁先动无所谓的阵容就是速度表。原因：官方速度直方图混着 PvE 配装，偏偏在抢速的阵容上最不准，直接用速度表的先动概率混合比「不知道」的头还差（B14g1 测试期 n11 0.6257 vs 0.6238，两种胜率差 > 30 个点的对局 0.666 vs 0.649），这样混合是 0.6231。没有速度表时用「不知道」的头。旧格式（一个头、看段位）的模型照样能读（三种情况一样），`fit.load_run` 读旧 run 时按旧结构建网络。
 - 网络（随包的是混合结构，d = 128、3 层、λ = 1，66.5 万参数）：胜率 logit = 因子分解机（强度 + 搭档 + 克制，显式去掉被禁的英雄）+ Pre-LN Transformer（手写注意力）的 `Linear(d→1)`；选人头 `Linear(d→d)` 后乘英雄嵌入的转置（共享权重）。损失 = 12 个局面胜率 BCE 平均 + λ × 10 个局面选人交叉熵平均；默认跑满整个余弦周期、按验证集的胜率损失保存最好的一轮（`--patience N` 打开早停，学习率降到峰值三成以下才计数）；验证集上每个局面拟合 Platt 校准（σ(a · logit + b)，存在 `meta.json` 的 `calibration`）。纯 Transformer 打不过因子分解机、也几乎用不上后禁信息，所以加了宽部分（B14b 审核记录）。架构图：[reviews/B14b-architecture.html](reviews/B14b-architecture.html)。
 - 测试集（B14h：10-26 ~ 11-01，17.4 万场，只有海外，后禁后，切分训练的模型）：log loss 0.6125、AUC 0.721、ECE 0.005（因子分解机 0.6208 / 0.713）；选人前 5 命中 0.610（热度 0.416）。随包的全量模型和 B14b 的全量模型在两者都没见过的 11-02（2 万场）上：0.6099 / 0.6124。B14b 时（10-17 ~ 10-23，两服）是 0.6166 / 0.717。
 - 训练数据：只用本赛季、**只用海外**（B14h 用户意见：国服已同步海外，数据质量不如海外），全段位（段位作为输入）；还没得到开发的新英雄整场去掉（`--exclude`，B14h 是侦探茉萝 c2187）。模型词表里没有的英雄（这些新英雄、训练集里选过不到 30 次的）不进 RTA 助手和英雄池，只在图鉴里看（B14h 用户意见）。B14h 前的随包模型是两服合并的。随包模型 = 用切分选好结构和轮数后、全量数据重训的那个。
 - 训练（开发机）：`python -m uv sync --group train`（CPU 版 torch，测试和导出用）；GPU 训练环境 `engine/.venv-rocm`（`tools/setup_rocm_venv.ps1`：AMD 官方 Windows ROCm 版 torch 2.9，只有 Python 3.12，装在 `engine/.python`），本机 RX 7700 XT 比 CPU 快约 16 倍。网格 `tools/rta_grid.ps1`。
-- CLI（开发用）：`rta dataset [--until] [--servers global] [--exclude 编号或名字,...]`、`rta train -m lr0|lr|fm|transformer|hybrid [--d --layers --lambda] [--rule-unknown 0.1] [--full --calibration-from <run>]`、`rta watch`（曲线页 `http://127.0.0.1:47900/`）、`rta eval <run>...`、`rta export <run> [--metrics-from]`、`rta model [--check]`、`rta predict --first ... --second ...`（中文名试算）、`rta sim [--side F|S] [--opponent ai|manual]`（终端里模拟 BP：一层估算的推荐 + 后禁矩阵；候选按选人头先验筛，见 B14b 审核记录「冷门英雄外推」）。run 目录 `F:\e7helper-data\rta\runs\<名字>\`。
+- CLI（开发用）：`rta dataset [--until] [--servers global] [--exclude 编号或名字,...]`、`rta train -m lr0|lr|fm|transformer|hybrid [--d --layers --lambda] [--rule-unknown 0.1] [--with-grades] [--no-first] [--full --calibration-from <run>]`、`rta watch`（曲线页 `http://127.0.0.1:47900/`）、`rta eval <run>...`（B14g1：三头模型另给混合 / 不知道 / 知道谁先动时的指标、先动 / 后动差的分布，子集加「段位同档 / 差 1 档 / 差 ≥ 2 档」；每场每个局面的先动概率另存 `eval-test-first.npy`）、`rta export <run> [--metrics-from]`、`rta model [--check] [--dir]`、`rta predict --first ... --second ... [--grades] [--first-prob] [--dir]`（中文名试算；三头模型给三种情况和按先动概率混合的值）、`rta sim [--side F|S] [--opponent ai|manual]`（终端里模拟 BP：一层估算的推荐 + 后禁矩阵；候选按选人头先验筛，见 B14b 审核记录「冷门英雄外推」）。run 目录 `F:\e7helper-data\rta\runs\<名字>\`。
 - 冻结：`e7engine.spec` 的 `collect_submodules` 跳过 `e7helper.core.rta.train`，`excludes` 加 torch / onnx / onnxscript；冒烟测试跑 `rta model --check` 并检查产物里没有 torch。
 
 ### 选秀推荐（B14c）
@@ -286,7 +290,7 @@ speed.annotate(out, state, "F", table, pool.load().speeds)   # 在 advise 结果
 ```
 | 文件 | 职责 |
 |---|---|
-| `speed.py` | 速度表 `SpeedTable`（每名英雄每个段位 13 档：官方 110–290 九档 + 290 以上拆成 290–310 / 310–330 / 330–350 / 350–370）、`first_mover`（蒙特卡洛，固定种子）、开局规则 `RULES`、`annotate`；开发用的 `fit_tails` / `implied_speeds` / `residuals` / `evaluate` / `choose_jitter` / `build` |
+| `speed.py` | 速度表 `SpeedTable`（每名英雄每个段位 13 档：官方 110–290 九档 + 290 以上拆成 290–310 / 310–330 / 330–350 / 350–370）、`first_mover`（蒙特卡洛，固定种子）、开局规则 `RULES`、`annotate`；B14g1：`FirstCalc`（同一个模型的快速版，按分布积分，一批阵容一次算完）、`state_first_probs`（选秀局面 → 先手方先动的概率）、`match_first_probs`（训练快照的对局 → 12 个局面的）、`slot_counts`（一方第 k 手各英雄被选的次数）；开发用的 `fit_tails` / `implied_speeds` / `residuals` / `evaluate` / `choose_jitter` / `build` |
 | `pool.py` | 英雄池 `<数据目录>/modules/rta_draft/pool.json`：`{heroes: [{code, speed?}]}`，速度 50–400，同一名英雄留最后一次；B14e2：没设置过（没有文件、文件坏了，`load_saved()` 返回 None）时用 `default()`（主模型里训练时被选最多的 60 名，不写进文件），`reset()` 删掉文件 |
 
 - **速度**：290 以下用官方英雄分析的速度直方图（按对局双方各自的段位；没有这个段位用最近的，一样近取高的；段位不知道按人数混合；没有这名英雄用这个段位所有英雄的合计并标 `no_data`）。290 以上官方只给占比，用开局行动条反推：同场 290 以上占比 < 20%、第 1 档占比 < 30%、行动条 20–95 的英雄当参照（至少 3 名），经过的时间 = 中位数（(行动条 − 开局随机的一半) ÷ 参照的速度中位数），再反推其余英雄的速度；290 以上四档每名英雄每个段位一份，向这个段位的合计收缩（强度 20 场），段位合计再向先验（方案阶段 198 场的粗估）收缩（强度 50 场）。核对：反推出 ≥ 290 的比例应接近官方 290 以上的占比。有限速英雄（赫尔赛蒂）的对局、有开局加行动条的英雄不参与反推。
@@ -294,10 +298,11 @@ speed.annotate(out, state, "F", table, pool.load().speeds)   # 在 advise 结果
 - **开局规则**：智武首次战斗开始 +30% 行动条；赫尔赛蒂（PvP）把其他英雄的速度限制在她的 90% 以下。天秤之主是别人加行动条时跟着加，开局不触发（用户意见），不算。没登记的开局效果靠 `rta speed` 的残差（行动条比速度应有的高出多少）找。
 - **开局随机**：每名英雄 0–`jitter`% 行动条，默认 5%（社区说法）；`rta speed` 在拟合用的对局上比 0 / 2.5 / 5 / 7.5 / 10，比 5% 好不到 0.002 的 log loss 就不换（合成数据里各取值只差约 0.001，从「谁先动」上很难分辨）。
 - **先动概率**：每名英雄抽速度（英雄池里填了速度的用填的），到 100 的时间 = (100 − 开局行动条) ÷ 速度，最先到的先动；4000 次抽样，同样的输入结果相同。
-- **不进胜率模型**（用户意见）：有的阵容抢到一速胜率差几十个点，有的几乎不差，不能在模型外统一修正；推荐和后禁矩阵只在旁边显示先动概率。ss22 重训时把「谁先动」作为模型输入（B14g）。
+- **不在模型外修正胜率**（B14d1 用户意见）：有的阵容抢到一速胜率差几十个点，有的几乎不差，不能在模型外统一修正。B14g1 起「谁先动」进了胜率模型（三种情况，见「胜率 / 选人模型」），胜率 = 按先动概率混合；搜索、接口、页面在 B14g2 接上，之前推荐和后禁矩阵还是只在旁边显示先动概率。
+- **快速先动概率** `FirstCalc`（B14g1）：和 `first_mover` 同一个模型，按速度分布直接积分、不抽样（4 万次抽样对照差 p95 0.4 个百分点）。一方最先到的时间 T = min tₕ，英雄独立 → P(T > x) = Π P(tₕ > x)（对数相加），P(先手方先动) = ∫ P(T_S > x) d(−P(T_F > x))；时间按「等效速度」640 … 40 每档 2 离散，每名英雄（段位、填的速度、限速）的对数生存函数缓存。赫尔赛蒂限速让英雄不再独立：按她的速度分 8 档分别算再平均（B14h 快照的测试期 18% 的对局有她）。选秀中间的局面：一方不到 4 名时，还没选的那几手用「占位」补 = 一方第 k 手被选英雄的混合（`slot_counts`；先选的多是快的，后面几手偏慢；只用不分第几手的次数时第 5 手平均 62%，实际 52%，按第几手 56.7%）；5 名都在、还没后禁时对 4 × 4 种被禁的情况平均（保护位不会被禁）。
 - 接口：`POST /api/rta/first {mine, theirs, grades?, speeds?}`（没有速度表 503 `no_speed_data`）、`GET/PUT/DELETE /api/rta/pool`（B14h 起只收模型里有的英雄：PUT 有别的 422 `not_in_model`，GET / advise 跳过以前存的；B14e2 起没设置过时是默认的、带 `default: true`，DELETE 回到默认）；`POST /api/rta/advise` 不传 `pool` 时用保存的英雄池（`use_saved_pool: false` 不限制；池里能选的不够这一轮时这一轮不限制、结果 `pool_short: true`，B14e2），结果加 `first`（目前双方在场的，`partial` = 还不是最终 4 打 4）、每个推荐的 `first`、后禁矩阵的 `ban.first`（每格 4 打 4），都是我方先动的概率；`GET /api/rta/model` 加 `speed`（速度表信息）。
 - 生成速度表（开发用）：`rta herostats [--season] [--grades] [--min-picks 300] [-s global]`（每名英雄每个段位一次请求，约 200 名 × 6 段 ≈ 35 分钟，72 小时内取过的跳过）→ `rta speed [--season] [--servers global] [--no-clean]`（直方图用第一个服的；前 80% 有行动条的对局拟合、最近的 20%（最多 3000 场）验收，打印核对表、残差、清理掉和补回的低档，验收另给「官方原样」「只去掉」两种对照）→ `assets/data/rta/speed.json`。B14h 起两步都默认海外。试算：`rta first --mine … --theirs … [--grades] [--speed 名字=速度]`；`rta advise` 也显示先动概率（`--speed`）。
-- 快照（`rta dataset`）带上 10 手各自的开局行动条（按选秀顺序，-1 = 没有）和 `first_mover`（1 = 先手方先动、0 = 后手方、-1 = 不知道），旧快照读出来是 -1；给 B14g 用。
+- 快照（`rta dataset`）带上 10 手各自的开局行动条（按选秀顺序，-1 = 没有）和 `first_mover`（1 = 先手方先动、0 = 后手方、-1 = 不知道），旧快照读出来是 -1；B14g1 训练用（`Dataset.encode` 的 `head`）。
 
 ## API 层 `e7helper.api`（B08）
 ```

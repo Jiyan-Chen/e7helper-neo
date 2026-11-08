@@ -860,6 +860,8 @@ def rta_train(
     batch: Annotated[int, typer.Option("--batch", help="每批几场")] = 512,
     lr: Annotated[float, typer.Option("--lr", help="学习率")] = 2e-3,
     rule_unknown: Annotated[float, typer.Option("--rule-unknown", help="训练时把开战规则换成「不知道」的概率（B14h）")] = 0.1,
+    with_grades: Annotated[bool, typer.Option("--with-grades", help="CTX 加上双方段位（B14g 前的旧结构，只做对比；段位是赛后的，会漏结果）")] = False,
+    no_first: Annotated[bool, typer.Option("--no-first", help="只要一个胜率头（不分谁先动，B14g 前的旧结构，只做对比）")] = False,
     device: Annotated[str, typer.Option("--device", help="auto / cuda / cpu")] = "auto",
     full: Annotated[bool, typer.Option("--full", help="全量重训：不留验证 / 测试，跑满 --epochs（校准用 --calibration-from）")] = False,
     calibration_from: Annotated[Optional[str], typer.Option("--calibration-from", help="全量重训时用这个 run（切分训练的）在验证集上拟合的校准参数")] = None,
@@ -886,7 +888,8 @@ def rta_train(
             raise typer.Exit(1)
     cfg = fit.TrainConfig(name=name or "", model=model, d=d, layers=layers, lam=lam, k=k, epochs=epochs,
                           patience=patience, weight_decay=weight_decay, schedule=schedule, batch=batch, lr=lr,
-                          rule_unknown_rate=rule_unknown, device=device, full=full, calibration=calibration,
+                          rule_unknown_rate=rule_unknown, grades=with_grades, first=not no_first, device=device,
+                          full=full, calibration=calibration,
                           max_steps=max_steps, dataset=str(path))
     run = fit.runs_dir() / cfg.run_name()
     console.print(f"训练 {cfg.run_name()} · 数据 {path.name}（{len(ds)} 场）· 设备 {fit.pick_device(device)} → {run}")
@@ -909,6 +912,8 @@ def rta_train(
             mark = "[green]↓[/]" if v["improved"] else (f"[dim]早停计数 {v['bad_epochs']}[/]" if patience else "")
             if "train_win_loss" in v:
                 ptxt += f" · 训练集 {v['train_win_loss']:.4f} / 验证 {v['win_loss']:.4f}"
+            if "n11_first" in v:  # B14g：知道谁先动的对局上，实际先动方的头 vs 「不知道」的头
+                ptxt += f" · 知道先动 n11 {v['n11_first']['log_loss']:.4f}（不用 {v['n11_first_u']['log_loss']:.4f}）"
             progress.console.print(
                 f"第 {v['epoch']} 轮验证：loss {v['loss']:.4f} · n11 log loss {v['n11']['log_loss']:.4f} "
                 f"AUC {v['n11']['auc']:.4f} ECE {v['n11']['ece']:.4f}（≥优胜者 AUC {v['n11_champ']['auc']:.4f}）{ptxt} {mark}")
@@ -962,6 +967,22 @@ def rta_eval(
     for r in results:
         curve.add_row(r["run"], *[f"{r['win']['all'][str(n)]['auc']:.3f}" for n in range(12)])
     console.print(curve)
+    firsts = [r for r in results if "win_first" in r]
+    if firsts:  # B14g：三种「谁先动」的模型
+        console.print("先动模型：win = 按速度表的先动概率混合（mix = speed）或「不知道」的头（mix = unknown）")
+        t2 = Table("run", "mix", "n11 混合", "n11 只用速度表", "n11 不知道", "知道谁先动的对局", "n11 实际先动方", "n11 不知道",
+                   "先动 / 后动差 |Δ| 中位 / 90% / 99%（n11）", "|Δ| ≥ 10 / 20 / 30 个点", "先动概率 log loss / 命中")
+        for r in firsts:
+            g = r["first_gap"]["11"]
+            fp = r.get("first_prob")
+            t2.add_row(r["run"], r["mix"], f"{r['win']['all']['11']['log_loss']:.4f}",
+                       f"{r['win_speed']['all']['11']['log_loss']:.4f}" if "win_speed" in r else "—",
+                       f"{r['win_unknown']['all']['11']['log_loss']:.4f}", str(r["known"]),
+                       f"{r['win_first']['all']['11']['log_loss']:.4f}", f"{r['win_first_u']['all']['11']['log_loss']:.4f}",
+                       " / ".join(f"{g['abs_q'][q] * 100:.1f}" for q in ("0.5", "0.9", "0.99")),
+                       " / ".join(f"{g[k]:.1%}" for k in ("ge10", "ge20", "ge30")),
+                       f"{fp['log_loss']:.4f} / {fp['accuracy']:.1%}" if fp else "—")
+        console.print(t2)
 
 
 @rta_app.command("export")
@@ -1003,13 +1024,26 @@ def rta_export(
     info = {"run": run_dir.name, "trained_on": {k: int(len(v)) for k, v in ds.split(0 if cfg["full"] else 7, 7).items()},
             "dataset": {k: ds.meta.get(k) for k in ("season", "until", "first_day", "last_day", "kept")},
             "test_metrics_from": src.name if test_metrics else None,
-            "test_metrics": {k: test_metrics[k] for k in ("n", "win", "pick", "pop")} if test_metrics else None}
+            "test_metrics": _export_metrics(test_metrics) if test_metrics else None}
     out = out or bundled_dir()
     check = export.write_bundle(model, vocab, ckpt, out, states=states, check_inputs=(x["heroes"], x["ctx"]), info=info)
     sizes = {p.name: p.stat().st_size for p in out.iterdir() if p.is_file()}
     console.print(f"导出到 {out}：{', '.join(f'{k} {v / 1e6:.2f} MB' for k, v in sizes.items())}")
     console.print(f"onnxruntime vs torch（{check['n']} 场 × 17 个位置）：胜率 logit 最大差 {check['win_logit']:.2e}，"
                   f"选人 logit 最大差 {check['pick_logit']:.2e}，胜率概率最大差 {check['win_prob']:.2e}")
+
+
+def _export_metrics(ev: dict) -> dict:
+    """写进 meta.json 的测试指标：全部子集的 win、选人；B14g 的先动模型再带混合方式、知道谁先动时的 / 不知道时的（只要「全部」）、
+    先动 / 后动差的分布、先动概率的准确度。"""
+    out = {k: ev[k] for k in ("n", "win", "pick", "pop")}
+    for k in ("mix", "known", "first_gap", "first_prob", "first_prob_speed"):
+        if k in ev:
+            out[k] = ev[k]
+    for k in ("win_first", "win_first_u", "win_unknown", "win_speed"):
+        if k in ev:
+            out[k] = {"all": ev[k]["all"]}
+    return out
 
 
 @rta_app.command("priors")
@@ -1051,13 +1085,16 @@ def rta_model(
     arch = meta.get("arch", {})
     console.print(f"模型 {folder}：{meta['kind']} d={arch.get('d')} L={arch.get('layers')} · {meta.get('params')} 参数 · "
                   f"词表 {m.vocab.size} · 校准 n11 {_cal(m.calibration)} · 导出于 {meta.get('built')} · 加载 {m.load_seconds * 1000:.0f} ms")
+    console.print("胜率头：" + ("先手方先动 / 后手方先动 / 不知道（B14g，按先动概率混合）" if m.first else "一个（不分谁先动）")
+                  + " · 段位" + ("进模型（旧结构）" if m.grades else "不进模型（只用来算先动概率）"))
     ds = meta.get("dataset") or {}
     console.print(f"训练数据：{ds.get('season')} {ds.get('first_day')} ~ {ds.get('last_day')}，{meta.get('trained_on')}")
     tm = meta.get("test_metrics")
     if tm:
         a = tm["win"]["all"]["11"]
         console.print(f"测试指标（{meta.get('test_metrics_from')}，{tm['n']} 场）：n11 log loss {a['log_loss']:.4f} AUC {a['auc']:.4f} "
-                      f"ECE {a['ece']:.4f}；选人前 5 {tm['pick']['top5']:.3f}（热度 {tm['pop']['top5']:.3f}）")
+                      f"ECE {a['ece']:.4f}；选人前 5 {tm['pick']['top5']:.3f}（热度 {tm['pop']['top5']:.3f}）"
+                      + (f"；按先动概率混合（{tm['mix']}）" if tm.get("mix") else ""))
     if not check:
         return
     res = m.check()
@@ -1089,8 +1126,11 @@ def rta_predict(
     grades: Annotated[str, typer.Option("--grades", help="双方段位，如 legend,emperor")] = "",
     rule: Annotated[str, typer.Option("--rule", help="开战规则：unknown（不知道）/ none（没有）/ opening_rule_desc_tid")] = "unknown",
     k: Annotated[int, typer.Option("--top", help="下一手列几名")] = 8,
+    first_prob: Annotated[Optional[float], typer.Option("--first-prob", help="先手方先动的概率（0–1），不填按速度表和段位算")] = None,
+    folder: Annotated[Optional[Path], typer.Option("--dir", help="模型目录，默认随包的")] = None,
 ) -> None:
-    """用随包模型试算一个局面（B14b）：先手方胜率 + 下一手最可能的英雄。"""
+    """用随包模型试算一个局面（B14b）：先手方胜率 + 下一手最可能的英雄。
+    B14g 的模型另给先手方先动 / 后手方先动 / 不知道三种情况，胜率 = 按先动概率混合（段位只用来算先动概率）。"""
     from e7helper.core.data import heroes as hero_db
     from e7helper.core.rta import model as rmodel
     from e7helper.core.rta.encode import UNKNOWN_RULE, DraftState
@@ -1120,9 +1160,28 @@ def rta_predict(
     if problems:
         _fail("；".join(problems))
         raise typer.Exit(2)
-    m = rmodel.load()
+    m = rmodel.load(folder)
     ev = m.evaluate([st])
-    console.print(f"局面 {st.state}（已选 {st.n_picks} 手）：先手方胜率 [bold]{ev.win[0]:.1%}[/]，后手方 {1 - ev.win[0]:.1%}")
+    if m.first:
+        from e7helper.core.rta import priors as rpriors
+        from e7helper.core.rta import speed
+
+        f, ref, how = first_prob, None, "命令行给的"
+        table = speed.load()
+        if f is None and table is not None:
+            weights = rpriors.load().picks if rpriors.available() else None
+            pair = speed.first_pair(speed.FirstCalc(table, weights=weights), [st])
+            f0, ref = float(pair[0][0]), float(pair[1][0])
+            f = float(rmodel.effective_first(ev.heads[0], f0, ref))
+            how = f"速度表按段位 {f0:.1%}、一般玩家 {ref:.1%}，加上模型从对局学到的"
+        h = ev.heads[0]
+        win = float(rmodel.mix(h, f))
+        console.print(f"局面 {st.state}（已选 {st.n_picks} 手）：先手方胜率 [bold]{win:.1%}[/]，后手方 {1 - win:.1%}"
+                      + (f"（先手方先动 {f:.1%}，{how}）" if f is not None else "（没有速度表：用不知道谁先动时的）"))
+        console.print(f"  先手方先动时 {h[0]:.1%} · 后手方先动时 {h[1]:.1%}（差 {(h[0] - h[1]) * 100:+.1f} 个点）· "
+                      f"不知道谁先动 {h[2]:.1%}")
+    else:
+        console.print(f"局面 {st.state}（已选 {st.n_picks} 手）：先手方胜率 [bold]{ev.win[0]:.1%}[/]，后手方 {1 - ev.win[0]:.1%}")
     if st.state < 10:
         side = "先手方" if st.mover() == "F" else "后手方"
         top = m.next_picks(st, k)

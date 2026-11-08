@@ -148,6 +148,9 @@ def test_energy_in_snapshot(tmp_path):
     ds.save(path)
     again = rds.Dataset.load(path)
     assert (again.energy == ds.energy).all() and (again.first_mover == ds.first_mover).all()
+    # B14g：编码时带上谁先动对应的胜率头
+    x = ds.encode(ds.vocab(np.arange(3), min_picks=1))
+    assert x["head"].tolist() == [encode.HEAD_F, encode.HEAD_S, encode.HEAD_U] and x["head"].dtype == np.int64
     # 旧快照（没有这两项）
     old = rds.Dataset(codes=ds.codes, rule_table=ds.rule_table, tokens=ds.tokens, grades=ds.grades, rule=ds.rule,
                       server=ds.server, day=ds.day, first_wins=ds.first_wins, turns=ds.turns)

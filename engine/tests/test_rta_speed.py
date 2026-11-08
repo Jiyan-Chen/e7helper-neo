@@ -235,3 +235,110 @@ def test_annotate():
     assert speed.annotate({}, st, "F", None)["first"] is None  # 没有速度表
     st = encode.DraftState(picks={"F": ["f1"], "S": []})
     assert speed.annotate({}, st, "F", t)["first"] is None  # 对方还没有英雄
+
+
+# —— 快速先动概率（B14g） ——
+
+def _calc_table() -> SpeedTable:
+    hists = {f"h{i}": {"legend": one_bin(3 + i % 7, 500), "champion": one_bin(2 + i % 6, 500)} for i in range(12)}
+    hists["c1133"] = {"legend": one_bin(6)}  # 智武：开局 +30%
+    hists["c1153"] = {"legend": one_bin(4)}  # 赫尔赛蒂：限速
+    hists["top"] = {"legend": [0] * 8 + [300, 700]}
+    return SpeedTable.from_hists(hists, jitter=5.0)
+
+
+def test_first_calc_matches_monte_carlo():
+    t = _calc_table()
+    calc = speed.FirstCalc(t)
+    rng = np.random.default_rng(3)
+    codes = sorted(t.hists)
+    for i in range(40):
+        pick = list(rng.choice(codes, 8, replace=False))
+        g = ("legend", "champion") if i % 2 else ("legend", "legend")
+        fixed = {pick[1]: 300.0} if i % 3 == 0 else {}
+        a = [Unit("F", c, g[0], fixed.get(c)) for c in pick[:4]]
+        b = [Unit("S", c, g[1]) for c in pick[4:]]
+        mc = speed.first_mover(t, a + b, n=40000)["sides"]["F"]
+        assert calc.prob(a, b, g) == pytest.approx(mc, abs=0.02), (pick, g, fixed)
+
+
+def test_first_calc_rules_and_placeholders():
+    t = _calc_table()
+    calc = speed.FirstCalc(t)
+    slow = lambda side: [Unit(side, f"h{i}", "legend", 120) for i in range(3)]  # noqa: E731
+    zio = calc.prob([Unit("F", "c1133", "legend", 240), *slow("F")], [Unit("S", "top", "legend", 300), *slow("S")])
+    assert zio == pytest.approx(1.0, abs=1e-3)  # 智武开局 +30%：240 速能赢 300 速
+    harsetti = calc.prob([Unit("F", "c1153", "legend", 150), *slow("F")], [Unit("S", "top", "legend", 330), *slow("S")])
+    assert harsetti > 0.95  # 赫尔赛蒂把别人限速到她的 90% 以下
+    assert calc.prob([], [], ("legend", "legend")) == pytest.approx(0.5, abs=1e-6)  # 都是占位：一半一半
+    # 段位高的占位更快：快的一方先动概率 > 一半
+    assert calc.prob([], [], ("legend", "champion")) > 0.5
+    # 按选取次数加权的占位：只选很快的英雄 → 空位比官方合计的「平均英雄」快
+    fast = speed.FirstCalc(t, weights={"top": 10})
+    one_top = [Unit("F", "top", "legend")]
+    assert fast.prob(one_top, [], ("legend", "legend")) < calc.prob(one_top, [], ("legend", "legend")) - 0.2
+    # 第几手的占位：第 1 手全是 top、之后全是 h0（慢）→ 已经选了第 1 手的一方补上的占位慢
+    slots = speed.FirstCalc(t, weights={"h0": 1}, slot_weights=[{"top": 1}, {"h0": 1}, {"h0": 1}, {"h0": 1}, {"h0": 1}])
+    f = slots.fills("legend")
+    assert f.shape == (speed.TEAM + 1, len(speed.GRID)) and np.allclose(f[speed.TEAM], 0)
+    assert np.allclose(f[0] - f[1], slots._mixture({"top": 1.0}, "legend", None))
+    one_each = slots.prob([Unit("F", "h1", "legend")], [Unit("S", "h1", "legend")], ("legend", "legend"))
+    assert one_each == pytest.approx(0.5, abs=1e-6)
+    assert slots.prob([Unit("F", "h1", "legend")], [], ("legend", "legend")) < 0.5  # 对方还有第 1 手（快）没选
+
+
+def test_prob_batch_matches_single():
+    t = _calc_table()
+    calc = speed.FirstCalc(t, weights={c: 1 + i for i, c in enumerate(sorted(t.hists))})
+    names = [None, None, *sorted(t.hists)]
+    rng = np.random.default_rng(5)
+    rows_a = np.zeros((30, 5), dtype=np.int64)
+    rows_b = np.zeros((30, 5), dtype=np.int64)
+    for r in range(30):
+        ids = rng.choice(np.arange(2, len(names)), 10, replace=False)
+        na, nb = int(rng.integers(0, 6)), int(rng.integers(0, 5))
+        rows_a[r, :na], rows_b[r, :nb] = ids[:na], ids[5:5 + nb]
+    rows_a[0, :2] = [names.index("c1153"), names.index("h3")]  # 有限速英雄的行
+    rows_b[1, :1] = [names.index("c1153")]
+    g = ("legend", "champion")
+    speeds = ({"h2": 310.0}, None)
+    got = calc.prob_batch(rows_a, rows_b, names, g, speeds)
+    for r in range(30):
+        a = [Unit("F", names[i], None, speeds[0].get(names[i])) for i in rows_a[r] if i]
+        b = [Unit("S", names[i]) for i in rows_b[r] if i]
+        assert got[r] == pytest.approx(calc.prob(a, b, g), abs=1e-9)
+
+
+def test_state_and_match_first_probs():
+    from rta_fakes import synthetic_dataset
+
+    ds = synthetic_dataset(n=60, heroes=40)
+    t = SpeedTable.from_hists({f"c{i}": {"legend": one_bin(i % 10)} for i in range(40)}, jitter=5.0)
+    calc = speed.FirstCalc(t, slot_weights=speed.slot_counts(ds.tokens, ds.codes))
+    got = speed.match_first_probs(calc, ds.tokens, ds.codes, ds.grades)
+    assert got.shape == (60, 12) and ((got >= 0) & (got <= 1)).all()
+    for row in (0, 7, 33):
+        states = [ds.state(row, n) for n in range(12)]
+        assert np.allclose(speed.state_first_probs(calc, states), got[row], atol=1e-9)
+    # 后禁前 5 名都在：对 4 × 4 种被禁的情况平均；后禁后只剩上场的 4 名
+    st = ds.state(0, 10)
+    opts = [(f, s) for f in speed._side_options(st.picks["F"], None) for s in speed._side_options(st.picks["S"], None)]
+    assert len(opts) == 16 and all(len(f) == len(s) == 4 for f, s in opts)
+    assert all(st.picks["F"][2] in f for f, _ in opts)  # 保护位不会被禁
+    counts = speed.slot_counts(ds.tokens, ds.codes)
+    assert len(counts) == 5 and sum(counts[0].values()) == 2 * len(ds)
+
+
+def test_first_pair_uses_typical_player_as_reference():
+    from rta_fakes import synthetic_dataset
+
+    ds = synthetic_dataset(n=10, heroes=40)
+    t = SpeedTable.from_hists({f"c{i}": {"legend": one_bin(i % 10), "champion": one_bin(max(i % 10 - 2, 0))}
+                               for i in range(40)}, jitter=5.0)
+    calc = speed.FirstCalc(t)
+    states = [encode.DraftState.from_dict({**ds.state(2, n).to_dict(), "grades": ["legend", "champion"]}) for n in (3, 11)]
+    first, ref = speed.first_pair(calc, states, {"F": {"c5": 350}})
+    assert np.allclose(first, speed.state_first_probs(calc, states, {"F": {"c5": 350}}))
+    plain = [encode.DraftState.from_dict({**st.to_dict(), "grades": [None, None]}) for st in states]
+    assert np.allclose(ref, speed.state_first_probs(calc, plain))
+    assert states[0].grades == ("legend", "champion")  # 原来的局面不动

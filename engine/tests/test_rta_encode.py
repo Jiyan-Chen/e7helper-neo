@@ -120,3 +120,11 @@ def test_pick_counts():
     codes = [f"c{i}" for i in range(12)]
     counts = encode.pick_counts(tokens, codes)
     assert counts["c0"] == 2 and counts["c9"] == 1 and counts["c10"] == 1 and "c11" not in counts
+
+
+def test_first_heads():
+    """B14g：快照的 first_mover（1 = 先手方先动、0 = 后手方、-1 = 不知道）→ 胜率头编号。"""
+    assert encode.FIRST_HEADS == ("F", "S", "U") and encode.N_HEADS == 3
+    assert [encode.first_head(v) for v in (1, 0, -1)] == [encode.HEAD_F, encode.HEAD_S, encode.HEAD_U]
+    got = encode.first_heads(np.array([1, 0, -1, 1], dtype=np.int8))
+    assert got.tolist() == [0, 1, 2, 0] and got.dtype == np.int64

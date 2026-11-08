@@ -1,8 +1,14 @@
 """RTA 模型的网络（B14b）：Transformer 和三个基线，输入都是 encode 的 heroes [B, 17] + ctx [B, 3]。
 
-统一接口 `predict(heroes, ctx) -> (win [B, 12], pick [B, 10, V] 或 None)`：
+统一接口 `predict(heroes, ctx) -> (win [B, 12] 或 [B, 12, 3], pick [B, 10, V] 或 None)`：
 win 是 12 个局面「先手方赢」的 logit，pick 是已选 n = 0…9 手时下一手的 logit（还没屏蔽不可选的）。
 只用 torch 2.9 也有的接口（GPU 训练环境是 ROCm 版 torch 2.9）。
+
+B14g 两个开关（`build(grades=, first=)`，旧 run 的设置里没有这两项 = 旧结构 grades=True、first=False）：
+- grades：CTX 加不加双方段位档。新模型不加（战绩站的段位是赛后的，会把比赛结果漏进来）；
+- first：胜率头分三种「谁先动」（encode.FIRST_HEADS：先手方先动 / 后手方先动 / 不知道），win 多一维 [.., 3]。
+  先动 / 后动的差 = Transformer 两个头的差 + 2 × Δ，Δ = 每个局面一个常数 + 在场英雄各自的「先动敏感度」之和
+  （`FirstTerm`，可解释的部分）；「不知道」是单独的头（不是两者的平均：有的阵容本来就几乎总是先动）。
 """
 
 from __future__ import annotations
@@ -19,6 +25,7 @@ NEG = -1e9  # 注意力和选人屏蔽用的大负数（不用 -inf，导出 ONN
 
 STATE_POS = torch.as_tensor(encode.STATE_POS)
 PICK_STATE_POS = STATE_POS[:encode.N_PICKS]  # 局面 0…9 的读出位置
+HEAD_SIGN = torch.tensor([1.0, -1.0, 0.0])  # 三个头里 Δ 的符号：先手方先动 +、后手方先动 −、不知道 0
 
 
 def _coef_matrix() -> torch.Tensor:
@@ -32,57 +39,107 @@ def _coef_matrix() -> torch.Tensor:
     return c
 
 
-class ContextBias(nn.Module):
-    """先手 + 段位 + 开战规则 + 局面编号的偏置（三个基线共用）。"""
+def _field_matrix() -> torch.Tensor:
+    """[12, 17]：局面 n 时在场的英雄（不分哪一方）：已选的 +1；后禁之后再减掉双方被禁的那名。"""
+    c = torch.zeros(encode.N_STATES, encode.SEQ_LEN)
+    for n in range(encode.N_STATES):
+        c[n, encode.PICK_POS:encode.PICK_POS + min(n, encode.N_PICKS)] = 1.0
+    c[encode.POSTBAN, encode.BAN_POS["F"]] = -1.0
+    c[encode.POSTBAN, encode.BAN_POS["S"]] = -1.0
+    return c
 
-    def __init__(self, n_rules: int):
+
+class ContextBias(nn.Module):
+    """先手 + 段位（旧结构）+ 开战规则 + 局面编号的偏置（三个基线共用）。"""
+
+    def __init__(self, n_rules: int, grades: bool = True):
         super().__init__()
+        self.grades = grades
         self.state = nn.Parameter(torch.zeros(encode.N_STATES))
-        self.grade_f = nn.Embedding(encode.N_GRADES, encode.N_STATES)
-        self.grade_s = nn.Embedding(encode.N_GRADES, encode.N_STATES)
+        if grades:
+            self.grade_f = nn.Embedding(encode.N_GRADES, encode.N_STATES)
+            self.grade_s = nn.Embedding(encode.N_GRADES, encode.N_STATES)
+            nn.init.zeros_(self.grade_f.weight)
+            nn.init.zeros_(self.grade_s.weight)
         self.rule = nn.Embedding(n_rules, encode.N_STATES)
-        for emb in (self.grade_f, self.grade_s, self.rule):
-            nn.init.zeros_(emb.weight)
+        nn.init.zeros_(self.rule.weight)
 
     def forward(self, ctx: torch.Tensor) -> torch.Tensor:
-        return self.state + self.grade_f(ctx[:, 0]) + self.grade_s(ctx[:, 1]) + self.rule(ctx[:, 2])
+        out = self.state + self.rule(ctx[:, 2])
+        if self.grades:
+            out = out + self.grade_f(ctx[:, 0]) + self.grade_s(ctx[:, 1])
+        return out
+
+
+class FirstTerm(nn.Module):
+    """先动的影响（B14g）：Δ [B, 12] = 每个局面一个常数 + 在场英雄各自的「先动敏感度」之和。
+
+    敏感度 tₕ = 英雄 h 所在的一方先动时比后动时（logit）多出的一半，不分在哪一方：先手方的英雄在先手方先动时 +tₕ；
+    后手方的英雄在后手方先动时让先手方 −tₕ、在先手方先动时 +tₕ，所以两种情况的差都是 2 × Σ tₕ。
+    `heads(base)` → 三个头 [B, 12, 3]：base + Δ、base − Δ、base + 每个局面一个「不知道」的偏移。"""
+
+    def __init__(self, n_heroes: int, per_hero: bool = True):
+        super().__init__()
+        self.state = nn.Parameter(torch.zeros(encode.N_STATES))
+        self.unknown = nn.Parameter(torch.zeros(encode.N_STATES))
+        self.per_hero = per_hero
+        if per_hero:
+            self.t = nn.Embedding(n_heroes, 1, padding_idx=encode.PAD)
+            nn.init.zeros_(self.t.weight)
+        self.register_buffer("field", _field_matrix())
+        self.register_buffer("sign", HEAD_SIGN.clone())
+        self.register_buffer("is_unknown", torch.tensor([0.0, 0.0, 1.0]))
+
+    def delta(self, heroes: torch.Tensor) -> torch.Tensor:
+        d = self.state.expand(heroes.shape[0], -1)
+        if self.per_hero:
+            d = d + self.t(heroes).squeeze(-1) @ self.field.T
+        return d
+
+    def heads(self, base: torch.Tensor, heroes: torch.Tensor) -> torch.Tensor:
+        d = self.delta(heroes)
+        return base[..., None] + d[..., None] * self.sign + self.unknown[:, None] * self.is_unknown
 
 
 class ContextLR(nn.Module):
-    """B0：只看先手、段位、开战规则。"""
+    """B0：只看先手、开战规则（旧结构还有段位）；first 时加每个局面一个先动常数。"""
     has_pick = False
 
-    def __init__(self, n_heroes: int, n_rules: int):
+    def __init__(self, n_heroes: int, n_rules: int, grades: bool = True, first: bool = False):
         super().__init__()
-        self.bias = ContextBias(n_rules)
+        self.bias = ContextBias(n_rules, grades)
+        self.first = FirstTerm(n_heroes, per_hero=False) if first else None
 
     def predict(self, heroes, ctx):
-        return self.bias(ctx), None
+        out = self.bias(ctx)
+        return (self.first.heads(out, heroes) if self.first is not None else out), None
 
 
 class HeroLR(nn.Module):
-    """B1：B0 + 每名英雄一个强度（先手方 +、后手方 −，后禁之后去掉被禁的）。"""
+    """B1：B0 + 每名英雄一个强度（先手方 +、后手方 −，后禁之后去掉被禁的）；first 时加先动敏感度。"""
     has_pick = False
 
-    def __init__(self, n_heroes: int, n_rules: int):
+    def __init__(self, n_heroes: int, n_rules: int, grades: bool = True, first: bool = False):
         super().__init__()
-        self.bias = ContextBias(n_rules)
+        self.bias = ContextBias(n_rules, grades)
         self.strength = nn.Embedding(n_heroes, 1, padding_idx=encode.PAD)
         nn.init.zeros_(self.strength.weight)
         self.register_buffer("coef", _coef_matrix())
+        self.first = FirstTerm(n_heroes) if first else None
 
     def predict(self, heroes, ctx):
         s = self.strength(heroes).squeeze(-1)  # [B, 17]
-        return self.bias(ctx) + s @ self.coef.T, None
+        out = self.bias(ctx) + s @ self.coef.T
+        return (self.first.heads(out, heroes) if self.first is not None else out), None
 
 
 class FactorizationMachine(nn.Module):
-    """B2：B1 + 搭档（同一方两两 ⟨vᵢ, vⱼ⟩）+ 克制（双方两两 ⟨uᵢ, wⱼ⟩ − ⟨uⱼ, wᵢ⟩），对先后手反对称。"""
+    """B2：B1 + 搭档（同一方两两 ⟨vᵢ, vⱼ⟩）+ 克制（双方两两 ⟨uᵢ, wⱼ⟩ − ⟨uⱼ, wᵢ⟩），对先后手反对称；first 时加先动敏感度。"""
     has_pick = False
 
-    def __init__(self, n_heroes: int, n_rules: int, k: int = 16):
+    def __init__(self, n_heroes: int, n_rules: int, k: int = 16, grades: bool = True, first: bool = False):
         super().__init__()
-        self.bias = ContextBias(n_rules)
+        self.bias = ContextBias(n_rules, grades)
         self.strength = nn.Embedding(n_heroes, 1, padding_idx=encode.PAD)
         self.v = nn.Embedding(n_heroes, k, padding_idx=encode.PAD)
         self.u = nn.Embedding(n_heroes, k, padding_idx=encode.PAD)
@@ -99,6 +156,7 @@ class FactorizationMachine(nn.Module):
         post = torch.zeros(encode.N_STATES, 1)
         post[encode.POSTBAN] = 1.0
         self.register_buffer("post", post, persistent=False)  # [12, 1]，只有后禁之后那一行是 1
+        self.first = FirstTerm(n_heroes) if first else None
 
     def _members(self, heroes):
         """[B, 12, 15]：局面 n 时每个位置的英雄是不是还在这一方（后禁之后去掉被禁的那名）。不用原地修改，导出 ONNX 稳。"""
@@ -125,7 +183,7 @@ class FactorizationMachine(nn.Module):
         out = out + self._pairs(mf, v) - self._pairs(ms, v)
         uf, us, wf, ws = mf @ u, ms @ u, mf @ w, ms @ w
         out = out + (uf * ws).sum(-1) - (us * wf).sum(-1)
-        return out, None
+        return (self.first.heads(out, heroes) if self.first is not None else out), None
 
 
 class Attention(nn.Module):
@@ -161,22 +219,25 @@ class Block(nn.Module):
 
 
 class DraftTransformer(nn.Module):
-    """胜率头 + 选人头。CTX 位置加上段位 / 开战规则嵌入；0–4 互相可见、之后因果；选人头和英雄嵌入共享权重。"""
+    """胜率头 + 选人头。CTX 位置加上开战规则嵌入（旧结构还有段位）；0–4 互相可见、之后因果；选人头和英雄嵌入共享权重。
+    first 时胜率头输出三种「谁先动」（Linear(d → 3)），选人头不变（选秀时还不知道谁先动）。"""
     has_pick = True
 
     def __init__(self, n_heroes: int, n_rules: int, d: int = 64, layers: int = 2, heads: int = 4, ffn_mult: int = 4,
-                 dropout: float = 0.1):
+                 dropout: float = 0.1, grades: bool = True, first: bool = False):
         super().__init__()
+        self.grades, self.first_heads = grades, first
         self.hero = nn.Embedding(n_heroes, d)
         self.kind = nn.Embedding(encode.N_TYPES, d)  # 不能叫 type：会和 nn.Module.type() 撞名
         self.pos = nn.Embedding(encode.N_POSITIONS, d)
-        self.grade_f = nn.Embedding(encode.N_GRADES, d)
-        self.grade_s = nn.Embedding(encode.N_GRADES, d)
+        if grades:
+            self.grade_f = nn.Embedding(encode.N_GRADES, d)
+            self.grade_s = nn.Embedding(encode.N_GRADES, d)
         self.rule = nn.Embedding(n_rules, d)
         self.drop = nn.Dropout(dropout)
         self.blocks = nn.ModuleList(Block(d, heads, ffn_mult * d, dropout) for _ in range(layers))
         self.ln = nn.LayerNorm(d)
-        self.win = nn.Linear(d, 1)
+        self.win = nn.Linear(d, encode.N_HEADS if first else 1)
         self.pick_proj = nn.Linear(d, d)
         self.pick_bias = nn.Parameter(torch.zeros(n_heroes))
         self.register_buffer("types", torch.as_tensor(encode.TOKEN_TYPES))
@@ -196,14 +257,18 @@ class DraftTransformer(nn.Module):
             nn.init.normal_(m.weight, std=0.02)
 
     def forward(self, heroes: torch.Tensor, ctx: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """→ win_logit [B, 17]、pick_logits [B, 17, V]（每个位置都输出，调用方按 STATE_POS 取）。"""
-        c = self.grade_f(ctx[:, 0]) + self.grade_s(ctx[:, 1]) + self.rule(ctx[:, 2])  # [B, d]
+        """→ win_logit [B, 17]（first 时 [B, 17, 3]）、pick_logits [B, 17, V]（每个位置都输出，调用方按 STATE_POS 取）。"""
+        c = self.rule(ctx[:, 2])  # [B, d]
+        if self.grades:
+            c = c + self.grade_f(ctx[:, 0]) + self.grade_s(ctx[:, 1])
         x = self.hero(heroes) + self.kind(self.types) + self.pos(self.positions) + self.is_ctx * c[:, None, :]
         x = self.drop(x)
         for block in self.blocks:
             x = block(x, self.attn_bias)
         h = self.ln(x)
-        win = self.win(h).squeeze(-1)
+        win = self.win(h)
+        if not self.first_heads:
+            win = win.squeeze(-1)
         pick = self.pick_proj(h) @ self.hero.weight.T + self.pick_bias
         return win, pick
 
@@ -219,9 +284,9 @@ class HybridTransformer(DraftTransformer):
     输出格式不变（每个位置的 win_logit / pick_logits），因子分解机的 12 个局面加到各自的读出位置上。
     """
 
-    def __init__(self, n_heroes: int, n_rules: int, k: int = 16, **kw):
-        super().__init__(n_heroes, n_rules, **kw)
-        self.fm = FactorizationMachine(n_heroes, n_rules, k)
+    def __init__(self, n_heroes: int, n_rules: int, k: int = 16, grades: bool = True, first: bool = False, **kw):
+        super().__init__(n_heroes, n_rules, grades=grades, first=first, **kw)
+        self.fm = FactorizationMachine(n_heroes, n_rules, k, grades=grades, first=first)
         place = torch.zeros(encode.N_STATES, encode.SEQ_LEN)
         place[torch.arange(encode.N_STATES), STATE_POS] = 1.0
         self.register_buffer("place", place, persistent=False)  # [12, 17]：局面 → 读出位置
@@ -229,6 +294,8 @@ class HybridTransformer(DraftTransformer):
     def forward(self, heroes: torch.Tensor, ctx: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         win, pick = super().forward(heroes, ctx)
         wide, _ = self.fm.predict(heroes, ctx)
+        if self.first_heads:  # wide [B, 12, 3] → 各自的读出位置 [B, 17, 3]
+            return win + torch.matmul(self.place.T, wide), pick
         return win + wide @ self.place, pick
 
 
@@ -237,17 +304,19 @@ MODELS = {"lr0": ContextLR, "lr": HeroLR, "fm": FactorizationMachine, "transform
 ONNX_MODELS = ("transformer", "hybrid")  # 能导出随包的（输出每个位置的胜率和选人）
 
 
-def build(kind: str, n_heroes: int, n_rules: int, **kw) -> nn.Module:
+def build(kind: str, n_heroes: int, n_rules: int, grades: bool = False, first: bool = True, **kw) -> nn.Module:
+    """grades / first 的默认是 B14g 的新结构（不看段位、三种「谁先动」）；读旧 run 时按它的设置传。"""
     if kind not in MODELS:
         raise ValueError(f"不认识的模型 {kind}（{'/'.join(MODELS)}）")
+    flags = {"grades": grades, "first": first}
     if kind in ONNX_MODELS:
         args = {k: kw[k] for k in ("d", "layers", "heads", "dropout") if k in kw}
         if kind == "hybrid" and "k" in kw:
             args["k"] = kw["k"]
-        return MODELS[kind](n_heroes, n_rules, **args)
+        return MODELS[kind](n_heroes, n_rules, **args, **flags)
     if kind == "fm":
-        return FactorizationMachine(n_heroes, n_rules, **({"k": kw["k"]} if "k" in kw else {}))
-    return MODELS[kind](n_heroes, n_rules)
+        return FactorizationMachine(n_heroes, n_rules, **({"k": kw["k"]} if "k" in kw else {}), **flags)
+    return MODELS[kind](n_heroes, n_rules, **flags)
 
 
 # —— 训练和评估共用的张量工具 ——
@@ -275,11 +344,27 @@ def pick_targets(heroes: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     return heroes[:, TARGET_POS.to(heroes.device)], TARGET_W.to(heroes.device)
 
 
-def losses(model: nn.Module, heroes, ctx, y, size: int) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor,
-                                                                 torch.Tensor | None]:
-    """→ 胜率 BCE（12 个局面平均）、选人交叉熵（10 个局面平均，没有选人头时 None）、两种 logit。"""
+def win_loss_of(win: torch.Tensor, y: torch.Tensor, head: torch.Tensor | None = None) -> torch.Tensor:
+    """胜率损失（12 个局面平均）。win [B, 12]：普通 BCE。win [B, 12, 3]（B14g）：每场都算「不知道」头，知道谁先动的
+    再算那一方先动的头，所有项一起平均 = Σ(BCE_不知道 + 已知 × BCE_先动) / Σ(1 + 已知)；head 是每场的头编号
+    （encode.first_heads，2 = 不知道），None = 全部不知道。"""
+    if win.dim() == 2:
+        return F.binary_cross_entropy_with_logits(win, y[:, None].expand_as(win))
+    yy = y[:, None].expand(-1, win.shape[1])
+    lu = F.binary_cross_entropy_with_logits(win[..., encode.HEAD_U], yy, reduction="none").mean(1)  # [B]
+    if head is None:
+        return lu.mean()
+    known = (head < encode.HEAD_U).to(win.dtype)
+    idx = head.clamp(max=encode.HEAD_S)[:, None, None].expand(-1, win.shape[1], 1)
+    lf = F.binary_cross_entropy_with_logits(win.gather(2, idx).squeeze(-1), yy, reduction="none").mean(1)
+    return (lu.sum() + (lf * known).sum()) / (len(lu) + known.sum())
+
+
+def losses(model: nn.Module, heroes, ctx, y, size: int, head: torch.Tensor | None = None
+           ) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor, torch.Tensor | None]:
+    """→ 胜率损失（`win_loss_of`）、选人交叉熵（10 个局面平均，没有选人头时 None）、两种 logit。"""
     win, pick = model.predict(heroes, ctx)
-    win_loss = F.binary_cross_entropy_with_logits(win, y[:, None].expand_as(win))
+    win_loss = win_loss_of(win, y, head)
     if pick is None:
         return win_loss, None, win, None
     pick = pick.masked_fill(~pick_available(heroes, size), NEG)

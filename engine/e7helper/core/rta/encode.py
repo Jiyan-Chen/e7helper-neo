@@ -10,6 +10,10 @@
 0–4 互相可见，之后是因果注意力，所以一次前向能读出 12 个局面：已选 n 手（n = 0…10）读位置 4 + n，
 后禁之后（n = 11）读位置 16。胜率一律是「先手方赢」的概率（后手方 = 1 − p）；
 选人头给的是下一手（轮到的那一方）选各名英雄的概率，这一方这一轮要连选 2 名时两名各占一半。
+
+B14g：ctx 的格式不变（还是 [先手方段位档, 后手方段位档, 开战规则]，旧模型要用），但新模型**不看段位**
+（战绩站的段位是赛后的，会把比赛结果漏进来）；胜率头分三种「谁先动」：先手方先动 / 后手方先动 / 不知道
+（FIRST_HEADS）。段位只用来算先动概率（`speed.py`），推荐时按先动概率混合前两种。
 """
 
 from __future__ import annotations
@@ -55,6 +59,22 @@ N_GRADES = len(rules.GRADE_BUCKETS) + 1
 RULE_NONE = 0  # 没有开战规则（有一方低于优胜者）
 RULE_UNKNOWN = 1  # 不知道有没有 / 是哪条（国服接口没有这个字段）
 UNKNOWN_RULE = "unknown"  # DraftState.rule 用这个值表示「不知道」
+
+# 胜率头（B14g）：战斗里谁先动。0 = 先手方先动、1 = 后手方先动、2 = 不知道（按数据里谁先动的分布平均）
+FIRST_HEADS = ("F", "S", "U")
+HEAD_F, HEAD_S, HEAD_U = range(3)
+N_HEADS = len(FIRST_HEADS)
+
+
+def first_head(first_mover: int) -> int:
+    """快照的 first_mover（1 = 先手方先动、0 = 后手方、-1 = 不知道）→ 胜率头的编号。"""
+    return HEAD_F if first_mover == 1 else HEAD_S if first_mover == 0 else HEAD_U
+
+
+def first_heads(first_mover: np.ndarray) -> np.ndarray:
+    """first_head 的数组版。"""
+    fm = np.asarray(first_mover)
+    return np.where(fm == 1, HEAD_F, np.where(fm == 0, HEAD_S, HEAD_U)).astype(np.int64)
 
 
 def attention_mask() -> np.ndarray:

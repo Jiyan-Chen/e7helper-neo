@@ -139,11 +139,13 @@ class Dataset:
         return lut[self.rule]  # -2 → 倒数第二个（不知道），-1 → 最后一个（没有）
 
     def encode(self, vocab: encode.Vocab, rows: np.ndarray | None = None) -> dict[str, np.ndarray]:
-        """→ heroes [n, 17]、ctx [n, 3]（int64）、y [n]（float32，先手方赢 = 1）。"""
+        """→ heroes [n, 17]、ctx [n, 3]（int64）、y [n]（float32，先手方赢 = 1）、head [n]（int64，谁先动对应的
+        胜率头 encode.first_heads：0 = 先手方先动、1 = 后手方、2 = 不知道；B14g）。"""
         rows = np.arange(len(self)) if rows is None else rows
         heroes = vocab.lut(self.codes)[self.tokens[rows].astype(np.int64) + 1]
         ctx = np.stack([self.grades[rows, 0], self.grades[rows, 1], self.rule_ids(vocab)[rows]], axis=1).astype(np.int64)
-        return {"heroes": heroes, "ctx": ctx, "y": self.first_wins[rows].astype(np.float32)}
+        return {"heroes": heroes, "ctx": ctx, "y": self.first_wins[rows].astype(np.float32),
+                "head": encode.first_heads(self.first_mover[rows])}
 
     def champion_plus(self) -> np.ndarray:
         """双方都 ≥ 优胜者（主指标的子集），布尔 [N]。"""

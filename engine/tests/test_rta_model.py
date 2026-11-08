@@ -45,3 +45,27 @@ def test_empty_draft_is_close_to_even():
     assert 0.4 < p < 0.6
     top = m.next_picks(st, k=8)
     assert len(top) == 8 and sum(q for _, q in top) < 1
+
+
+def test_effective_first_and_mix():
+    """B14g1：混合用的先动概率 = 速度表按段位的 + 模型隐含的（按两种胜率差加权）；一般玩家时混合 ≈「不知道」的头。"""
+    import math
+
+    from e7helper.core.rta import model as rmodel
+
+    heads = np.array([[0.70, 0.30, 0.62],  # 差 40 点：模型隐含先手方先动 q = 0.8
+                      [0.51, 0.50, 0.505]])  # 差 1 点：谁先动几乎无所谓
+    logit = lambda p: math.log(p / (1 - p))  # noqa: E731
+    w0, w1 = 0.16 / (0.16 + 0.01), 1e-4 / (1e-4 + 0.01)
+    f = rmodel.effective_first(heads, [0.5, 0.3], [0.5, 0.3])  # 双方一般玩家
+    assert f[0] == pytest.approx(1 / (1 + math.exp(-w0 * logit(0.8))), abs=1e-6)
+    assert f[1] == pytest.approx(1 / (1 + math.exp(-(logit(0.3) + w1 * (0 - logit(0.3))))), abs=1e-6)  # 差小：基本是速度表
+    m = rmodel.mix(heads, [0.5, 0.3], [0.5, 0.3])
+    assert m[0] == pytest.approx(0.62, abs=0.01)  # ≈「不知道」的头
+    # 段位高（速度表 0.9 vs 一般玩家 0.5）：在模型隐含的 0.8 上再加这个变化量
+    hi = rmodel.effective_first(heads[:1], 0.9, 0.5)[0]
+    assert hi == pytest.approx(1 / (1 + math.exp(-(logit(0.9) + w0 * logit(0.8)))), abs=1e-6) and hi > 0.95
+    assert rmodel.mix(heads[:1], 0.9, 0.5)[0] == pytest.approx(hi * 0.7 + (1 - hi) * 0.3)
+    # 不给 ref = 直接用 first；不给 first = 「不知道」的头
+    assert np.allclose(rmodel.mix(heads, 0.25), 0.25 * heads[:, 0] + 0.75 * heads[:, 1])
+    assert np.allclose(rmodel.mix(heads, None), heads[:, 2])
