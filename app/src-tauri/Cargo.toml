@@ -1,6 +1,6 @@
 [package]
 name = "e7helper-app"
-version = "0.4.0-beta.1"
+version = "0.4.0-beta.2"
 description = "第七史诗助手 GUI"
 authors = ["Jiyan Chen"]
 license = ""
