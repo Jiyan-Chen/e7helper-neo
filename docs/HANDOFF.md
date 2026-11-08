@@ -1,6 +1,6 @@
 # HANDOFF
 
-> 新会话从这里读起。上次更新：2026-11-08（B14g1 已通过；下一块 B14g2）
+> 新会话从这里读起。上次更新：2026-11-08（B14g2 已通过；下一块等用户定：建议先发 0.4.0-beta.2 带上 3% 修正，或者开 B14f）
 
 ## 当前进度
 - **B01 骨架 + 模块契约 + MuMu 设备层**：✅ 已通过，记录见 [reviews/B01.md](reviews/B01.md)。
@@ -67,9 +67,16 @@
   - 模型：胜率不看段位（ctx 格式不变、段位被忽略），保留开战规则；三个胜率头「先手方先动 / 后手方先动 / 不知道」（训练用快照的 `first_mover`，不知道的对局只训「不知道」头）；选人头不变。
   - 快速先动概率 `speed.FirstCalc`（按速度分布直接算，不再抽样）；混合用 `model.effective_first`（不是直接用速度表：直接用比「不知道」头还差）。
   - 结果：测试集 n11 混合 0.6231 / AUC 0.708；段位同档的对局 0.6236（B14h 0.6238，持平，B14h 全体更好的部分全是段位泄漏）；留出日 11-02 0.6222（= B14h 把段位换成不知道）。模型层面复现（已选 3 手）：挑战者 vs 战神 41.1%、传说 vs 传说 41.6%（旧 1.1% / 46.5%）。
-  - **随包模型还是 B14h 的**：新模型暂存在 `F:\e7helper-data\rta\bundles\b14g1\`（主 + `second/`），B14g2 接好搜索后再换。
+  - 新模型当时暂存在 `F:\e7helper-data\rta\bundles\b14g1\`（主 + `second/`），B14g2 换进了随包。
   - 全量 `1199 passed, 9 skipped, 1 failed`（又是 `test_scheduler.py` 的退避测试，单独重跑 3 次都过）；训练 / 导出测试在 GPU 环境 32 个通过；前端没改。
-- 下一块：**B14g2 RTA：搜索 / 接口 / 界面接入先动混合**（见下面「下一块」）。之后 B14f（画面识别，什么时候开工等用户说）。B14d2（站位 / 快速分析 / 英雄统计）往后放，等 ss22 赛季更新、数据重采后再做（用户意见）。
+- **B14g2 RTA：搜索 / 接口 / 界面接入先动混合**：✅ 已通过，记录见 [reviews/B14g2.md](reviews/B14g2.md)。**0.4.0-beta.1 的 3% 问题在 main 上修好了**（还没提交、没发版）。
+  - 随包换成 B14g1 的新模型（旧 B14h 模型备份在 `F:\e7helper-data\rta\bundles\b14h\`）；`priors.json` 加每一手的选取次数 `slots`。
+  - 搜索每行按阵容算先动概率（双方段位 + 我方英雄池速度 → `effective_first`）混合三个头；推荐、最坏、对手回应、后禁矩阵、`opponent.win`、预禁一处改全改；每个值带「我方先动时 / 后动时」两种，页面鼠标提示显示（用户意见）。
+  - 审核两轮（用户意见）：**页面上显示的先动概率只按双方已经选出的英雄、用速度表算**，不补还没选的几手、不把对方之后的回应合进去（推荐卡 = 加上这一组；一方还没有英雄时不显示）；后禁矩阵每格 / 结束时是 4 打 4 混合用的。算胜率时照旧按补全的阵容。
+  - 复现用例（我方先手、挑战者 vs 战神 / 传说 vs 传说）：推荐第 1 名执行官维德瑞 + 奥芙，预期 59.9% / 61.5%（旧 3.1% / 63.1%）。
+  - audit：推荐第一名冷门 0.0%；advise p95 4.00 s（B14h 3.60 s；同机交替计时 3.77 → 4.56 s）；自对弈 ≥ 90% 的 1 局（门槛第一次过）；高估修正常数不改（混合后最接近 1.25%，误差差得很少）。
+  - 全量 `1209 passed, 9 skipped`；训练 / 导出 32 个；前端 60 个；`rta model --check` 通过。冻结引擎冒烟测试没跑（下次打包时跑）。
+- 下一块：**等用户定**（见下面「下一块」）。建议先发 0.4.0-beta.2（测试版带上 3% 修正）；B14f（画面识别）什么时候开工等用户说；B14d2（站位 / 快速分析 / 英雄统计）往后放，等 ss22 赛季更新、数据重采后再做（用户意见）。
 
 ## 已有能力
 ### 设备（B01）
@@ -349,9 +356,19 @@
 - B14g1 的 run：`b14g-hy-d128-L3-lam1`（切分）、`-full`（全量，29 轮）、`b14g-fm-k16`（对照）、`b14g-cmp-b14h-split` / `-fm`（B14h 的副本）。暂存模型 `F:\e7helper-data\rta\bundles\b14g1\`（主）+ `second/`（切分），parity 通过，一批 256 场 34 ms。
 - 测试：`test_rta_train.py` / `test_rta_export.py`（要 torch，27 + 5）、`test_rta_speed.py`（FirstCalc 5 个 + first_pair）、`test_rta_model.py`（`effective_first` / `mix`）、`test_rta_encode.py`（`first_heads`）、`test_rta_dataset.py`（`head`）；`rta_fakes.synthetic_dataset` 带 `first_mover`（25% 不知道）。
 
+### RTA 先动混合接入（B14g2，详见 architecture.md「RTA 选秀 / 选秀推荐」「先动概率 / 英雄池」和 reviews/B14g2.md）
+- 随包 `assets/data/rta/` = B14g1 的三头模型（主 = `b14g-hy-d128-L3-lam1-full`，`second/` = 切分 run）；`priors.json` 多 `slots`（一方第 1–5 手各英雄被选次数，`Priors.slots`，旧文件 = []）。
+- `search.py`：`Advisor(model, priors, second, speed_table=)`（`search.load()` 带随包 `speed.json`）→ `adv.calc`（`FirstCalc(**speed.FAST)`，占位按 `priors.picks` / `slots`）；`adv.advise(state, side, pool, speeds=)`（我方速度进缓存键）；`adv.win(states)`（和搜索同一口径的胜率，sim / audit 用）；`adv.info()["mix"]`（`first`，没有速度表时 `unknown`）。
+  - 一次搜索一个 `_FirstCtx`：`_Net.forward` 取三个头，每行按阵容算 first / ref（`speed.ids_first_probs`：一批按编号拼好的局面、同一阵容只算一次；5 名都在、没后禁的对 16 种被禁平均；UNK 英雄按自己的编号）→ `model.effective_first` → 混合。
+  - 每个值带「我方先动时 / 后动时」（`_Vals` / `_Result` 的 `s_*`、`_Cand.s_win`），输出 `win_first` / `win_second` / `first`。**显示的 `first`**（审核意见）：选秀中 `_Search.shown_first`（只按双方已选英雄、`FirstCalc.prob(fill=False)`，一方没有英雄时 None）；后禁每格 / 结束 = 4 打 4 混合用的 π，每行 = 按对方后禁率平均。
+- `speed.py`：`FirstCalc(step=, levels=, dtype=)`、`FAST`（每档 4 速、限速 4 档、float32；评估仍用默认）、`tables` 缓存（只读）、`prob(fill=)`、`ids_first_probs`；`annotate` 只在 `out["first"]` 上加速度表读数 `heroes`。
+- 接口 / CLI：advise 把英雄池速度传进搜索；`rta advise` 推荐表多「先动时 / 后动时」、后禁每格「先动 x% · a/b」；`rta sim` 胜率曲线用混合胜率。前端：`lib/rta.ts` 的 `Split` / `splitTip`，`Panels.tsx` 的推荐卡 / 对方选法 / 后禁矩阵每格每行 / 信息条 / 结果页鼠标提示。
+- 开发工具：`tools/rta_trust.py` 按先动混合（`--no-mix` 对照）。
+- 测试：`test_rta_search.py` 加 8 个（`rta_fakes.FakeModel(gap=)` 三头假模型）、`test_rta_speed.py`（`ids_first_probs`、`annotate`）、`test_rta_api.py`（先动概率由带速度表的推荐器给）；前端 `rta.test.ts` 加 3 个。
+
 ### 模块与 CLI（B01，B03 / B08 更新）
 - 模块：继承 `TaskModule` / `AssistantModule`，放到 `e7helper/modules/<id>/` 就会被自动发现。参考 `modules/hello/`。
-- CLI：`doctor`、`bench`、`screenshot`、`tap`、`modules`、`run <id> [-c JSON] [-t 超时]`（经 runtime）、`scene [-f 图片] [--dismiss] [--watch]`、`capture`（新增 `--tap`）、`match`、`ocr`、`serve`（B08）、`heroes [词] [--update [--bundled]]`（B13）、`rta probe|crawl|report`（B14a，子命令组）、`rta dataset|train|eval|export|model|predict|sim|watch`（B14b）、`rta advise|preban|priors|audit`（B14c）、`rta first|herostats|speed`、`rta crawl --backfill`（B14d1）、`rta train --with-grades --no-first`、`rta predict --dir --first-prob`（B14g1）。
+- CLI：`doctor`、`bench`、`screenshot`、`tap`、`modules`、`run <id> [-c JSON] [-t 超时]`（经 runtime）、`scene [-f 图片] [--dismiss] [--watch]`、`capture`（新增 `--tap`）、`match`、`ocr`、`serve`（B08）、`heroes [词] [--update [--bundled]]`（B13）、`rta probe|crawl|report`（B14a，子命令组）、`rta dataset|train|eval|export|model|predict|sim|watch`（B14b）、`rta advise|preban|priors|audit`（B14c）、`rta first|herostats|speed`、`rta crawl --backfill`（B14d1）、`rta train --with-grades --no-first`、`rta predict --dir --first-prob`（B14g1）；`rta advise` / `sim` 按先动概率混合、打印先动时 / 后动时（B14g2）。
 
 ## 关键决策
 - 基准分辨率 1600×900。本机 MuMu 已经是 1600×900（平板模式 tablet.2）。
@@ -442,6 +459,10 @@
   - 自对弈 ≥ 90% 的 4 局（超过我定的 2%）按现状接受（审核通过，没有另提意见）；
   - 和 e7rtabot 的对抗对比：站长在 Discord 同意小规模、限频（每 3–5 秒一次请求）。网站条款原本禁止自动访问，以后要再跑，先问用户；
   - 开局行动条（`energyGauge`）的采集和用法放到 B14d 开工时定（用户决定）。
+- B14g2（2026-11-08 审核通过）：
+  - 按 B14g1 的设计草案做、没有拆子块；鼠标提示给「我方先动时 / 后动时」两种胜率（B14g1 时用户提的）；
+  - **页面上显示的先动概率只按双方已经选出的英雄算**（审核两轮，用户意见：「应该显示当前局面的先动概率，不要计算考虑了对方应对后的先动概率」「不用补全，就按对方现在已经选的角色来判断就行」）；胜率混合照旧按补全的阵容（我定的、用户没有异议）；
+  - 我定的、审核没有异议：先动概率在搜索里用快速档（`speed.FAST`）；高估修正常数不改（1.5%）；advise p95 多约 0.4 秒可以接受；冻结引擎冒烟测试留到下次打包。
 - B14g1（2026-11-08 审核通过）：
   - **段位只影响「谁先动」的判断，胜率由英雄 BP 计算，再按先动概率混合**（用户原则；快照段位是赛后的，进胜率模型会漏结果）；
   - 一步到位修好，不先做临时修正；用现有国际服 ss21 快照现在做、不等 ss22；拆成 B14g1（模型）/ B14g2（搜索 / 接口 / 界面，换随包模型）（均为用户选择）；
@@ -473,14 +494,12 @@
   - **采集以后再说**（用户）：国服补采、能力值快照、随包速度表都没跑，工具和步骤保留（B14h 用国际服做了，见「重训流程」）。
   - **B14d2 往后放**（用户，审核通过后）：站位 / 快速分析 / 英雄统计等 ss22 赛季更新、数据重采后和 B14g 一起做；B14e 先做五步 BP 页面和英雄池，快速分析、英雄统计页跟着 B14d2 往后放。
 
-## 下一块：B14g2 RTA：搜索 / 接口 / 界面接入先动混合
-接 B14g1，修好 0.4.0-beta.1 的「段位带偏胜率」（3% 问题）。ROADMAP 的 B14g2 一行有要求和验收，设计草案在 reviews/B14g1.md 末尾「B14g2 设计草案」。开工时细化、和用户确认后再动手；工作量大就拆子块，拆法先问用户。要做的：
-1. **换模型**：`F:\e7helper-data\rta\bundles\b14g1\` → `engine/assets/data/rta/`（主模型 + `second/`）；`rta priors` 重新生成，加上每一手的选取次数（`speed.slot_counts`，`FirstCalc` 补占位用）。
-2. **搜索**（`search.py`）：`Advisor` 建一个 `FirstCalc`（速度表 + priors 的选取次数），每次搜索按双方段位、我方英雄池速度建两份表（按段位 / 一般玩家）并缓存；`_Net.forward` 取三个头，每行按阵容算 first / ref（`prob_batch`；后禁矩阵那 16 行就是 16 种被禁，后禁前取平均）→ `model.mix`。第二个模型用同一份 first / ref。推荐、最坏、对手回应、后禁矩阵、`opponent.win`、预禁都走这里，一处改全改。没有速度表时用「不知道」的头。
-3. **用时**：限速英雄（赫尔赛蒂）的行要 8 倍；advise p95 ≤ 6 秒，不够就在 `FirstCalc.tables` 上加缓存。
-4. **显示**：`annotate` / 接口里的先动概率换成混合用的 `effective_first`（不然「先动时 / 后动时」两种胜率按显示的先动概率算不回主数字）；推荐卡 / 后禁矩阵每格鼠标提示给「我方先动时 / 后动时」两种胜率（用户意见）。接口、CLI（`rta advise` / `sim`）、前端跟着改。
-5. **验收**：`tools/rta_trust.py` 改用混合胜率重新量高估修正常数；`rta audit`（冷门比例和用时不变差）；复现用例——我方先手，预禁 我方 里安娜路西艾拉、天秤之主 / 对方 黎洁特、天秤之主；已选 我方 调香师维波里丝 / 对方 诺托斯、波涛裂痕艾碧拉；规则 none；英雄池 `<数据目录>\modules\rta_draft\pool.json`（109 名）；段位从「挑战者 vs 战神」改到「传说 vs 传说」，推荐的预期只因先动概率小幅变动（B14g1 模型层面：41.1% / 41.6%，先动概率 52.6% / 59.4%）；全量 pytest（后台）、前端测试、`rta model --check`；冻结引擎冒烟测试按需。
-- 注意：引擎读写 `%LOCALAPPDATA%` 在 Claude 会话里会被 MSIX 重定向（见「坑」），用户的 `pool.json` 要确认读的是哪一份。
+## 下一块：等用户定
+B14g2 通过后 ROADMAP 里没有排定的下一块（2026-11-08）。可选：
+1. **发 0.4.0-beta.2**（建议先做）：0.4.0-beta.1 的 RTA 助手有 3% 问题，修正（B14g1 / B14g2）在 main 上还没提交、没发版。步骤见「打包」和「发布 0.3.0 / 0.4.0-beta.1」：`packaging/bump_version.py` 改版本号 → `build.py`（测试版带 RTA）+ 冻结引擎冒烟测试 → `pnpm bundle` → 提交、打标签、推送、GitHub 预发布（推送前问用户）。正式版 0.3.x 不带 RTA，不受影响。
+2. **B14f 画面识别**：见下一节（用户说过「先不做画面识别」，什么时候开工等用户说）。
+3. **B14d2**：往后放，等 ss22 赛季更新、数据重采后再做（用户意见）。
+4. B15+ 扩展模块。
 
 ## 之后：B14f RTA：画面识别（什么时候开工等用户说）
 ROADMAP：助手模块 `rta_draft` 读帧自动跟随——阶段、双方段位、先后手、每个位置的英雄、预禁 / 后禁；用户打几场 RTA 采 fixture（**只截图、不点击**）；验收 fixture + 单元测试 + 实测一局。B14a 的草案只有一句：先请用户打几场 RTA 截图，再定认头像的方法（头像模板 / 名字 OCR + `heroes().find`）。开工时细化方案、和用户确认后再动手；工作量大，按习惯拆子块（例如 B14f1 采 fixture + 识别引擎 / B14f2 RTA 助手页自动跟随），拆法先问用户。
@@ -511,7 +530,7 @@ ROADMAP：助手模块 `rta_draft` 读帧自动跟随——阶段、双方段位
 3. 切分训练 `rta train -m hybrid --d 128 --layers 3 --lambda 1 --epochs 30` + 对照 `-m fm --k 16`；`rta eval` 和上一版的模型比（**先复制上一版的 run 再评估**，见「坑」）。
 4. 全量 `--full --calibration-from <切分 run> --epochs <最佳轮>`；`rta export <全量 run> --metrics-from <切分 run>`、`rta export <切分 run> --out assets/data/rta/second`。
 5. 新旧主模型的直接比较：另建一份含最后一天的快照放到 `holdout\`，取那一天：`python -m uv run python tools/rta_holdout.py <留出快照> --day <日期> --train <训练快照> --model <新模型目录> --model assets/data/rta`（B14g1 起是脚本）；先动 / 后动差按阵容看 `tools/rta_first_gap.py`。B14g1 起训练默认三个胜率头、不看段位（快照段位是赛后的，**别再加进胜率模型**）。
-6. `rta priors`、`tools/rta_trust.py`、`rta audit`（机器空闲时跑，计时要和上一版同机对比）、`rta speed`、`rta model --check`；全量单元测试放后台。默认英雄池（被选最多的 60 名，B14e2）跟着新的 priors / 主模型自动变，不用管；存过英雄池的玩家里新模型没有的英雄会被跳过。
+6. `rta priors`、`tools/rta_trust.py`（B14g2 起按先动混合）、`rta audit`（机器空闲时跑，计时要和上一版同机对比；B14g2 写了个交替计时的临时脚本，没进仓库）、`rta speed`、`rta model --check`；全量单元测试放后台。默认英雄池（被选最多的 60 名，B14e2）跟着新的 priors / 主模型自动变，不用管；存过英雄池的玩家里新模型没有的英雄会被跳过。
 7. 冻结引擎重新打包时带上新的 `assets/data/rta/`。
 
 ## 坑
@@ -638,6 +657,12 @@ ROADMAP：助手模块 `rta_draft` 读帧自动跟随——阶段、双方段位
   - 直接用速度表的先动概率混合比「不知道」的头还差（官方速度直方图混着 PvE 配装，抢一速的阵容上最不准）：要用 `model.effective_first`。以后换速度表或重训，先在测试期比一下「混合 / 只用速度表 / 不知道」三行。
   - 选秀中间补占位时按「这一手常见的英雄」（`slot_counts`）比按整体选取次数准（第 5 手平均先动概率 56.7% vs 62%，实际 52%）；还是偏向已选人数多的一方。
   - 赫尔赛蒂（c1153）限速的行要按 8 档速度分别算，逐行算很慢：用 `FirstCalc.prob_batch` 一批按档算。
+- **B14g2 的几个坑**：
+  - 显示的先动概率和算胜率用的不是同一个数（用户意见）：页面上只按已选英雄（`shown_first`），混合按补全的阵容 + 模型隐含的先动概率；推荐卡上 先动 × 先动时 + 后动 × 后动时 ≠ 预期，别再去「修」成相等。
+  - 三头假模型（`FakeModel(gap=)`）的三个头隐含「一般玩家五五开」，`effective_first` 以它为底，所以混合用的先动概率不会是 0 / 1：测试里比大小，别断言绝对值。
+  - 先动概率的计算放进搜索后，第一次跑 advise 4.7–5 秒、多数截断：大头是 `team_log` 的 [B, m, K] 大数组和赫尔赛蒂限速分档。搜索里用 `speed.FAST`；评估（`rta eval` / `rta_holdout`）用默认精度，B14g1 的指标才能复现。
+  - Python 读写源码（`open` 默认文本模式）会把工作区的 CRLF 改成 LF（git 提示 LF will be replaced by CRLF），提交时 autocrlf 会统一，diff 正常。heredoc 里的 `\n`、`\\` 转义容易被吃掉：改 TS / 带反斜杠的文本用 Edit 工具，或先把脚本写成文件再跑。
+  - 浏览器面板里点英雄网格时，上一次点击的重渲染还没完成就点下一名，可能填进下一个格子（预禁时我方第 2 名填到了对方第 1 格）：每次点完等 0.5 秒再看。
 - **全量单元测试约 23 分钟**：别用 `timeout 900` 之类包着跑（B14d1 被它中途杀掉过），放后台跑、等通知。
 - **桌面版窗口默认 1280×800**（`tauri.conf.json`），最窄 1100（`App.tsx` 的 `min-w-[1100px]`）：新页面按这两个尺寸核对（浏览器面板 `resize_window`），别只看 1440×900（B14e1 一开始就是只看了大尺寸）。
 - **浏览器面板里 radix 下拉框（`Select`）点不中选项**（B14e1，面板隐藏时尤其明显）：按坐标、按元素引用、按键盘都不稳。用脚本派发 `pointerdown` / `pointerup`（`pointerType: "mouse"`）先打开触发器，等 0.4 秒，再对选项派发同样的事件。普通按钮直接 `click()` 就行。

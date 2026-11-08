@@ -179,29 +179,33 @@ def test_advise_saved_pool_short(client):
 
 
 def test_advise_first_mover(client, monkeypatch):
-    table = _table()
-    monkeypatch.setattr(speed, "load", lambda path=None: table)
-    # 轮到后手方（我方）选两名：先手方已选 c00（最快）
+    """B14g2：先动概率由搜索给（推荐器带速度表；假模型只有一个胜率头，混合不改胜率，先动概率就是速度表的）。"""
+    model = FakeModel({c: 1.0 - 0.03 * i for i, c in enumerate(CODES)}, {c: 0.0 for c in CODES}, preban=0.5)
+    adv = search.Advisor(model, fake_priors({c: 5000 for c in CODES}, preban=PRE), speed_table=_table())
+    monkeypatch.setattr(search, "load", lambda: adv)
+    assert client.get("/api/rta/model").json()["mix"] == "first"
+    # 轮到后手方（我方）选两名：先手方已选 c00（最快），还没选的几手按常见英雄补
     d = client.post("/api/rta/advise", json={"side": "S", "state": _state(["c00"])}).json()
-    assert d["first"] is None  # 我方还没有英雄
-    assert all(r["first"] == 0.0 for r in d["recommend"])
-    # 英雄池里给我方的 c02 填了 400 速
+    assert d["first"] is None  # 我方还没有英雄：先动概率只按已选的英雄算（审核第 2 轮），这时不显示
+    assert all(r["first"] < 0.2 and "win_first" in r for r in d["recommend"])
+    # 英雄池里给我方的 c02 填了 400 速（不限制英雄池，速度照样用）
     client.put("/api/rta/pool", json={"heroes": [{"code": "c02", "speed": 400}]})
     d = client.post("/api/rta/advise", json={"side": "S", "state": _state(["c00"]), "use_saved_pool": False}).json()
     with_c02 = [r for r in d["recommend"] if "c02" in r["heroes"]]
-    assert with_c02 and all(r["first"] == 1.0 for r in with_c02)
+    assert with_c02 and all(r["first"] > 0.99 for r in with_c02)
     # 后禁矩阵：每格 4 打 4
     picks = {"F": ["c00", "c03", "c04", "c07", "c08"], "S": ["c01", "c02", "c05", "c06", "c09"]}
     d = client.post("/api/rta/advise", json={"side": "F", "state": _state(picks["F"], picks["S"])}).json()
     b = d["ban"]
-    assert d["first"]["partial"] and d["first"]["mine"] == 1.0
+    assert d["first"]["partial"] and 0.7 < d["first"]["mine"] < 1.0  # 对 16 种被禁平均：c00 有四分之一会被禁
+    assert max(d["first"]["heroes"], key=lambda h: h["p"])["code"] == "c00"  # 速度表：目前在场谁最可能先动
     # 行 = 我方禁对方哪名，列 = 对方禁我方哪名。c02 是对方的，用不到英雄池里的速度
     for i, row in enumerate(b["rows"]):
         for j, col in enumerate(b["cols"]):
             if col != "c00":
-                assert b["first"][i][j] == 1.0  # 我方 c00 在场就先动
+                assert b["first"][i][j] == pytest.approx(1.0, abs=1e-3)  # 我方 c00 在场就先动
             elif row != "c01":
-                assert b["first"][i][j] == 0.0  # c00 被禁、对方 c01 在场
+                assert b["first"][i][j] == pytest.approx(0.0, abs=1e-3)  # c00 被禁、对方 c01 在场
             else:
                 assert 0.3 < b["first"][i][j] < 0.7  # 双方最快的都被禁了，剩下的一样快
 

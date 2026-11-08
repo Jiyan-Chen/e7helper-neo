@@ -115,9 +115,11 @@ class FakeModel:
     胜率 logit = 先手方已选英雄的强度之和 − 后手方的（被禁的减掉），按位置累加（因果）；
     选人头 = 每名英雄固定的热度（logit），不看局面。校准是恒等的，所以胜率 = σ(logit)，结果能手算。
     order 不为 0 时，每一手再加 order × 位置编号 × 强度（让同一对英雄换顺序结果不一样）；
-    preban 不为 0 时，先手方预禁的英雄按 +preban × 强度算（后手方的是 −），让预禁也有影响。"""
+    preban 不为 0 时，先手方预禁的英雄按 +preban × 强度算（后手方的是 −），让预禁也有影响。
+    gap 不为 0 时（B14g2）是三头模型：先手方先动 = logit + gap、后手方先动 = logit − gap、不知道 = logit。"""
 
-    def __init__(self, strength: dict[str, float], pop: dict[str, float], order: float = 0.0, preban: float = 0.0):
+    def __init__(self, strength: dict[str, float], pop: dict[str, float], order: float = 0.0, preban: float = 0.0,
+                 gap: float = 0.0):
         import numpy as np
 
         from e7helper.core.rta import encode, rules
@@ -125,7 +127,9 @@ class FakeModel:
         codes = list(strength)
         self.vocab = encode.Vocab(heroes=codes)
         self.calibration = {"scale": [1.0] * encode.N_STATES, "bias": [0.0] * encode.N_STATES}
-        self.meta = {"kind": "fake", "run": "fake"}
+        self.meta = {"kind": "fake", "run": "fake", **({"first_heads": list(encode.FIRST_HEADS)} if gap else {})}
+        self.gap = gap
+        self.first = bool(gap)
         v = self.vocab.size
         self.s = np.zeros(v)
         self.pop = np.full(v, -30.0)
@@ -146,6 +150,8 @@ class FakeModel:
         self.calls += 1
         w = np.cumsum(self.s[heroes] * self.sign[None, :], axis=1)
         p = np.broadcast_to(self.pop, (len(heroes), heroes.shape[1], len(self.pop)))
+        if self.gap:
+            w = np.stack([w + self.gap, w - self.gap, w], axis=-1)
         return w.astype(np.float32), p.astype(np.float32)
 
 
@@ -155,8 +161,10 @@ class FakeModel:
 
         return RtaModel.evaluate(self, states)
 
-    def win(self, states):
-        return self.evaluate(states).win
+    def win(self, states, first=None, ref=None):
+        from e7helper.core.rta.model import RtaModel
+
+        return RtaModel.evaluate(self, states, first, ref).win
 
     def next_picks(self, state, k: int = 8):
         from e7helper.core.rta.model import RtaModel

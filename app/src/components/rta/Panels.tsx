@@ -7,7 +7,7 @@ import {
   GRADE_CHOICES, PICKS, PREBANS, needsRule, prebanTarget, ruleApplies, turn, type Draft, type Setup, type Side, type Team,
 } from "@/lib/draft";
 import {
-  banHeadline, pct0, pct1, pickHeadline, rareTag, type Advice, type Choice, type Latest, type PrebanAdvice, type Recommend, type Reply, type RtaOptions,
+  banHeadline, pct0, pct1, pickHeadline, rareTag, splitTip, type Advice, type Choice, type Latest, type PrebanAdvice, type Recommend, type Reply, type RtaOptions,
 } from "@/lib/rta";
 import { cn } from "@/lib/utils";
 import { Face, Faces, RankIcon, Segmented, Spinner, Tag, Win, gradeLabel, useName } from "./bits";
@@ -176,9 +176,12 @@ export function InfoBar({ draft, options, advice }: { draft: Draft; options: Rta
   const first = head ? head.first : pick ? pick.first : d?.first?.mine ?? null;
   const label = head ? `禁${name(head.code)}后` : pick ? "预期" : d?.phase === "done" ? "胜率" : "当前胜率";
   const model = d ? `（不知道英雄池的模型读数 ${pct1(d.win)}）` : "";
-  const tip = head ? `我方禁${name(head.code)}、对方按常见后禁`
+  const what = head ? `我方禁${name(head.code)}、对方按常见后禁`
     : pick?.turn === "mine" ? `推荐第 1 名（${pick.heroes.map(name).join("、")}）的预期${d?.pool_short ? "（英雄池里能选的不够，这一轮是全部英雄里选）" : "，只在英雄池里选"}${model}`
       : pick ? `对方按常见的选法、我方再从英雄池里选最好的回应的预期${model}` : undefined;
+  // 「我方先动时 / 后动时」两种胜率（B14g2）
+  const split = splitTip(head ?? pick ?? (d?.phase === "done" ? d : null));
+  const tip = [what, split].filter(Boolean).join(`\n`) || undefined;
   // 加上先动概率后 1280 宽放不下一行（B14h）：1440 以下去掉三个文字标签，1200 以下再去掉手数
   return (
     <div className="panel flex flex-none flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2 text-sm max-[1199px]:gap-x-2 max-[1199px]:px-3">
@@ -356,7 +359,7 @@ function RecCard({ r, rank, onPick }: { r: Recommend; rank: number; onPick: () =
         <span className="num w-4 flex-none text-gold">{rank}</span>
         <Faces codes={r.heroes} size={40} shield={r.protected} />
         <Names codes={r.heroes} shield={r.protected} />
-        <span className="flex-none text-right text-xs text-muted">
+        <span className="flex-none text-right text-xs text-muted" title={splitTip(r)}>
           <span className="block">预期 <Win p={r.win} className="text-base" /></span>
           <span className="block">最坏 <Win p={r.worst} /></span>
           {r.first != null && <span className="block">先动 <span className="num text-ink">{pct0(r.first)}</span></span>}
@@ -401,7 +404,7 @@ export function MinePanel({ draft, q, onPick }: { draft: Draft; q: Latest<Advice
 
 function ChoiceChip({ c, danger, onPick }: { c: Choice; danger?: boolean; onPick: () => void }) {
   return (
-    <button type="button" onClick={onPick}
+    <button type="button" onClick={onPick} title={splitTip(c)}
       className={cn("flex w-full min-w-0 cursor-pointer items-center gap-2 rounded-lg border px-2 py-1 text-left transition-colors hover:border-gold/60",
         danger ? "border-bad/40 bg-bad/8" : "border-white/10 bg-black/25")}>
       <Faces codes={c.heroes} size={34} />
@@ -506,9 +509,10 @@ export function BanPanel({ draft, q, onBan, onBoth }: {
                         {b.matrix[i].map((v, j) => {
                           const f = b.first?.[i]?.[j];
                           const sel = draft.bans.mine === r && draft.bans.theirs === b.cols[j];
+                          const tip = splitTip({ win_first: b.win_first?.[i]?.[j], win_second: b.win_second?.[i]?.[j] });
                           return (
                             <td key={b.cols[j]}>
-                              <button type="button" onClick={() => onBoth(r, b.cols[j])}
+                              <button type="button" onClick={() => onBoth(r, b.cols[j])} title={tip}
                                 className={cn("flex h-full w-full cursor-pointer flex-col items-center justify-center rounded-lg border px-2 py-1.5 hover:border-gold/60",
                                   sel ? "border-gold bg-gold/12" : "border-white/8 bg-black/25",
                                   v === st.worst && "outline outline-1 -outline-offset-2 outline-bad/40")}>
@@ -519,7 +523,7 @@ export function BanPanel({ draft, q, onBan, onBoth }: {
                           );
                         })}
                         <td className="px-2 text-center"><Win p={st.worst} /></td>
-                        <td className="px-2 text-center"><Win p={st.win} /></td>
+                        <td className="px-2 text-center" title={splitTip(st)}><Win p={st.win} /></td>
                       </tr>
                     );
                   })}
@@ -549,7 +553,7 @@ export function ResultPanel({ q, onUndo, onNext }: {
         {(d) => (
           <div className="flex flex-col items-center gap-2 py-4">
             <div className="text-sm text-muted">我方胜率</div>
-            <Win p={d.win} className="text-5xl font-bold" />
+            <span title={splitTip(d)}><Win p={d.win} className="text-5xl font-bold" /></span>
             {d.first && <div className="text-sm text-muted">我方先动 <span className="num text-ink">{pct0(d.first.mine)}</span></div>}
           </div>
         )}

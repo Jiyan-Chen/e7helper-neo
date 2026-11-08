@@ -17,9 +17,14 @@
 B14d1：advise 不传 `pool` 时用保存的英雄池（`use_saved_pool: false` 不限制）；B14e2：没设置过用默认的热门英雄，
 英雄池里能选的（没被选、没被禁）不够这一轮要选的名数时这一轮不限制，结果里 `pool_short: true`（存的英雄池是空的
 也是这样）；轮到对手时 `opponent.win` 和每种选法的 `win` 是「我方的读数」（之后我方从英雄池里选最好的回应，见
-`search.py`）。结果上加先动概率（我方先动的概率，
-`first` / 每个推荐的 `first` / 后禁矩阵的 `ban.first`，见 `speed.annotate`），胜率不变。我方英雄的速度用英雄池里填的，
-请求里的 `speeds` 优先。
+`search.py`）。
+
+B14g2：胜率按先动概率混合「我方先动时 / 后动时」两种（段位、我方英雄池里填的速度只影响先动概率；没有速度表时用
+「不知道谁先动」的）。每个推荐、对方的每种选法、`opponent`、后禁矩阵每格（`ban.win_first` / `ban.win_second` /
+`ban.first`）和每行（`row_stats`）、结束时的结果都带 `win_first` / `win_second`（我方先动时 / 后动时）和 `first`
+（我方先动的概率：选秀中只按双方已经选出的英雄、用速度表算——推荐 = 加上这一组、对方的选法 = 加上对方这一手，一方还没有英雄时 null；后禁每格 = 4 打 4 混合用的、每行 = 按对方后禁率平均；没有速度表时 null）；`first` 在顶层是当前局面的
+`{mine, partial, heroes?}`（`heroes` = 按速度表每名在场英雄第一个行动的概率，见 `speed.annotate`）。
+我方英雄的速度用英雄池里填的，请求里的 `speeds` 优先。
 """
 
 from __future__ import annotations
@@ -139,15 +144,16 @@ def build_rta_router() -> APIRouter:
         saved = saved_pool()
         # 存的英雄池是空的也照样传（[] → 每一轮都「能选的不够」，推荐全部英雄并提示）
         pool = body.pool if body.pool is not None else (saved.codes if body.use_saved_pool else None)
+        fixed = speeds(body.speeds, saved)
         state = body.state.to_state()
         try:
-            out = adv.advise(state, body.side, pool=pool, top=body.top, budget=body.budget)
+            out = adv.advise(state, body.side, pool=pool, top=body.top, budget=body.budget, speeds=fixed)
         except ValueError as e:
             problems = e.args[0] if e.args and isinstance(e.args[0], list) else [str(e)]
             raise ApiError(422, "invalid_state", "；".join(problems), detail=problems) from e
-        out = copy.deepcopy(out)  # 推荐结果有缓存，先动概率跟着英雄池的速度变，不能改缓存里的
+        out = copy.deepcopy(out)  # 推荐结果有缓存，不能改缓存里的
         out["pool"] = pool
-        return speed.annotate(out, state, body.side, speed.load(), speeds(body.speeds, saved))
+        return speed.annotate(out, state, body.side, adv.speed, fixed)
 
     @r.post("/rta/first", summary="先动概率")
     def first(body: FirstIn) -> dict:

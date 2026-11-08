@@ -6,6 +6,8 @@
   极端。`greedy` 是对照组：B14b 那种不筛候选的一层贪心。
 - `follow_check`：用切分模型（没见过测试期）当推荐器，看真实对局里实际选的正好在推荐前 8 名里的那一方，
   「实际胜率 − 选之前的模型胜率」是不是不低于没选推荐的那一方（推荐有没有钻模型的空子）。
+
+B14g2：胜率一律和搜索同一口径（`Advisor.win`：按先动概率混合；快照的段位是赛后的，只影响先动概率）。
 """
 
 from __future__ import annotations
@@ -131,7 +133,7 @@ def _play(adv: Advisor, ds: Dataset, row: int, side: str, rng: np.random.Generat
         else:
             code, _ = sim.opponent_pick(m, st, rng)
             st = sim.with_pick(st, mover, code)
-        curve.append(float(sim.my_win(m.win([st])[0], side)))
+        curve.append(float(sim.my_win(adv.win([st])[0], side)))
     if greedy:
         rows_, cols, mat = sim.ban_matrix(m, st, side)
         mine_ban = rows_[sim.maximin_row(mat)]
@@ -141,7 +143,7 @@ def _play(adv: Advisor, ds: Dataset, row: int, side: str, rng: np.random.Generat
         mine_ban = ban["recommend"]
     theirs_ban = cols[sim.minimax_col(np.asarray(mat))]  # 对手按对它最稳妥的禁
     st = sim.with_bans(st, {foe: mine_ban, side: theirs_ban})
-    final = float(sim.my_win(m.win([st])[0], side))
+    final = float(sim.my_win(adv.win([st])[0], side))
     rare = sum(1 for c in st.picks[side] if adv.priors.pick_count(c) < adv.cfg.rare_picks)
     lineup = {"prebans": st.prebans, "picks": st.picks, "banned": st.banned}
     return {"final": final, "curve": curve, "rare": rare, "side": side, "lineup": lineup}
@@ -182,7 +184,7 @@ def follow_check(adv: Advisor, ds: Dataset, rows: np.ndarray, budget: float, pro
             real = frozenset(actual_move(ds, int(row), n))
             sets = [frozenset(r["heroes"]) for r in out["recommend"]]
             won = float(ds.first_wins[row] == (1 if side == "F" else 0))
-            after = float(sim.my_win(adv.model.win([ds.state(int(row), n + rules.left_in_turn(n))])[0], side))
+            after = float(sim.my_win(adv.win([ds.state(int(row), n + rules.left_in_turn(n))])[0], side))
             raw = after - out["win"]
             rec = out["recommend"][sets.index(real)] if real in sets else None
             item = (won - out["win"], raw, (rec["now"] - out["win"]) if rec else float("nan"))

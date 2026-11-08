@@ -30,6 +30,14 @@ adv.preban("F", grades=("legend", "emperor"))    # 预禁推荐（先后手不�
 模型读数最差的几种，各自往下算「我方这一轮从英雄池里挑最好的回应（先验前 16 名）→ 对手再下一轮按先验回应」，
 每种选法之后的胜率 = 那个回应的预期（同推荐卡的「预期」），`opponent.win` = 按选法的先验加权。
 返回的胜率一律是「我方」的。
+
+B14g2：模型的胜率分「先手方先动 / 后手方先动 / 不知道」三种，每个局面按这个阵容的先动概率混合（用户原则：段位只
+影响谁先动，胜率按 BP 算再按先动概率混合）：先动概率按双方段位 + 我方英雄池里填的速度算（`speed.FirstCalc`，
+同一阵容按一般玩家算的作参照，`model.effective_first`），没有速度表时用「不知道」的头。推荐、最坏、对手回应、
+后禁矩阵、`opponent.win`、预禁都是混合后的值。另外每个值都带着「我方先动时 / 后动时」两种（同样的回应、权重），
+推荐卡、后禁矩阵每格、对方回合的读数都给出这两种。显示的先动概率 `first`（审核第 1、2 轮用户意见）：选秀中只按双方
+已经选出的英雄、用速度表算（推荐 = 加上这一组、对方的选法 = 加上对方这一手；不补还没选的几手，也不把之后的回应合进去；
+一方还没有英雄时是 None）；后禁矩阵每格 / 结束时是上场 4 打 4 混合用的先动概率。混合胜率时还是按补全的阵容算。
 """
 
 from __future__ import annotations
@@ -42,10 +50,11 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from functools import lru_cache
 from itertools import combinations
+from typing import NamedTuple
 
 import numpy as np
 
-from . import encode, rules
+from . import encode, rules, speed
 from . import model as rmodel
 from . import priors as rpriors
 
@@ -166,20 +175,67 @@ class _Clock:
         return time.perf_counter() - self.t0
 
 
+class _FirstCtx:
+    """一次搜索里的先动概率（B14g2）：双方段位、我方英雄池里填的速度固定，每批局面按阵容算 (first, ref)：
+    first = 按双方段位 + 速度，ref = 同一阵容按一般玩家（不知道段位、没填速度），给 `model.effective_first` 用。
+    局面用主模型词表的编号；局面里模型没见过的英雄（UNK）换回它自己的编号（速度表里可能有它）。"""
+
+    def __init__(self, calc: speed.FirstCalc, vocab: encode.Vocab, grades: tuple[str | None, str | None],
+                 speeds: tuple[dict[str, float] | None, dict[str, float] | None] = (None, None),
+                 tokens: Sequence[str | None] | None = None):
+        self.calc = calc
+        self.codes: list[str | None] = [None] * encode.FIRST_HERO + list(vocab.heroes)  # 行号 = 词表编号
+        self.grades = (grades[0], grades[1])
+        self.speeds = (speeds[0] or None, speeds[1] or None)
+        self.same = self.grades == (None, None) and not any(self.speeds)  # first 就是 ref
+        self.unk: dict[int, int] = {}  # 位置 → 行号
+        if tokens is not None:
+            first_unk: dict[str, int] = {}
+            for s in rules.SIDES:
+                for j in _ORDER[s]:
+                    code = tokens[encode.PICK_POS + j]
+                    if code and vocab.hero(code) == encode.UNK:
+                        self.unk[encode.PICK_POS + j] = len(self.codes)
+                        first_unk.setdefault(s, len(self.codes))
+                        self.codes.append(code)
+                if s in first_unk:  # 后禁矩阵把选的英雄编号抄进被禁的位置：UNK 当这一方第一名没见过的
+                    self.unk[encode.BAN_POS[s]] = first_unk[s]
+
+    def pair(self, heroes: np.ndarray, states: Sequence[int]) -> tuple[np.ndarray, np.ndarray]:
+        ids = heroes
+        if self.unk:
+            ids = heroes.copy()
+            for pos, row in self.unk.items():
+                ids[:, pos] = np.where(ids[:, pos] == encode.UNK, row, ids[:, pos])
+        f = speed.ids_first_probs(self.calc, ids, states, self.codes, self.grades, self.speeds, pad=encode.PAD)
+        r = f if self.same else speed.ids_first_probs(self.calc, ids, states, self.codes, pad=encode.PAD)
+        return f, r
+
+
+class _Fwd(NamedTuple):
+    win: np.ndarray  # [B, S] 先手方赢的概率（按先动概率混合的；没有速度表是「不知道」的头）
+    probs: np.ndarray | None  # [B, V] 下一手的分布
+    split: np.ndarray  # [B, S, 2] 先手方先动时 / 后手方先动时 先手方赢的概率
+    pi: np.ndarray | None  # [B, S] 混合用的「先手方先动」概率（没有速度表是 None）
+
+
 class _Net:
     """一个模型在一次搜索里的推理。局面统一用主模型词表的编号拼，这里换成这个模型自己的编号和上下文。"""
 
-    def __init__(self, model, state: encode.DraftState, main_vocab: encode.Vocab, clock: _Clock):
+    def __init__(self, model, state: encode.DraftState, main_vocab: encode.Vocab, clock: _Clock,
+                 first: _FirstCtx | None = None):
         self.model = model
         self.clock = clock
+        self.first = first
         self.ctx = encode.encode_states([state], model.vocab)["ctx"][0]
         self.lut = None
         if model.vocab is not main_vocab:
             self.lut = np.array([i if i < encode.FIRST_HERO else model.vocab.hero(main_vocab.code(i))
                                  for i in range(main_vocab.size)], dtype=np.int64)
 
-    def forward(self, heroes: np.ndarray, win_states: Sequence[int], pick_state: int | None = None):
-        """heroes [B, 17]（主模型编号）→ (各局面先手方的胜率 [B, len(win_states)], 局面 pick_state 下一手的分布 [B, V] 或 None)。"""
+    def forward(self, heroes: np.ndarray, win_states: Sequence[int], pick_state: int | None = None) -> _Fwd:
+        """heroes [B, 17]（主模型编号）→ 各局面先手方的胜率 [B, len(win_states)]（混合的）、先动 / 后动两种、
+        混合用的先动概率，局面 pick_state 下一手的分布 [B, V] 或 None。"""
         started = time.perf_counter()
         h = heroes if self.lut is None else self.lut[heroes]
         pos = encode.STATE_POS[list(win_states)]
@@ -191,7 +247,14 @@ class _Net:
             if pick_state is not None:
                 picks.append(p[:, encode.STATE_POS[pick_state]].astype(np.float64))
         z = np.concatenate(wins) if wins else np.zeros((0, len(pos)))
-        win = rmodel.calibrate(z, np.broadcast_to(np.asarray(win_states), z.shape), self.model.calibration)
+        heads = rmodel.calibrate_heads(z, np.broadcast_to(np.asarray(win_states), z.shape[:2]), self.model.calibration)
+        pi = None
+        if self.first is not None and len(heroes):
+            f, r = self.first.pair(heroes, win_states)
+            pi = rmodel.effective_first(heads, f, r)
+            win = pi * heads[..., encode.HEAD_F] + (1.0 - pi) * heads[..., encode.HEAD_S]
+        else:
+            win = heads[..., encode.HEAD_U]
         probs = None
         if pick_state is not None:
             assert self.lut is None, "下一手的分布只从主模型取"
@@ -204,7 +267,7 @@ class _Net:
             e = np.exp(logits)
             probs = e / e.sum(axis=1, keepdims=True)
         self.clock.count(len(h), time.perf_counter() - started)
-        return win, probs
+        return _Fwd(win, probs, heads[..., :2], pi)
 
 
 @dataclass
@@ -217,6 +280,23 @@ class _Move:
     prior: float = 0.0  # 对手的回应：这个走法的先验（加权用）；我方：只用来显示
 
 
+_NO_SPLIT = np.full(2, 0.5)
+
+
+@dataclass
+class _Vals:
+    """`_Search.values` 的结果（每行一个局面，我方视角）。s_* = 同一个值「我方先动时 / 后动时」两种 [B, 2]。"""
+    raw: np.ndarray  # 走完这一步模型给的我方胜率（选完 10 手时 = 后禁前的）
+    value: np.ndarray  # 选完 10 手 = 后禁博弈的值，否则 = raw
+    exp: np.ndarray  # 后禁博弈推荐那一行的预期（否则 = raw）
+    worst: np.ndarray
+    probs: np.ndarray | None
+    s_raw: np.ndarray
+    s_value: np.ndarray
+    s_exp: np.ndarray
+    pi: np.ndarray | None  # [B] 混合用的我方先动概率（选完 10 手时是后禁前的）
+
+
 @dataclass
 class _Result:
     raw: float  # 走完这一步模型给的我方胜率（选完 10 手时 = 后禁前的）
@@ -225,6 +305,10 @@ class _Result:
     worst: float
     line: tuple[int, ...]  # 往下算用的顺序
     probs: np.ndarray | None = None  # 下一手的分布（主模型）
+    s_raw: np.ndarray = field(default_factory=lambda: _NO_SPLIT)  # 我方先动时 / 后动时（B14g2）
+    s_value: np.ndarray = field(default_factory=lambda: _NO_SPLIT)
+    s_exp: np.ndarray = field(default_factory=lambda: _NO_SPLIT)
+    pi: float | None = None  # 混合用的我方先动概率
 
 
 def correction(f: float, delta: float, mine: bool) -> float:
@@ -250,21 +334,31 @@ class _Cand:
     low: float = 0.0
     responses: list[tuple[_Move, _Result]] = field(default_factory=list)
     level2: list[float] = field(default_factory=list)  # 第 2 层每个回应之后的值（不往下看我方再回应）
+    level2_split: list[np.ndarray] = field(default_factory=list)  # 同上，我方先动时 / 后动时
     level3: dict = field(default_factory=dict)  # 回应下标 → (我方再回应后的值, 再回应的顺序)
     second: dict | None = None
+    s_exp: np.ndarray = field(default_factory=lambda: _NO_SPLIT)  # 子树预期的「我方先动时 / 后动时」（不含修正）
+    s_win: np.ndarray = field(default_factory=lambda: _NO_SPLIT)  # 加上修正的
 
 
 class _Search:
     def __init__(self, adv: Advisor, cfg: SearchConfig, state: encode.DraftState, side: str, pool: Sequence[str] | None,
-                 budget: float):
+                 budget: float, speeds: dict[str, float] | None = None):
         self.adv, self.cfg = adv, cfg
         self.state, self.side, self.opp = state, side, other(side)
         self.n = state.n_picks
         self.vocab = adv.model.vocab
         self.clock = _Clock(budget, cfg.batch)
         self.base = encode.encode_states([state], self.vocab)["heroes"][0]
-        self.main = _Net(adv.model, state, self.vocab, self.clock)
-        self.second = _Net(adv.second, state, self.vocab, self.clock) if adv.second is not None else None
+        # 先动概率：双方段位 + 我方英雄池里填的速度（对方的不知道）
+        self.speeds = dict(speeds or {})  # 我方英雄的速度
+        sp = {side: self.speeds or None, self.opp: None}
+        fc = adv.first_ctx(state.grades, (sp["F"], sp["S"]), state.tokens())
+        self.has_first = fc is not None
+        self.main = _Net(adv.model, state, self.vocab, self.clock, fc)
+        self.second = _Net(adv.second, state, self.vocab, self.clock, fc) if adv.second is not None else None
+        self.root_pi: float | None = None  # 当前局面混合用的我方先动概率（后禁 / 结束时显示）
+        self._shown: dict[tuple, float | None] = {}  # 显示用的先动概率（只按已选英雄）
         self.pool = None
         self.pool_short = False  # 英雄池里能选的不够这一轮（这一轮推荐全部英雄）
         # 模型没见过的英雄（按 UNK 算）：局面里的（B14h 快照里去掉的新英雄）和英雄池里的
@@ -292,6 +386,13 @@ class _Search:
     def mine(self, p_first):
         return p_first if self.side == "F" else 1.0 - p_first
 
+    def mine_split(self, split: np.ndarray) -> np.ndarray:
+        """[..., 2] 先手方先动时 / 后手方先动时 先手方的胜率 → 我方先动时 / 我方后动时 我方的胜率。"""
+        return split if self.side == "F" else 1.0 - split[..., ::-1]
+
+    def mine_pi(self, pi: np.ndarray | None) -> np.ndarray | None:
+        return None if pi is None else self.mine(pi)
+
     def code(self, i: int) -> str | None:
         return self.vocab.code(int(i))
 
@@ -303,41 +404,58 @@ class _Search:
         return h
 
     def root(self, net: _Net, pick: bool = False) -> tuple[float, np.ndarray | None]:
-        w, p = net.forward(self.lines(self.empty), [self.n], self.n if pick else None)
-        return float(self.mine(w[0, 0])), (p[0] if p is not None else None)
+        f = net.forward(self.lines(self.empty), [self.n], self.n if pick else None)
+        if net is self.main:
+            self.root_pi = None if f.pi is None else float(self.mine(f.pi[0, 0]))
+        return float(self.mine(f.win[0, 0])), (f.probs[0] if f.probs is not None else None)
 
     def ban_values(self, net: _Net, h: np.ndarray) -> dict:
-        """选完 10 手的局面 h [B, 17] → 后禁博弈。行 = 我方禁对方哪名，列 = 对方禁我方哪名（保护位除外）。"""
+        """选完 10 手的局面 h [B, 17] → 后禁博弈。行 = 我方禁对方哪名，列 = 对方禁我方哪名（保护位除外）。
+        `*_split` 是同一个值「我方先动时 / 后动时」两种（最坏取最坏那一格的，预期按同样的权重），`pi` 是每格混合用的
+        我方先动概率。"""
         b = len(h)
         picks = h[:, encode.PICK_POS:encode.PICK_POS + N]
         rows, cols = picks[:, BANNABLE[self.opp]], picks[:, BANNABLE[self.side]]
         hh = np.repeat(h, 16, axis=0)
         hh[:, encode.BAN_POS[self.opp]] = np.repeat(rows, 4, axis=1).ravel()
         hh[:, encode.BAN_POS[self.side]] = np.tile(cols, (1, 4)).ravel()
-        w, _ = net.forward(hh, [N, encode.POSTBAN])
-        raw = self.mine(w[::16, 0])  # 后禁前（同一组 16 行一样）
-        m = self.mine(w[:, 1]).reshape(b, 4, 4)
+        f = net.forward(hh, [N, encode.POSTBAN])
+        raw = self.mine(f.win[::16, 0])  # 后禁前（同一组 16 行一样）
+        m = self.mine(f.win[:, 1]).reshape(b, 4, 4)
+        ms = self.mine_split(f.split[:, 1]).reshape(b, 4, 4, 2)
         q = self.ban_rates[cols]
         q = q / q.sum(axis=1, keepdims=True)
+        a = self.cfg.alpha
+        arg = m.argmin(axis=2)
         row_worst = m.min(axis=2)
         row_exp = (m * q[:, None, :]).sum(axis=2)
-        row_score = self.cfg.alpha * row_worst + (1 - self.cfg.alpha) * row_exp
+        row_score = a * row_worst + (1 - a) * row_exp
+        worst_split = np.take_along_axis(ms, arg[:, :, None, None], axis=2)[:, :, 0]
+        exp_split = (ms * q[:, None, :, None]).sum(axis=2)
+        score_split = a * worst_split + (1 - a) * exp_split
         best = row_score.argmax(axis=1)
         at = np.arange(b)
+        pi = None if f.pi is None else self.mine(f.pi)
         return {"raw": raw, "value": row_score[at, best], "exp": row_exp[at, best], "worst": row_worst[at, best],
                 "matrix": m, "rows": rows, "cols": cols, "q": q, "row_exp": row_exp, "row_worst": row_worst,
-                "row_score": row_score, "best": best}
+                "row_score": row_score, "best": best,
+                "raw_split": self.mine_split(f.split[::16, 0]), "value_split": score_split[at, best],
+                "exp_split": exp_split[at, best], "matrix_split": ms, "row_exp_split": exp_split,
+                "raw_pi": None if pi is None else pi[::16, 0], "matrix_pi": None if pi is None else pi[:, 1].reshape(b, 4, 4)}
 
-    def values(self, net: _Net, fills: np.ndarray, pick: bool):
-        """走到 fills 之后：(模型胜率, 值, 预期, 最坏, 下一手分布或 None)；选完 10 手时值 = 后禁博弈的值。"""
+    def values(self, net: _Net, fills: np.ndarray, pick: bool) -> _Vals:
+        """走到 fills 之后的模型胜率、值、预期、最坏、下一手分布（或 None）和各自的「我方先动时 / 后动时」；
+        选完 10 手时值 = 后禁博弈的值。"""
         end = self.n + fills.shape[1]
         h = self.lines(fills)
         if end == N:
             d = self.ban_values(net, h)
-            return d["raw"], d["value"], d["exp"], d["worst"], None
-        w, p = net.forward(h, [end], end if pick else None)
-        v = self.mine(w[:, 0])
-        return v, v, v, v, p
+            return _Vals(d["raw"], d["value"], d["exp"], d["worst"], None, d["raw_split"], d["value_split"],
+                         d["exp_split"], d["raw_pi"])
+        f = net.forward(h, [end], end if pick else None)
+        v = self.mine(f.win[:, 0])
+        s = self.mine_split(f.split[:, 0])
+        return _Vals(v, v, v, v, f.probs, s, s, s, None if f.pi is None else self.mine(f.pi[:, 0]))
 
     def cost(self, rows: int, end: int) -> int:
         return rows * (16 if end == N else 1)
@@ -407,7 +525,7 @@ class _Search:
         end = self.n + fills.shape[1]
         if not force and not self.clock.affordable(self.cost(len(fills), end)):
             return None
-        raw, val, exp, worst, probs = self.values(net, fills, pick and end < N)
+        v = self.values(net, fills, pick and end < N)
         groups: list[list[list[int]]] = [[[] for _ in moves] for _, moves in items]
         for r, (it, mi) in enumerate(owner):
             groups[it][mi].append(r)
@@ -417,15 +535,19 @@ class _Search:
             for mi, mv in enumerate(moves):
                 rs = groups[it][mi]
                 if mv.combine == "mean":
-                    lst.append(_Result(float(raw[rs].mean()), float(val[rs].mean()), float(exp[rs].mean()),
-                                       float(worst[rs].mean()), mv.variants[0], probs[rs[0]] if probs is not None else None))
+                    lst.append(_Result(float(v.raw[rs].mean()), float(v.value[rs].mean()), float(v.exp[rs].mean()),
+                                       float(v.worst[rs].mean()), mv.variants[0],
+                                       v.probs[rs[0]] if v.probs is not None else None,
+                                       v.s_raw[rs].mean(axis=0), v.s_value[rs].mean(axis=0), v.s_exp[rs].mean(axis=0),
+                                       float(v.pi[rs].mean()) if v.pi is not None else None))
                     continue
                 if mv.combine == "best":  # 含保护位：这一方挑对自己好的顺序（对手的就是对我方差的）
-                    r = max(rs, key=lambda x: val[x]) if mine else min(rs, key=lambda x: val[x])
+                    r = max(rs, key=lambda x: v.value[x]) if mine else min(rs, key=lambda x: v.value[x])
                 else:
                     r = rs[0]
-                lst.append(_Result(float(raw[r]), float(val[r]), float(exp[r]), float(worst[r]), mv.variants[rs.index(r)],
-                                   probs[r] if probs is not None else None))
+                lst.append(_Result(float(v.raw[r]), float(v.value[r]), float(v.exp[r]), float(v.worst[r]),
+                                   mv.variants[rs.index(r)], v.probs[r] if v.probs is not None else None,
+                                   v.s_raw[r], v.s_value[r], v.s_exp[r], float(v.pi[r]) if v.pi is not None else None))
             out.append(lst)
         return out
 
@@ -435,7 +557,7 @@ class _Search:
         if not ids:
             return
         fills = np.array([parent + (a,) for a in ids], dtype=np.int64)
-        _, cond = self.main.forward(self.lines(fills), [n_at + 1], n_at + 1)
+        cond = self.main.forward(self.lines(fills), [n_at + 1], n_at + 1).probs
         row = {a: k for k, a in enumerate(ids)}
         for mv in moves:
             a, b = mv.ids
@@ -451,17 +573,19 @@ class _Search:
         """对手回应 mv（结果 r）之后、子树的值 sub → 加上这一手回应的修正。"""
         return sub + correction(mv.trust, r.raw - c.res.raw, mine=False)
 
-    def finish(self, c: _Cand, vals: dict[int, float], depth: int, end: bool) -> None:
-        """回应的值 → 子树的预期（按回应的先验加权）/ 最坏 → 打折 → 分数。"""
+    def finish(self, c: _Cand, vals: dict[int, float], depth: int, end: bool, splits: dict[int, np.ndarray]) -> None:
+        """回应的值 → 子树的预期（按回应的先验加权）/ 最坏 → 打折 → 分数。splits = 每个值的「我方先动时 / 后动时」。"""
         p = np.array([max(c.responses[i][0].prior, 1e-12) for i in vals])
         v = np.array(list(vals.values()))
         c.exp, c.worst = float(p @ v / p.sum()), float(v.min())
+        c.s_exp = p @ np.array([splits[i] for i in vals]) / p.sum()
         c.depth, c.end = depth, end
         self.depth = max(self.depth, depth)
         self.rescore(c)
 
     def rescore(self, c: _Cand) -> None:
         c.win, c.low = c.exp + c.corr, c.worst + c.corr
+        c.s_win = c.s_exp + c.corr
         c.score = self.cfg.alpha * c.low + (1 - self.cfg.alpha) * c.win
 
     def shown_value(self, c: _Cand, v: float) -> float:
@@ -478,7 +602,8 @@ class _Search:
         n1 = n + rules.left_in_turn(n)
         cands = []
         for mv, r in zip(moves1, self.evaluate(self.main, [((), moves1)], mine=True, pick=True, force=True)[0]):
-            c = _Cand(mv, r, corr=correction(mv.trust, r.raw - self.cur, True), end=n1 == N, exp=r.exp, worst=r.worst)
+            c = _Cand(mv, r, corr=correction(mv.trust, r.raw - self.cur, True), end=n1 == N, exp=r.exp, worst=r.worst,
+                      s_exp=r.s_exp)
             self.rescore(c)
             cands.append(c)
         cands.sort(key=lambda c: -c.score)
@@ -520,7 +645,8 @@ class _Search:
                 break
             c.responses = list(zip(moves, res[0]))
             c.level2 = [self.response_value(c, mv, r, r.value) for mv, r in c.responses]
-            self.finish(c, dict(enumerate(c.level2)), 2, end=n2 == N)
+            c.level2_split = [r.s_value + (v - r.value) for (_, r), v in zip(c.responses, c.level2)]
+            self.finish(c, dict(enumerate(c.level2)), 2, end=n2 == N, splits=dict(enumerate(c.level2_split)))
 
     def level3(self, cands: list[_Cand], n2: int) -> None:
         cfg = self.cfg
@@ -539,18 +665,19 @@ class _Search:
             res = self.evaluate(self.main, items, mine=True, pick=False)
             if res is None:
                 break
-            vals = {}
+            vals, splits = {}, {}
             for i, (_, ms), rs in zip(pick, items, res):
                 mv, r = c.responses[i]
-                sub = r.value
+                sub, sub_split = r.value, r.s_value
                 if rs:  # 我方再回应：取最好的（加上再回应那一手的修正）。可信度不超过候选那一手的：
                     # 少见的候选在场时，模型对它和后面英雄搭配的估计也不准（高估常在再回应这一手才冒出来）
                     kids = [x.value + correction(min(m.trust, c.move.trust), x.raw - r.raw, True) for m, x in zip(ms, rs)]
                     j = int(np.argmax(kids))
-                    sub = kids[j]
+                    sub, sub_split = kids[j], rs[j].s_value + (kids[j] - rs[j].value)
                     c.level3[i] = (self.response_value(c, mv, r, sub), rs[j].line)
                 vals[i] = self.response_value(c, mv, r, sub)
-            self.finish(c, vals, 3, end=n3 == N)
+                splits[i] = sub_split + (vals[i] - sub)
+            self.finish(c, vals, 3, end=n3 == N, splits=splits)
 
     def second_opinion(self, shown: list[_Cand]) -> None:
         """第二个模型：每个列出的推荐重算到第 2 层（同样的回应、顺序、折扣），和主模型同一层的结果比。"""
@@ -559,12 +686,14 @@ class _Search:
         self.second_cur = cur2
         if not shown:
             return
-        raw1, val1, exp1, _, _ = self.values(net, np.array([c.res.line for c in shown], dtype=np.int64), pick=False)
+        v1 = self.values(net, np.array([c.res.line for c in shown], dtype=np.int64), pick=False)
+        raw1, exp1 = v1.raw, v1.exp
         for k, c in enumerate(shown):
             corr = correction(c.move.trust, raw1[k] - cur2, True)
             if c.responses:
                 fills = np.array([c.res.line + r.line for _, r in c.responses], dtype=np.int64)
-                raw2, val2, _, _, _ = self.values(net, fills, pick=False)
+                v2 = self.values(net, fills, pick=False)
+                raw2, val2 = v2.raw, v2.value
                 p = np.array([max(mv.prior, 1e-12) for mv, _ in c.responses])
                 sec = np.array([val2[i] + correction(mv.trust, raw2[i] - raw1[k], False)
                                 for i, (mv, _) in enumerate(c.responses)])
@@ -587,13 +716,14 @@ class _Search:
         moves = self.their_moves((), n, ids, prior0)
         n1 = n + rules.left_in_turn(n)
         res = self.evaluate(self.main, [((), moves)], mine=False, pick=n1 < N, force=True)[0]
-        items, keep = [], []
+        items, keep, splits = [], [], []
         for mv, r in zip(moves, res):
             corr = correction(mv.trust, r.raw - cur, False)
             # 选完 10 手：后禁博弈推荐行的预期（同后禁这一步信息条上的）；否则先放模型读数，下面换成我方的读数
             now = (r.exp if n1 == N else r.value) + corr
             items.append({"heroes": [self.code(i) for i in r.line], "prob": mv.prior, "win": now, "now": now})
             keep.append((r, corr))
+            splits.append((r.s_exp if n1 == N else r.s_value) + corr)
         # 我方的读数（B14e2 审核）：最可能的几种 + 模型读数最差的几种，往下算我方从英雄池里挑的回应
         likely = sorted(range(len(items)), key=lambda i: -items[i]["prob"])[:cfg.top]
         worst = [i for i in sorted(range(len(items)), key=lambda i: items[i]["now"]) if i not in likely][:cfg.threats]
@@ -601,22 +731,28 @@ class _Search:
         for i in likely + worst:
             r, corr = keep[i]
             if n1 < N:
-                v = self.reply_value(r.line, r.probs, r.raw, n1)
-                if v is None:  # 时间不够：剩下的还是模型读数（stats.truncated）
+                got = self.reply_value(r.line, r.probs, r.raw, n1)
+                if got is None:  # 时间不够：剩下的还是模型读数（stats.truncated）
                     break
-                items[i]["win"] = v + corr
+                items[i]["win"], splits[i] = got[0] + corr, got[1] + corr
             done.append(i)
+        for i, it in enumerate(items):
+            self.put_split(it, splits[i], self.shown_first(keep[i][0].line))
         p = sum(items[i]["prob"] for i in done)
         expected = sum(items[i]["prob"] * items[i]["win"] for i in done) / p if p > 0 else None
-        threats = sorted((items[i] for i in done), key=lambda x: x["win"])[:3]
+        opponent = {"likely": [items[i] for i in likely], "win": expected}
+        if expected is not None:
+            self.put_split(opponent, sum(items[i]["prob"] * splits[i] for i in done) / p, self.shown_first())
+        opponent["threats"] = sorted((items[i] for i in done), key=lambda x: x["win"])[:3]
         sec = self.root(self.second)[0] if self.second is not None else None
-        return {**self.head("pick", "theirs", cur, sec),
-                "opponent": {"likely": [items[i] for i in likely], "threats": threats, "win": expected}}
+        return {**self.head("pick", "theirs", cur, sec), "opponent": opponent}
 
-    def reply_value(self, parent: tuple[int, ...], probs: np.ndarray, raw0: float, n1: int) -> float | None:
+    def reply_value(self, parent: tuple[int, ...], probs: np.ndarray, raw0: float,
+                    n1: int) -> tuple[float, np.ndarray] | None:
         """对手走完 parent（从根局面往下的 fills，之后已选 n1 手、轮到我方）之后「我方的读数」：我方这一轮从英雄池里挑
         最好的回应（先验前 their_replies 名；分数 = ½ 预期 + ½ 最坏，按对手下一轮先验前 responses 名的回应算），
-        返回这个回应的预期（含我方回应的修正，同推荐卡的「预期」）。raw0 = parent 之后模型给的我方胜率。时间不够返回 None。"""
+        返回这个回应的预期（含我方回应的修正，同推荐卡的「预期」）和它的「我方先动时 / 后动时」。
+        raw0 = parent 之后模型给的我方胜率。时间不够返回 None。"""
         cfg = self.cfg
         k1 = rules.left_in_turn(n1)
         n2 = n1 + k1
@@ -627,7 +763,8 @@ class _Search:
         cands = [(r, correction(mv.trust, r.raw - raw0, True)) for mv, r in zip(mv1, r1[0])]
         a = cfg.alpha
         if n2 == N:  # 我方这一轮选完就到后禁：叶子是后禁博弈
-            return max(((a * (r.worst + c) + (1 - a) * (r.exp + c), r.exp + c) for r, c in cands))[1]
+            r, c = max(cands, key=lambda x: a * (x[0].worst + x[1]) + (1 - a) * (x[0].exp + x[1]))
+            return r.exp + c, r.s_exp + c
         top = sorted(cands, key=lambda x: -(x[0].value + x[1]))[:cfg.reply_cands]
         items = []
         for r, _ in top:
@@ -639,21 +776,25 @@ class _Search:
         best = None
         for (r, c), (_, rmoves), rres in zip(top, items, r2):
             if rres:
-                v = np.array([x.value + correction(m.trust, x.raw - r.raw, False) for m, x in zip(rmoves, rres)])
+                corr = np.array([correction(m.trust, x.raw - r.raw, False) for m, x in zip(rmoves, rres)])
+                v = np.array([x.value for x in rres]) + corr
+                sv = np.array([x.s_value for x in rres]) + corr[:, None]
                 q = np.array([max(m.prior, 1e-12) for m in rmoves])
-                exp, low = float(q @ v / q.sum()), float(v.min())
+                exp, low, s_exp = float(q @ v / q.sum()), float(v.min()), q @ sv / q.sum()
             else:
                 exp = low = r.value
+                s_exp = r.s_value
             score = a * (low + c) + (1 - a) * (exp + c)
             if best is None or score > best[0]:
-                best = (score, exp + c)
-        return best[1]
+                best = (score, exp + c, s_exp + c)
+        return best[1], best[2]
 
     # —— 后禁 ——
     def ban_turn(self) -> dict:
         h = self.lines(self.empty)
         d = self.ban_values(self.main, h)
         cur = float(d["raw"][0])
+        self.root_pi = None if d["raw_pi"] is None else float(d["raw_pi"][0])
         m = d["matrix"][0]
         x, y, v = nash(m)
         # 英雄编号从局面里取：模型没见过的英雄按 UNK 算，从模型编号换不回来
@@ -661,6 +802,10 @@ class _Search:
         rows, cols = [picks[j] for j in BANNABLE[self.opp]], [picks[j] for j in BANNABLE[self.side]]
         stats = [{"code": rows[i], "worst": float(d["row_worst"][0, i]), "win": float(d["row_exp"][0, i]),
                   "score": float(d["row_score"][0, i])} for i in range(len(rows))]
+        q = d["q"][0]
+        for i, s in enumerate(stats):  # 这一行（对方按后禁率）的「我方先动时 / 后动时」和对应的先动概率
+            pis = d["matrix_pi"]
+            self.put_split(s, d["row_exp_split"][0, i], None if pis is None else float(pis[0, i] @ q))
         sec, sec_cur = None, None
         if self.second is not None:
             d2 = self.ban_values(self.second, h)
@@ -669,15 +814,51 @@ class _Search:
                 s["second"] = {"win": float(d2["row_exp"][0, i]), "worst": float(d2["row_worst"][0, i]),
                                "spread": float(d2["row_exp"][0, i] - d["row_exp"][0, i])}
             sec = {"matrix": d2["matrix"][0].tolist()}
+        ms = d["matrix_split"][0]
         ban = {"rows": rows, "cols": cols, "matrix": m.tolist(), "row_stats": stats, "recommend": rows[int(d["best"][0])],
-               "their_likely": [{"code": c, "prob": float(q)} for c, q in zip(cols, d["q"][0])],
-               "nash": {"mine": x.tolist(), "theirs": y.tolist(), "value": v}, "second": sec}
+               "their_likely": [{"code": c, "prob": float(p)} for c, p in zip(cols, q)],
+               "nash": {"mine": x.tolist(), "theirs": y.tolist(), "value": v}, "second": sec,
+               # 每格：我方先动时 / 后动时的胜率、混合用的我方先动概率（4 打 4，先动 × 先动时 + 后动 × 后动时 = 这一格）
+               "win_first": ms[..., 0].tolist(), "win_second": ms[..., 1].tolist(),
+               "first": d["matrix_pi"][0].tolist() if d["matrix_pi"] is not None else None}
         return {**self.head("ban", None, cur, sec_cur), "ban": ban}
 
     # —— 输出 ——
+    def shown_first(self, extra: Sequence[int] = ()) -> float | None:
+        """页面上显示的我方先动概率（审核第 1、2 轮用户意见）：当前局面接着选 extra（主模型编号）之后，只按双方已经选出的
+        英雄（不补还没选的几手）、双方段位 + 我方英雄池速度，用速度表算。一方还没有英雄、或没有速度表时 None。"""
+        if not self.has_first:
+            return None
+        sides: dict[str, list[str]] = {s: [] for s in rules.SIDES}
+        for j in range(self.n + len(extra)):
+            code = self.tokens[encode.PICK_POS + j] if j < self.n else self.code(extra[j - self.n])
+            if code:
+                sides[rules.PICK_ORDER[j]].append(code)
+        key = (tuple(sorted(sides["F"])), tuple(sorted(sides["S"])))
+        if key not in self._shown:
+            out = None
+            if sides["F"] and sides["S"]:
+                g = {"F": self.state.grades[0], "S": self.state.grades[1]}
+                sp = self.speeds
+                units = {s: [speed.Unit(s, c, g[s], sp.get(c) if s == self.side else None) for c in sides[s]]
+                         for s in rules.SIDES}
+                out = float(self.mine(self.adv.calc.prob(units["F"], units["S"], (g["F"], g["S"]), fill=False)))
+            self._shown[key] = out
+        return self._shown[key]
+
+    def put_split(self, item: dict, split: np.ndarray, pi: float | None) -> None:
+        """一个值的「我方先动时 / 后动时」两种胜率，和显示的先动概率 pi（选秀中见 `shown_first`；后禁每行 = 这一行 4 格
+        按对方后禁率平均）。pi × 先动时 + (1 − pi) × 后动时 不一定等于主数字（后禁矩阵每格除外）。"""
+        item["win_first"], item["win_second"] = float(split[0]), float(split[1])
+        item["first"] = pi if self.has_first else None
+
     def head(self, phase: str, turn: str | None, cur: float, second: float | None) -> dict:
+        # first：我方先动概率。选秀中只按双方已选的英雄（shown_first，一方还没有英雄时没有）；后禁 / 结束时是混合用的
+        # （后禁前对 16 种被禁平均）。partial = 还不是最终上场的 4 打 4
+        mine = self.shown_first() if phase == "pick" else self.root_pi
+        first = None if mine is None else {"mine": mine, "partial": self.state.state != encode.POSTBAN}
         return {"phase": phase, "turn": turn, "side": self.side, "n": self.n, "slots": rules.left_in_turn(self.n),
-                "win": cur, "second_win": second, "unknown": self.unknown}
+                "win": cur, "second_win": second, "unknown": self.unknown, "first": first}
 
     def my_output(self, prior0: np.ndarray, ranked: list[_Cand], shown: list[_Cand]) -> dict:
         cfg = self.cfg
@@ -718,6 +899,8 @@ class _Search:
             if c.second is not None:
                 item["second"] = c.second
                 item["uncertain"] = bool(abs(c.second["spread"]) >= cfg.uncertain_gap)
+            # 预期的「我方先动时 / 后动时」（同样的回应和权重）；先动概率只按加上这一组之后已选的英雄
+            self.put_split(item, c.s_win, self.shown_first(c.res.line))
             recs.append(item)
         heroes = []
         if k == 2:  # 按英雄：每名英雄取它所在最好的那组
@@ -737,12 +920,14 @@ class _Search:
 
     def run(self) -> dict:
         if self.state.state == encode.POSTBAN:
-            w, _ = self.main.forward(self.lines(self.empty), [encode.POSTBAN])
+            f = self.main.forward(self.lines(self.empty), [encode.POSTBAN])
+            self.root_pi = None if f.pi is None else float(self.mine(f.pi[0, 0]))
             sec = None
             if self.second is not None:
-                w2, _ = self.second.forward(self.lines(self.empty), [encode.POSTBAN])
-                sec = float(self.mine(w2[0, 0]))
-            out = self.head("done", None, float(self.mine(w[0, 0])), sec)
+                sec = float(self.mine(self.second.forward(self.lines(self.empty), [encode.POSTBAN]).win[0, 0]))
+            out = self.head("done", None, float(self.mine(f.win[0, 0])), sec)
+            # 一个局面：first.mine 就是配套的先动概率（先动 × 先动时 + 后动 × 后动时 = win）
+            out["win_first"], out["win_second"] = (float(x) for x in self.mine_split(f.split[0, 0]))
         elif self.n == N:
             out = self.ban_turn()
         elif rules.mover(self.n) == self.side:
@@ -755,11 +940,18 @@ class _Search:
 
 
 class Advisor:
-    """推荐器：主模型 + 第二个模型（可选）+ 数据先验。同一时间只跑一个搜索，结果按局面缓存。"""
+    """推荐器：主模型 + 第二个模型（可选）+ 数据先验 + 速度表（可选，B14g2：按先动概率混合胜率；没有就用「不知道
+    谁先动」的头）。同一时间只跑一个搜索，结果按局面缓存。"""
 
-    def __init__(self, model, priors: rpriors.Priors, second=None, cfg: SearchConfig | None = None):
+    def __init__(self, model, priors: rpriors.Priors, second=None, cfg: SearchConfig | None = None,
+                 speed_table: speed.SpeedTable | None = None):
         self.model, self.priors, self.second = model, priors, second
         self.cfg = cfg or SearchConfig()
+        self.speed = speed_table
+        # 占位（还没选的几手）按数据里每名英雄 / 每一手的被选次数（priors.json；旧文件没有每一手的就只按整体）
+        self.calc = (speed.FirstCalc(speed_table, weights=dict(priors.picks) or None, slot_weights=priors.slots or None,
+                                     **speed.FAST)
+                     if speed_table is not None else None)
         vocab = model.vocab
         self.counts = np.zeros(vocab.size)
         self.ban_rates = np.full(vocab.size, priors.mean_ban_rate())
@@ -792,9 +984,26 @@ class Advisor:
                 self._cache.popitem(last=False)
             return json.loads(json.dumps(out))
 
+    def first_ctx(self, grades: tuple[str | None, str | None],
+                  speeds: tuple[dict[str, float] | None, dict[str, float] | None] = (None, None),
+                  tokens: Sequence[str | None] | None = None) -> _FirstCtx | None:
+        """一次搜索的先动概率（grades / speeds 按先手方、后手方）；没有速度表返回 None（用「不知道」的头）。"""
+        if self.calc is None:
+            return None
+        return _FirstCtx(self.calc, self.model.vocab, grades, speeds, tokens)
+
+    def win(self, states: Sequence[encode.DraftState], speeds: dict[str, dict[str, float]] | None = None) -> np.ndarray:
+        """一批局面「先手方赢」的概率，和搜索同一口径（按先动概率混合；没有速度表用「不知道」的头）。
+        speeds = {"F": {编号: 速度}, "S": {...}}。模拟 BP、验收统计的胜率曲线用。"""
+        if self.calc is None:
+            return self.model.win(states)
+        first, ref = speed.first_pair(self.calc, states, speeds)
+        return self.model.win(states, first, ref)
+
     def advise(self, state: encode.DraftState, side: str, pool: Sequence[str] | None = None, top: int | None = None,
-               budget: float | None = None) -> dict:
-        """当前局面的推荐。局面不合法抛 ValueError（args[0] 是中文问题列表）。"""
+               budget: float | None = None, speeds: dict[str, float] | None = None) -> dict:
+        """当前局面的推荐。speeds = 我方英雄的速度（英雄池里填的，影响先动概率）。
+        局面不合法抛 ValueError（args[0] 是中文问题列表）。"""
         if side not in rules.SIDES:
             raise ValueError([f"side 只能是 F / S：{side}"])
         problems = state.problems()
@@ -802,9 +1011,10 @@ class Advisor:
             raise ValueError(problems)
         budget = self.cfg.budget if budget is None else budget
         cfg = _with_top(self.cfg, top)
+        speeds = {c: float(v) for c, v in (speeds or {}).items() if v} if self.calc is not None else {}
         key = json.dumps({"k": "advise", "s": state.to_dict(), "side": side, "pool": sorted(pool) if pool is not None else None,
-                          "top": cfg.top}, sort_keys=True, ensure_ascii=False)
-        return self._cached(key, budget, lambda: _Search(self, cfg, state, side, pool, budget).run())
+                          "top": cfg.top, "speeds": speeds}, sort_keys=True, ensure_ascii=False)
+        return self._cached(key, budget, lambda: _Search(self, cfg, state, side, pool, budget, speeds).run())
 
     def preban(self, side: str | None, grades: tuple[str | None, str | None] = (None, None),
                rule: str | None = encode.UNKNOWN_RULE, rule_category: str | None = None, fixed: str | None = None,
@@ -828,8 +1038,10 @@ class Advisor:
                     "heroes": len(m.vocab.heroes), "trained_on": meta.get("trained_on"), "test_n11": tm}
 
         # codes：主模型里有的英雄（B14h 用户意见：RTA 助手和英雄池只用这些，别的只在图鉴里看）
+        # mix：胜率怎么算（B14g2）：first = 按先动概率混合先动 / 后动两种，unknown = 「不知道谁先动」的头（没有速度表）
         return {"model": one(self.model), "second": one(self.second), "priors": self.priors.meta.get("built"),
-                "rare_picks": self.cfg.rare_picks, "codes": list(self.model.vocab.heroes)}
+                "rare_picks": self.cfg.rare_picks, "codes": list(self.model.vocab.heroes),
+                "mix": "first" if self.calc is not None else "unknown"}
 
 
 def _with_top(cfg: SearchConfig, top: int | None) -> SearchConfig:
@@ -848,10 +1060,11 @@ class _Preban:
         self.clock = _Clock(budget, cfg.batch)
 
     def net(self, model, role: str) -> _Net:
+        """我方是 role 时的推理；还没选人，先动概率全靠两方段位的占位（同一个先后手每行一样，按行的三个头混合）。"""
         mine, theirs = self.grades
-        st = encode.DraftState(grades=(mine, theirs) if role == "F" else (theirs, mine), rule=self.rule,
-                               rule_category=self.rule_category)
-        return _Net(model, st, self.vocab, self.clock)
+        grades = (mine, theirs) if role == "F" else (theirs, mine)
+        st = encode.DraftState(grades=grades, rule=self.rule, rule_category=self.rule_category)
+        return _Net(model, st, self.vocab, self.clock, self.adv.first_ctx(grades))
 
     def pairs(self, role: str) -> list[tuple[tuple[str, str], float]]:
         """数据里这个先后手的预禁组合，只留模型里有的英雄（B14h 用户意见：模型没训练进的英雄不进 RTA 助手）。"""
@@ -882,7 +1095,7 @@ class _Preban:
         ids = lambda p: [self.vocab.hero(c) for c in p]  # noqa: E731
         h[:, list(encode.PREBAN_POS[role])] = np.repeat(np.array([ids(p) for p in mine]), len(theirs), axis=0)
         h[:, list(encode.PREBAN_POS[other(role)])] = np.tile(np.array([ids(p) for p in theirs]), (len(mine), 1))
-        w, _ = net.forward(h, [0])
+        w = net.forward(h, [0]).win
         w = w[:, 0] if role == "F" else 1.0 - w[:, 0]
         return w.reshape(len(mine), len(theirs))
 
@@ -953,7 +1166,7 @@ def load() -> Advisor:
     """随包的推荐器（主模型 + 第二个模型 + priors.json），进程内只读一次。"""
     second_dir = rmodel.bundled_dir() / SECOND_DIR
     second = rmodel.load(second_dir) if rmodel.available(second_dir) else None
-    return Advisor(rmodel.load(), rpriors.load(), second)
+    return Advisor(rmodel.load(), rpriors.load(), second, speed_table=speed.load())
 
 
 def available() -> bool:

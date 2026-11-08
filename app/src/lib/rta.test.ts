@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { adviceBody, adviceKey, banHeadline, inModel, pickHeadline, rareTag, type Advice, type AdviseBody, type BanAdvice, type Recommend } from "./rta";
+import { adviceBody, adviceKey, banHeadline, inModel, pickHeadline, rareTag, splitTip, type Advice, type AdviseBody, type BanAdvice, type Recommend } from "./rta";
 
 const ban = (first?: (number | null)[][]): BanAdvice => ({
   rows: ["a", "b"],
@@ -22,6 +22,22 @@ describe("banHeadline", () => {
   it("先动概率按对方后禁的可能性加权，缺一格就不算", () => {
     expect(banHeadline(ban([[0.8, 0.4], [0.5, 0.5]]), null).first).toBeCloseTo((0.8 * 0.3 + 0.4 * 0.1) / 0.4);
     expect(banHeadline(ban([[0.8, null], [0.5, 0.5]]), null).first).toBeNull();
+  });
+
+  it("引擎给了这一行的先动概率和两种胜率（B14g2）就用引擎的", () => {
+    const b = ban([[0.8, 0.4], [0.5, 0.5]]);
+    b.row_stats[0] = { ...b.row_stats[0], first: 0.66, win_first: 0.7, win_second: 0.375 };
+    expect(banHeadline(b, null)).toEqual({ code: "a", win: 0.57, first: 0.66, win_first: 0.7, win_second: 0.375 });
+    b.row_stats[0].first = null; // 没有速度表
+    expect(banHeadline(b, null).first).toBeNull();
+  });
+});
+
+describe("splitTip", () => {
+  it("我方先动时 / 后动时两种胜率", () => {
+    expect(splitTip({ win_first: 0.612, win_second: 0.405 })).toBe("我方先动时 61.2%，后动时 40.5%");
+    expect(splitTip({ win_first: 0.6 })).toBeUndefined();
+    expect(splitTip(null)).toBeUndefined();
   });
 });
 
@@ -84,6 +100,10 @@ describe("pickHeadline", () => {
       turn: "theirs", recommend: undefined, first: { mine: 0.7, partial: true }, opponent: { likely: [], threats: [], win },
     });
     expect(pickHeadline(theirs(0.48))).toEqual({ turn: "theirs", heroes: [], win: 0.48, first: 0.7 });
+    // B14g2：引擎给了 opponent.first（当前局面的先动概率）就用它
+    const o = advice({ turn: "theirs", recommend: undefined, first: { mine: 0.7, partial: true },
+      opponent: { likely: [], threats: [], win: 0.48, first: 0.55, win_first: 0.6, win_second: 0.333 } });
+    expect(pickHeadline(o)).toEqual({ turn: "theirs", heroes: [], win: 0.48, first: 0.55, win_first: 0.6, win_second: 0.333 });
     expect(pickHeadline(theirs(null))).toBeNull();
     expect(pickHeadline(theirs(undefined))).toBeNull();
     expect(pickHeadline(advice({ phase: "ban", turn: null }))).toBeNull();

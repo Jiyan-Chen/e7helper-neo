@@ -63,8 +63,11 @@ export interface Recommend {
   second?: { win: number; spread: number };
   /** 两个模型差 ≥ 5 个百分点 */
   uncertain?: boolean;
-  /** 我方先动的概率（有速度表时） */
+  /** 我方先动的概率（B14g2：按选了这一组之后双方已经选出的英雄算，不补还没选的；没有速度表时 null） */
   first?: number | null;
+  /** 预期分成「我方先动时 / 后动时」两种（B14g2） */
+  win_first?: number;
+  win_second?: number;
 }
 
 /** 两手回合里按英雄：每名英雄所在最好的那组 */
@@ -83,6 +86,17 @@ export interface Choice {
   win: number;
   /** 模型读数（不知道英雄池） */
   now?: number;
+  /** 我方先动的概率和「我方先动时 / 后动时」两种胜率（B14g2，同 Recommend） */
+  first?: number | null;
+  win_first?: number;
+  win_second?: number;
+}
+
+/** 一个胜率的「我方先动时 / 后动时」两种和那个局面的先动概率（B14g2） */
+export interface Split {
+  first?: number | null;
+  win_first?: number;
+  win_second?: number;
 }
 
 export interface BanAdvice {
@@ -91,12 +105,15 @@ export interface BanAdvice {
   /** 列 = 对方禁我方哪名 */
   cols: string[];
   matrix: number[][];
-  row_stats: { code: string; worst: number; win: number; score: number; second?: { win: number; worst: number; spread: number } }[];
+  row_stats: ({ code: string; worst: number; win: number; score: number; second?: { win: number; worst: number; spread: number } } & Split)[];
   recommend: string;
   their_likely: { code: string; prob: number }[];
   nash: { mine: number[]; theirs: number[]; value: number };
   /** 每格上场 4 打 4 我方先动的概率（有速度表时） */
-  first?: (number | null)[][];
+  first?: (number | null)[][] | null;
+  /** 每格「我方先动时 / 后动时」的胜率（B14g2） */
+  win_first?: number[][];
+  win_second?: number[][];
 }
 
 export interface Advice {
@@ -112,9 +129,13 @@ export interface Advice {
   recommend?: Recommend[];
   heroes?: HeroRec[];
   /** win = 按对方选法的先验加权的「我方的读数」（B14e2 第 2 轮审核）；一个都没算到时是 null */
-  opponent?: { likely: Choice[]; threats: Choice[]; win?: number | null };
+  opponent?: { likely: Choice[]; threats: Choice[]; win?: number | null } & Split;
   ban?: BanAdvice;
+  /** 当前局面我方先动的概率（选秀中按双方已选的英雄，一方还没有英雄时 null；后禁 / 结束时是上场 4 打 4 的） */
   first: { mine: number; partial: boolean } | null;
+  /** 结束时：「我方先动时 / 后动时」两种胜率（B14g2） */
+  win_first?: number;
+  win_second?: number;
   /** 这次推荐用的英雄池（null = 不限制） */
   pool?: string[] | null;
   /** 英雄池里能选的不够这一轮，这一轮推荐的是全部英雄（B14e2） */
@@ -202,37 +223,47 @@ export function rareTag(rare: readonly string[], poolOnly: readonly string[], na
 export const pct1 = (p: number) => `${(p * 100).toFixed(1)}%`;
 export const pct0 = (p: number) => `${Math.round(p * 100)}%`;
 
+/** 「我方先动时 x%，后动时 y%」（B14g2，鼠标提示用）；没有两种胜率时 undefined */
+export function splitTip(x: Pick<Split, "win_first" | "win_second"> | null | undefined): string | undefined {
+  if (!x || x.win_first == null || x.win_second == null) return undefined;
+  return `我方先动时 ${pct1(x.win_first)}，后动时 ${pct1(x.win_second)}`;
+}
+
 /**
  * 后禁这一步信息条上的胜率（用户意见：显示推荐行，不显示后禁前的读数）：我方禁 code、对方按常见后禁的预期胜率；
- * 我方已经选了要禁谁时用选的那一行。first = 这一行按对方后禁可能性加权的先动概率（每格都有才算）。
+ * 我方已经选了要禁谁时用选的那一行。first = 这一行按对方后禁可能性加权每格的先动概率（引擎给的；旧结果没有时这里算）。
  */
-export function banHeadline(ban: BanAdvice, chosen: string | null): { code: string; win: number; first: number | null } {
+export function banHeadline(ban: BanAdvice, chosen: string | null): { code: string; win: number; first: number | null } & Split {
   const code = chosen && ban.rows.includes(chosen) ? chosen : ban.recommend;
   const i = ban.rows.indexOf(code);
+  const row = ban.row_stats[i];
   const q = ban.their_likely.map((x) => x.prob);
   const cells = ban.first?.[i];
   const total = q.reduce((a, b) => a + b, 0);
-  const first = cells && total > 0 && cells.every((v) => v != null)
+  const weighted = cells && total > 0 && cells.every((v) => v != null)
     ? cells.reduce((a: number, v, j) => a + (v as number) * q[j], 0) / total
     : null;
-  return { code, win: ban.row_stats[i].win, first };
+  return { code, win: row.win, first: row.first !== undefined ? row.first : weighted, win_first: row.win_first, win_second: row.win_second };
 }
 
 /**
  * 选秀这一步信息条上的胜率：始终用「我方的读数」（B14e2 审核，用户意见），不用模型对当前局面的读数（它不知道
  * 英雄池，相当于假设我方像一般玩家那样选，池里没有强势英雄时比每个推荐都高）。
  * - 轮到我方：推荐第 1 名（只在英雄池里选；池里不够这一轮时是全部英雄里选）的预期和先动；
- * - 轮到对方：对方按先验的几种选法、我方再从英雄池里选最好的回应的预期（opponent.win），先动是目前双方在场的。
+ * - 轮到对方：对方按先验的几种选法、我方再从英雄池里选最好的回应的预期（opponent.win），先动是当前局面的。
  * 不是选秀、还没算出来时返回 null（照常显示模型读数）。
  */
-export function pickHeadline(a: Advice): { turn: "mine" | "theirs"; heroes: string[]; win: number; first: number | null } | null {
+export function pickHeadline(a: Advice): ({ turn: "mine" | "theirs"; heroes: string[]; win: number; first: number | null } & Split) | null {
   if (a.phase !== "pick") return null;
   if (a.turn === "mine") {
     const r = a.recommend?.[0];
-    return r ? { turn: "mine", heroes: r.heroes, win: r.win, first: r.first ?? null } : null;
+    return r ? { turn: "mine", heroes: r.heroes, win: r.win, first: r.first ?? null, win_first: r.win_first, win_second: r.win_second } : null;
   }
-  const w = a.opponent?.win;
-  return w != null ? { turn: "theirs", heroes: [], win: w, first: a.first?.mine ?? null } : null;
+  const o = a.opponent;
+  const w = o?.win;
+  if (w == null) return null;
+  const first = o?.first !== undefined ? o.first ?? null : a.first?.mine ?? null;
+  return { turn: "theirs", heroes: [], win: w, first, win_first: o?.win_first, win_second: o?.win_second };
 }
 
 /**

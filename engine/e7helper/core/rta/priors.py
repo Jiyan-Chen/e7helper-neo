@@ -3,7 +3,8 @@
 模型自己给不了的几样，按真实对局的频率算：
 - 每名英雄在训练数据里被选的次数：判断「冷门」（被选 < 1000 次的，模型的搭档 / 克制项学得不准，B14b 审核发现）；
 - 预禁组合的频率（双方 ≥ 优胜者，先手方 / 后手方分开）：预禁没有模型头，用它当对手预禁的分布和我方候选的先验；
-- 后禁率（双方 ≥ 优胜者，一名英雄可被禁（不在保护位）时被禁的比例）：后禁矩阵里对方会禁谁的期望。
+- 后禁率（双方 ≥ 优胜者，一名英雄可被禁（不在保护位）时被禁的比例）：后禁矩阵里对方会禁谁的期望；
+- 一方第 k 手（k = 0…4）各英雄被选的次数（B14g2，`speed.slot_counts`）：算先动概率时补还没选的那几手（`speed.FirstCalc`）。
 
 以后每次重训（新赛季）都要和 `rta export` 一起重新生成。
 """
@@ -51,6 +52,8 @@ def build(ds, source: str = "") -> dict:
         own = np.delete(tok[:, cols], rules.PROTECTED_SLOT, axis=1)
         bannable.update(int(h) for h in own.ravel() if h >= 0)
         banned.update(int(h) for h in tok[:, encode.BAN_POS[side]] if h >= 0)
+    from .speed import slot_counts
+
     return {
         "format": 1, "built": time.strftime("%Y-%m-%d %H:%M:%S"), "source": source,
         "dataset": {k: ds.meta.get(k) for k in ("season", "until", "first_day", "last_day", "kept")},
@@ -58,6 +61,7 @@ def build(ds, source: str = "") -> dict:
         "picks": dict(sorted(picks.items(), key=lambda kv: -kv[1])),
         "preban": preban,
         "postban": {ds.codes[h]: [int(banned[h]), int(n)] for h, n in bannable.most_common()},
+        "slots": [dict(sorted(c.items(), key=lambda kv: -kv[1])) for c in slot_counts(ds.tokens, ds.codes)],
     }
 
 
@@ -66,12 +70,14 @@ class Priors:
     picks: dict[str, int] = field(default_factory=dict)
     preban: dict[str, dict] = field(default_factory=dict)
     postban: dict[str, list[int]] = field(default_factory=dict)
+    slots: list[dict[str, int]] = field(default_factory=list)  # B14g2：一方第 k 手各英雄被选的次数（旧文件没有 = []）
     meta: dict = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, d: dict) -> Priors:
         return cls(picks=dict(d.get("picks", {})), preban=dict(d.get("preban", {})), postban=dict(d.get("postban", {})),
-                   meta={k: v for k, v in d.items() if k not in ("picks", "preban", "postban")})
+                   slots=[dict(x) for x in d.get("slots") or []],
+                   meta={k: v for k, v in d.items() if k not in ("picks", "preban", "postban", "slots")})
 
     def pick_count(self, code: str | None) -> int:
         return int(self.picks.get(code or "", 0))

@@ -5,6 +5,9 @@
 那些（Δ > 0），兑现比例 = Σ 实际兑现 / Σ Δ。搜索的可信度是 q / (q + c)（`SearchConfig.trust_c`），这里在网格上
 找和各档兑现比例最接近的 c（按 Σ Δ 加权）。
 
+B14g2：三头模型的胜率和搜索同一口径，按先动概率混合（速度表 + 训练集里每名英雄 / 每一手的被选次数，快照的段位只用来
+算先动概率）；`--no-mix` 用「不知道谁先动」的头，没有速度表时也是。
+
 用法（在 engine/ 下）：
   python -m uv run python tools/rta_trust.py <快照.npz> <切分模型导出目录> [--test-days 7] [--json 结果.json]
 切分模型导出目录 = `rta export <切分 run> --out <目录>` 的输出（随包第二个模型 assets/data/rta/second/ 就是）。
@@ -21,18 +24,30 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from e7helper.core.rta import encode, rules  # noqa: E402
+from e7helper.core.rta import encode, rules, speed  # noqa: E402
 from e7helper.core.rta.dataset import Dataset  # noqa: E402
-from e7helper.core.rta.model import calibrate, load  # noqa: E402
+from e7helper.core.rta.model import calibrate_heads, load, mix  # noqa: E402
 
 BINS = [0, 0.002, 0.005, 0.01, 0.02, 0.03, 0.05, 0.08, 0.12, 0.2, 1.01]
 GRID = [0.0025, 0.005, 0.0075, 0.01, 0.0125, 0.015, 0.0175, 0.02, 0.025, 0.03, 0.04, 0.05]
 CHUNK = 4000
 
 
-def measure(ds: Dataset, folder: Path, test_days: int = 7) -> dict:
+def first_calc(ds: Dataset, train_rows: np.ndarray) -> speed.FirstCalc | None:
+    """和搜索一样的快速先动概率（`speed.FAST`），占位按训练集的被选次数；没有速度表返回 None。"""
+    table = speed.load()
+    if table is None:
+        return None
+    tok = ds.tokens[train_rows]
+    return speed.FirstCalc(table, weights=dict(encode.pick_counts(tok, ds.codes)), slot_weights=speed.slot_counts(tok, ds.codes),
+                           **speed.FAST)
+
+
+def measure(ds: Dataset, folder: Path, test_days: int = 7, mixed: bool = True) -> dict:
     m = load(folder)
-    rows = ds.split(test_days)["test"]
+    sp = ds.split(test_days)
+    rows = sp["test"]
+    calc = first_calc(ds, sp["train"]) if mixed and m.first else None
     x = ds.encode(m.vocab, rows)
     heroes, y = x["heroes"], x["y"].astype(np.float64)
     size = m.vocab.size
@@ -41,9 +56,14 @@ def measure(ds: Dataset, folder: Path, test_days: int = 7) -> dict:
         h, c, yy = heroes[s:s + CHUNK], x["ctx"][s:s + CHUNK], y[s:s + CHUNK]
         win, pick = m.run(h, c)
         b = len(h)
-        # 已选 n 手时先手方的胜率（n = 0…10）
-        w = np.stack([calibrate(win[:, encode.STATE_POS[n]], np.full(b, n), m.calibration)
-                      for n in range(encode.N_PICKS + 1)], axis=1)
+        # 每个局面先手方的胜率（[b, 12]，用到已选 n = 0…10 手）：三个头按先动概率混合（first / ref 同 rta eval）
+        heads = calibrate_heads(win[:, encode.STATE_POS], np.arange(encode.N_STATES)[None, :], m.calibration)
+        first = ref = None
+        if calc is not None:
+            r = rows[s:s + CHUNK]
+            first = speed.match_first_probs(calc, ds.tokens[r], ds.codes, ds.grades[r])
+            ref = speed.match_first_probs(calc, ds.tokens[r], ds.codes, np.zeros_like(ds.grades[r]))
+        w = mix(heads, first, ref)
         for n in range(encode.N_PICKS):
             chosen = h[:, encode.PICK_POS + n]
             ok = chosen >= encode.FIRST_HERO  # 词表外（UNK）的那手不算
@@ -87,7 +107,8 @@ def measure(ds: Dataset, folder: Path, test_days: int = 7) -> dict:
         fits.append({"c": c, "err": err / wsum})
     best = min(fits, key=lambda f: f["err"])
     return {"matches": int(len(rows)), "moves": int(len(q)), "from": ds.day_str(ds.day[rows].min()),
-            "to": ds.day_str(ds.day[rows].max()), "table": table, "fits": fits, "best_c": best["c"]}
+            "to": ds.day_str(ds.day[rows].max()), "mixed": calc is not None, "table": table, "fits": fits,
+            "best_c": best["c"]}
 
 
 def main() -> None:
@@ -96,9 +117,11 @@ def main() -> None:
     ap.add_argument("model", type=Path, help="切分模型的导出目录")
     ap.add_argument("--test-days", type=int, default=7)
     ap.add_argument("--json", type=Path)
+    ap.add_argument("--no-mix", action="store_true", help="用「不知道谁先动」的头（不按先动概率混合）")
     a = ap.parse_args()
-    res = measure(Dataset.load(a.dataset), a.model, a.test_days)
-    print(f"测试期 {res['from']} ~ {res['to']}：{res['matches']} 场、{res['moves']} 手")
+    res = measure(Dataset.load(a.dataset), a.model, a.test_days, mixed=not a.no_mix)
+    print(f"测试期 {res['from']} ~ {res['to']}：{res['matches']} 场、{res['moves']} 手"
+          f"（胜率{'按先动概率混合' if res['mixed'] else '用不知道谁先动的头'}）")
     print(f"{'常见度':>14} {'手数':>8} {'说提升的':>8} {'提升兑现':>8} {'不利兑现':>8}")
     for t in res["table"]:
         f = lambda v: "—" if v is None else f"{v:.2f}"  # noqa: E731

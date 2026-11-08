@@ -331,6 +331,145 @@ def test_preban_fixed_and_unknown_side():
     assert set(out["recommend"][0]["share"]) == {"F", "S"}
 
 
+# —— 按先动概率混合（B14g2） ——
+def _speed_table(fast=("c00",), extra=None):
+    """c00 290 以上，其余 190–210（速度档隔开，开局随机翻不过来）；extra = 另加的 {编号: 档}。"""
+    from e7helper.core.rta import speed
+
+    def one(k):
+        h = [0] * 10
+        h[k] = 100
+        return h
+
+    hists = {c: {"legend": one(9 if c in fast else 4), "champion": one(9 if c in fast else 3)} for c in CODES}
+    hists.update({c: {"legend": one(k)} for c, k in (extra or {}).items()})
+    return speed.SpeedTable.from_hists(hists, jitter=5.0)
+
+
+def mixed_advisor(table=None, gap=0.8, **kw):
+    pre = {"F": [["c00", "c01", 50], ["c02", "c03", 30]], "S": [["c00", "c01", 60], ["c04", "c05", 40]]}
+    return search.Advisor(FakeModel(STRENGTH, POP, gap=gap, preban=0.5), fake_priors(PICKS, preban=pre),
+                          speed_table=table or _speed_table(), **kw)
+
+
+def test_mixed_values_split_and_first():
+    """每个值带「我方先动时 / 后动时」两种；显示的先动概率（审核第 1、2 轮用户意见）只按双方已经选出的英雄、用速度表算：
+    推荐 = 加上这一组、对方的选法 = 加上对方这一手、对方回合 = 当前局面；不补还没选的几手、不把之后的回应合进去。
+    后禁矩阵每格 4 打 4：先动 × 先动时 + 后动 × 后动时 = 这一格。"""
+    from e7helper.core.rta import speed
+
+    adv = mixed_advisor()
+    st = state(["c00", "c03", "c04"])  # 轮到先手方（我方）选 2 名
+    out = adv.advise(st, "F")
+    unit = lambda s, c: speed.Unit(s, c, "emperor")  # noqa: E731
+    present = adv.calc.prob([unit("F", "c00")], [unit("S", "c03"), unit("S", "c04")], ("emperor", "emperor"), fill=False)
+    assert out["first"]["mine"] == pytest.approx(present) and out["first"]["mine"] > 0.99  # 只有 c00 在场：几乎一定先动
+    assert out["first"]["partial"]
+    assert adv.advise(state([]), "F")["first"] is None  # 一方还没有英雄：不显示
+
+    def after(base: DraftState, heroes: list[str]) -> DraftState:
+        nxt = DraftState.from_dict(base.to_dict())
+        for code in heroes:
+            nxt.picks[rules.mover(nxt.n_picks)].append(code)
+        return nxt
+
+    for r in out["recommend"]:
+        assert r["win_first"] > r["win_second"]  # 假模型：先手方先动时 logit + 0.8
+        assert r["first"] == pytest.approx(adv.advise(after(st, r["heroes"]), "F")["first"]["mine"], abs=1e-6)
+        mine = [unit("F", c) for c in ["c00", *r["heroes"]]]
+        assert r["first"] == pytest.approx(adv.calc.prob(mine, [unit("S", "c03"), unit("S", "c04")], ("emperor", "emperor"),
+                                                         fill=False))
+    st5 = state(["c00", "c03", "c04", "c05", "c06"])
+    theirs = adv.advise(st5, "F")  # 先手方（我方）看后手方的回合
+    o = theirs["opponent"]
+    assert o["first"] == theirs["first"]["mine"] and o["win_first"] > o["win_second"]
+    for c in o["likely"][:3]:
+        assert c["win_first"] > c["win_second"]
+        assert c["first"] == pytest.approx(adv.advise(after(st5, c["heroes"]), "F")["first"]["mine"], abs=1e-6)
+    full = ["c00", "c03", "c04", "c05", "c06", "c07", "c08", "c09", "c10", "c11"]
+    b = adv.advise(state(full), "F")["ban"]
+    m, f, a, s = (np.array(b[k]) for k in ("matrix", "first", "win_first", "win_second"))
+    assert np.allclose(f * a + (1 - f) * s, m)
+    # c00 是我方第 1 手、最快：对方禁了它的那一列我方先动概率低于其余各列
+    # （假模型的三个头隐含「一般玩家五五开」，effective_first 以它为底、只加速度表的变化量，所以不是 0 / 1）
+    col = b["cols"].index("c00")
+    assert f[:, col].max() < np.delete(f, col, axis=1).min()
+    q = np.array([x["prob"] for x in b["their_likely"]])
+    for i, row in enumerate(b["row_stats"]):  # 每行：4 格按对方后禁率平均
+        assert row["first"] == pytest.approx(float(f[i] @ q / q.sum()), abs=1e-9)
+        assert row["win_first"] > row["win_second"]
+    done = adv.advise(state(full, banned={"F": "c05", "S": "c08"}), "F")
+    assert done["phase"] == "done" and not done["first"]["partial"] and done["win_first"] > done["win_second"]
+    fm = done["first"]["mine"]
+    assert fm * done["win_first"] + (1 - fm) * done["win_second"] == pytest.approx(done["win"], abs=1e-9)
+
+
+def test_grades_only_move_the_first_mover():
+    """用户原则：段位只影响谁先动。同一阵容换段位，先动时 / 后动时两种胜率不变，只有先动概率（和混合结果）变。"""
+    adv = mixed_advisor(_speed_table(fast=()))  # 都一样快：先动概率只看段位
+    full = ["c00", "c03", "c04", "c05", "c06", "c07", "c08", "c09", "c10", "c11"]
+    hi, lo = state(full), state(full)
+    hi.grades, lo.grades = ("legend", "champion"), ("champion", "legend")
+    b_hi, b_lo = adv.advise(hi, "F")["ban"], adv.advise(lo, "F")["ban"]
+    assert np.allclose(b_hi["win_first"], b_lo["win_first"]) and np.allclose(b_hi["win_second"], b_lo["win_second"])
+    assert (np.array(b_hi["first"]) > np.array(b_lo["first"]) + 0.2).all()
+    assert (np.array(b_hi["matrix"]) > np.array(b_lo["matrix"])).all()
+
+
+def test_no_speed_table_uses_the_unknown_head():
+    adv = search.Advisor(FakeModel(STRENGTH, POP, gap=0.8), fake_priors(PICKS))
+    full = ["c00", "c03", "c04", "c05", "c06", "c07", "c08", "c09", "c10", "c11"]
+    out = adv.advise(state(full), "F")
+    b = out["ban"]
+    assert out["first"] is None and b["first"] is None and all(st["first"] is None for st in b["row_stats"])
+    st = state(full, banned={"F": b["cols"][0], "S": b["rows"][0]})
+    assert b["matrix"][0][0] == pytest.approx(float(adv.model.win([st])[0]))  # 「不知道」的头 = σ(logit)
+    assert adv.info()["mix"] == "unknown" and mixed_advisor().info()["mix"] == "first"
+
+
+def test_speeds_change_the_first_mover_and_the_cache_key():
+    adv = mixed_advisor()
+    st = state(["c00", "c03", "c04"])  # 先手方 c00（最快）；后手方 c03、c04（慢）
+    slow = adv.advise(st, "S")  # 我方是后手
+    fast = adv.advise(st, "S", speeds={"c03": 400})  # 我方 c03 填了 400 速：跑得过 c00
+    assert fast["first"]["mine"] > slow["first"]["mine"] + 0.2 and not fast["stats"]["cached"]
+    theirs = adv.advise(st, "F", speeds={"c03": 400})  # 我方是先手时 c03 是对方的：填的速度只算我方英雄
+    assert theirs["first"]["mine"] == pytest.approx(1 - slow["first"]["mine"], abs=1e-6)
+
+
+def test_unknown_hero_uses_its_own_speed():
+    """局面里模型没见过的英雄（UNK）先动概率按它自己的速度算（速度表里有它）。"""
+    adv = mixed_advisor(_speed_table(fast=(), extra={"zz": 9}))
+    full = ["zz", "c03", "c04", "c05", "c06", "c07", "c08", "c09", "c10", "c11"]
+    b = adv.advise(state(full), "F")["ban"]
+    f = np.array(b["first"])
+    col = b["cols"].index("zz")
+    assert np.delete(f, col, axis=1).min() > f[:, col].max() + 0.1  # 被禁了 zz 的那一列我方不再快
+
+
+def test_mixed_preban_and_win():
+    adv = mixed_advisor(_speed_table(fast=()))
+    hi = adv.preban("F", grades=("legend", "champion"))
+    lo = adv.preban("F", grades=("champion", "legend"))
+    assert hi["recommend"][0]["win"] > lo["recommend"][0]["win"]  # 段位高 → 先动概率大 → 混合后更高
+    st = state(["c00", "c03"])
+    from e7helper.core.rta import speed
+
+    first, ref = speed.first_pair(adv.calc, [st])
+    assert adv.win([st])[0] == pytest.approx(float(adv.model.win([st], first, ref)[0]))
+
+
+def test_priors_slots_roundtrip():
+    from e7helper.core.rta import priors as rpriors
+    from rta_fakes import synthetic_dataset
+
+    data = rpriors.build(synthetic_dataset(n=50))
+    assert len(data["slots"]) == rules.PICKS_PER_SIDE and sum(data["slots"][0].values()) == 100
+    p = rpriors.Priors.from_dict(data)
+    assert p.slots == data["slots"] and "slots" not in p.meta
+    assert rpriors.Priors.from_dict({k: v for k, v in data.items() if k != "slots"}).slots == []  # 旧文件
+
+
 # —— 随包模型 ——
 @pytest.fixture(scope="module")
 def real():
@@ -356,6 +495,24 @@ def test_bundled_advise_speed_and_no_rare_heroes(real):
     for r in out["recommend"]:
         assert not r["rare"], r
         assert 0.02 < r["win"] < 0.98 and "second" in r
+
+
+def test_bundled_grades_only_shift_through_first_mover(real):
+    """0.4.0-beta.1 的复现用例（B14g2 验收）：段位从「挑战者 vs 战神」改到「传说 vs 传说」，推荐的预期只因先动概率小幅变动
+    （旧模型把赛后段位当成实力，挑战者一方的推荐只有 3%）。"""
+    from e7helper.core.data import heroes as hero_db
+
+    db = hero_db()
+    code = lambda n: db.find(n).code  # noqa: E731
+    out = {}
+    for g in (("challenger", "warlord"), ("legend", "legend")):
+        st = DraftState(prebans={"F": [code("里安娜路西艾拉"), code("天秤之主")], "S": [code("黎洁特"), code("天秤之主")]},
+                        picks={"F": [code("调香师维波里丝")], "S": [code("诺托斯"), code("波涛裂痕艾碧拉")]}, grades=g, rule=None)
+        out[g] = real.advise(st, "F", budget=8.0)
+    a, b = out[("challenger", "warlord")], out[("legend", "legend")]
+    assert real.calc is not None and a["first"]["mine"] < b["first"]["mine"]
+    assert abs(a["win"] - b["win"]) < 0.03  # 当前局面：只差先动概率带来的一两个点
+    assert a["recommend"][0]["win"] > 0.4 and abs(a["recommend"][0]["win"] - b["recommend"][0]["win"]) < 0.05
 
 
 def test_bundled_preban_speed(real):

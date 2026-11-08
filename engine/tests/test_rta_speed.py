@@ -213,28 +213,21 @@ def test_load(tmp_path):
 # —— 接到推荐上 ——
 
 def test_annotate():
+    """B14g2：先动概率由搜索给（混合胜率用的那个），annotate 只加每名在场英雄第一个行动的概率（命令行显示用）。"""
     # 速度档隔开，开局随机翻不过来：f1 290 以上 > s1 250–270 > 其余 190–210
-    t = table(f1=one_bin(9), f2=one_bin(4), f3=one_bin(4), f4=one_bin(4), f5=one_bin(4),
-              s1=one_bin(7), s2=one_bin(4), s3=one_bin(4), s4=one_bin(4), s5=one_bin(4))
+    t = table(f1=one_bin(9), f2=one_bin(4), f3=one_bin(4), s1=one_bin(7), s2=one_bin(4))
     st = encode.DraftState(picks={"F": ["f1", "f2", "f3"], "S": ["s1", "s2"]}, grades=("legend", "legend"))
-    out = speed.annotate({"phase": "pick", "recommend": [{"heroes": ["f4"]}]}, st, "F", t)
-    assert out["first"]["mine"] == 1.0 and out["first"]["partial"] and out["recommend"][0]["first"] == 1.0
-    # 我方是后手：同一局面我方先动的概率是 0
-    assert speed.annotate({}, st, "S", t)["first"]["mine"] == 0.0
-    # 英雄池里填了速度
-    assert speed.annotate({}, st, "S", t, speeds={"s2": 400})["first"]["mine"] == 1.0  # f1 最快 370、开局再随机 5% 也跑不过
-    # 后禁矩阵：行 = 我方禁对方哪名，列 = 对方禁我方哪名
-    st = encode.DraftState(picks={"F": ["f1", "f2", "f3", "f4", "f5"], "S": ["s1", "s2", "s3", "s4", "s5"]},
-                           grades=("legend", "legend"))
-    ban = {"rows": ["s1", "s2", "s4", "s5"], "cols": ["f1", "f2", "f4", "f5"]}
-    out = speed.annotate({"phase": "ban", "ban": ban}, st, "F", t)
-    m = out["ban"]["first"]
-    assert len(m) == 4 and all(len(r) == 4 for r in m)
-    assert m[1][1] == 1.0  # 禁了对方 s2、对方禁我方 f2：f1 还在，我方先动
-    assert m[1][0] == 0.0  # 对方禁了我方 f1：对方 s1 最快
-    assert speed.annotate({}, st, "F", None)["first"] is None  # 没有速度表
+    out = speed.annotate({"first": {"mine": 0.7, "partial": True}}, st, "F", t)
+    assert out["first"]["mine"] == 0.7  # 搜索给的不动
+    top = max(out["first"]["heroes"], key=lambda h: h["p"])
+    assert top["code"] == "f1" and top["side"] == "mine" and top["p"] == 1.0
+    # 我方是后手、英雄池里给 s2 填了 400 速
+    top = max(speed.annotate({"first": {"mine": 0.2}}, st, "S", t, speeds={"s2": 400})["first"]["heroes"], key=lambda h: h["p"])
+    assert top["code"] == "s2" and top["side"] == "mine" and top["p"] == 1.0
+    assert speed.annotate({"first": None}, st, "F", t)["first"] is None  # 没有速度表时搜索给的是 None
+    assert "heroes" not in speed.annotate({"first": {"mine": 0.5}}, st, "F", None)["first"]
     st = encode.DraftState(picks={"F": ["f1"], "S": []})
-    assert speed.annotate({}, st, "F", t)["first"] is None  # 对方还没有英雄
+    assert "heroes" not in speed.annotate({"first": {"mine": 0.5}}, st, "F", t)["first"]  # 对方还没有英雄
 
 
 # —— 快速先动概率（B14g） ——
@@ -342,3 +335,31 @@ def test_first_pair_uses_typical_player_as_reference():
     plain = [encode.DraftState.from_dict({**st.to_dict(), "grades": [None, None]}) for st in states]
     assert np.allclose(ref, speed.state_first_probs(calc, plain))
     assert states[0].grades == ("legend", "champion")  # 原来的局面不动
+
+
+def test_ids_first_probs_matches_states():
+    """B14g2 搜索用的：按编号一批算各局面的先动概率 = 逐个局面算的（含限速、开局加行动条、后禁、5 名都在时平均、填的速度）。"""
+    from rta_fakes import synthetic_dataset
+
+    ds = synthetic_dataset(n=40, heroes=40)
+    hists = {f"c{i}": {"legend": one_bin(i % 10), "champion": one_bin(max(i % 10 - 2, 0))} for i in range(40)}
+    t = SpeedTable.from_hists(hists, jitter=5.0, rules={"c3": {"cap": 0.9}, "c4": {"push": 30.0}})
+    calc = speed.FirstCalc(t, weights={c: 1 for c in ds.codes}, slot_weights=speed.slot_counts(ds.tokens, ds.codes))
+    codes = [None, *ds.codes]  # 行号 = token + 1，0 = 空位
+    ids = ds.tokens.astype(np.int64) + 1
+    g = ("legend", "champion")
+    got = speed.ids_first_probs(calc, ids, list(range(12)), codes, g, ({"c5": 350.0}, None))
+    assert got.shape == (40, 12)
+    for row in range(0, 40, 3):
+        states = [encode.DraftState.from_dict({**ds.state(row, n).to_dict(), "grades": list(g)}) for n in range(12)]
+        assert np.allclose(got[row], speed.state_first_probs(calc, states, {"F": {"c5": 350.0}}), atol=1e-9), row
+    # 只要部分局面、顺序随意也一样；同一阵容（顺序不同）只算一次，结果一样
+    assert np.allclose(speed.ids_first_probs(calc, ids, [11, 5], codes, g, ({"c5": 350.0}, None)), got[:, [11, 5]])
+    # 搜索用的快速档（网格每档 4、限速 4 档、float32）和默认差不到 0.5 个百分点
+    fast = speed.FirstCalc(t, weights={c: 1 for c in ds.codes}, slot_weights=speed.slot_counts(ds.tokens, ds.codes),
+                           **speed.FAST)
+    approx = speed.ids_first_probs(fast, ids, list(range(12)), codes, g, ({"c5": 350.0}, None))
+    assert np.abs(approx - got).max() < 0.005
+    tab = fast.tables(codes, "legend")
+    assert tab.dtype == np.float32 and not tab.flags.writeable  # 缓存的表不能改
+    assert fast.tables(codes, "legend") is tab
