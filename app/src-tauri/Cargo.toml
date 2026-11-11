@@ -3,8 +3,8 @@ name = "e7helper-app"
 version = "0.4.0-beta.2"
 description = "第七史诗助手 GUI"
 authors = ["Jiyan Chen"]
-license = ""
-repository = ""
+license = "MIT"
+repository = "https://github.com/Jiyan-Chen/e7helper-neo"
 edition = "2024"
 rust-version = "1.90"
 
